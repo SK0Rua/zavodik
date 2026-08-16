@@ -48,6 +48,7 @@ export const config = {
     dokployToken: process.env.DOKPLOY_TOKEN ?? '',
   },
   mode: (process.env.FACTORY_MODE ?? 'dry_run') as 'dry_run' | 'live',
+  agentRuntime: (process.env.AGENT_RUNTIME ?? 'claude-code') as 'claude-code' | 'api',
   dashboardPort: Number(process.env.DASHBOARD_PORT ?? 8787),
   demoPort: Number(process.env.DEMO_PORT ?? 8788),
   maxQaIterations: Number(process.env.MAX_QA_ITERATIONS ?? 3),

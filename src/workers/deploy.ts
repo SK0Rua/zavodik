@@ -7,6 +7,7 @@
  */
 import { cp, mkdir } from 'node:fs/promises';
 import path from 'node:path';
+import { siteOutputDir } from './builder.js';
 import { customAlphabet } from 'nanoid';
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
@@ -41,7 +42,10 @@ export async function deployHandler(payload: JobPayload): Promise<void> {
     const s = slug();
     const target = path.join(DEPLOYS_ROOT, s);
     await mkdir(DEPLOYS_ROOT, { recursive: true });
-    await cp(project.dir, target, { recursive: true });
+    await cp(siteOutputDir(project.dir), target, {
+      recursive: true,
+      filter: (src) => !src.includes('node_modules') && !src.includes('.next') && !src.endsWith('input'),
+    });
     deployUrl = `${config.deploy.demoBaseUrl}/${s}/`;
   }
 

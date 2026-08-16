@@ -2,7 +2,12 @@
 
 Автономна фабрика: пошук локальних бізнесів → evidence package → персоналізований демосайт → approval-gated outreach → replies/CRM.
 
-Code-first мультиагентна система: **PostgreSQL = state machine і джерело істини, pg-boss = черга jobs, Claude-агенти зі structured output = workers для нечітких етапів** (enrichment, content brief, дизайн, генерація сайту, visual QA). Оркеструє детермінований код, не LLM.
+Code-first мультиагентна система: **PostgreSQL = state machine і джерело істини, pg-boss = черга jobs, агенти = workers для нечітких етапів**. Оркеструє детермінований код, не LLM.
+
+Агентний шар дворівневий (`AGENT_RUNTIME`):
+
+- **claude-code (default)**: builder = справжній Claude Code агент через Agent SDK. Отримує ізольований workspace з Next.js-шаблоном (static export), immutable snapshot, brief, design contract і локальні assets. Сам пише код, сам запускає `pnpm install`/`pnpm build`, сам фіксить помилки збірки. QA-issues повертаються в той самий workspace на виправлення.
+- **api**: дешеві одношотні structured-виклики (enrichment-екстракція, brief, дизайн-напрямки, критик) там, де агентність не потрібна; також fallback-режим builder (static HTML одним викликом).
 
 ## Архітектура
 
@@ -118,7 +123,7 @@ pnpm tsx scripts/smoke.ts   # campaign -> normalize -> dedup -> qualify -> audit
 
 1. **n8n немає**: оркестрація — власний код (state machine + pg-boss). Причина: тестованість, версіонування, один стек.
 2. **Redis немає**: pg-boss живе в Postgres. Queue mode «вмикається» кількістю процесів workers.
-3. **Builder v1 генерує static HTML/CSS/JS**, не Next.js: нуль build-failure modes, миттєвий деплой, швидкий QA loop. Next.js-шлях (як Get Nailed) додається окремим builder-адаптером, пайплайн не змінюється.
+3. **Builder = Claude Code агент (Agent SDK) з Next.js-шаблоном**, стек як у спеці (Next.js + TS, static export). Fallback `AGENT_RUNTIME=api` генерує static HTML одним викликом, якщо треба здешевити.
 4. **Deploy v1 = вбудований static server** з noindex і неугадуваними URL; Dokploy-адаптер є як опція.
 
 Все інше (модель даних, статуси, gates, правила evidence, межі автоматизації) відповідає специфікації.
