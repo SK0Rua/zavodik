@@ -1,0 +1,18 @@
+# This file deliberately makes site-template its OWN pnpm workspace root.
+#
+# The factory repo root has a pnpm-workspace.yaml with `packages: ["."]`.
+# Without this file, running `pnpm install` inside a copied site workspace
+# would walk up and attach to the factory's workspace, pulling in factory
+# dependencies and writing to the factory lockfile.
+#
+# The builder agent copies this whole directory into sites/<business_id>/ and
+# runs `pnpm install && pnpm build` there. This file keeps that install
+# self-contained no matter where the copy lands.
+packages: []
+
+# next pulls in sharp for image optimisation. This template exports statically
+# with images.unoptimized, so sharp's native build is dead weight. Declaring it
+# false keeps `pnpm install` non-interactive for the builder agent — an
+# unanswered "approve-builds" prompt would otherwise hang the build job.
+allowBuilds:
+  sharp: false

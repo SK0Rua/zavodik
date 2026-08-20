@@ -77,7 +77,7 @@ export async function normalizeHandler(payload: JobPayload): Promise<void> {
   if (existing) {
     await db.insert(schema.businessSources).values({
       businessId: existing.id, sourceType: 'google_maps', url: cand.listingUrl,
-      method: 'playwright', rawObjectKey: cand.rawObjectKey,
+      method: 'gosom_api', rawObjectKey: cand.rawObjectKey,
     });
     log.info('duplicate resolved: source attached to existing business', { businessId: existing.id });
     return;
@@ -100,12 +100,20 @@ export async function normalizeHandler(payload: JobPayload): Promise<void> {
     businessStatus: 'OPERATIONAL', status: 'discovered',
   });
   await db.insert(schema.statusHistory).values({ businessId, toStatus: 'discovered', actor: 'normalize-worker' });
-  await db.insert(schema.businessSources).values({
+  const [source] = await db.insert(schema.businessSources).values({
     businessId, sourceType: 'google_maps', url: cand.listingUrl,
-    method: 'playwright', rawObjectKey: cand.rawObjectKey,
-  });
+    method: 'gosom_api', rawObjectKey: cand.rawObjectKey,
+  }).returning({ id: schema.businessSources.id });
   if (cand.phone) {
-    await db.insert(schema.businessContacts).values({ businessId, channel: 'phone', value: cand.phone, verified: true });
+    await db.insert(schema.businessContacts).values({
+      businessId, channel: 'phone', value: cand.phone, sourceId: source?.id ?? null, verified: true,
+    });
+  }
+  // gosom's email extraction crawls the business's own website (decision #7)
+  if (cand.email) {
+    await db.insert(schema.businessContacts).values({
+      businessId, channel: 'email', value: cand.email, sourceId: source?.id ?? null, verified: true,
+    });
   }
   await advance(businessId); // -> fast-qualify
 }

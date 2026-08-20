@@ -1,0 +1,25 @@
+# Build context hygiene for BOTH images (Dockerfile -> factory, ui/Dockerfile -> ui).
+# Secrets must never be baked into an image: containers get config from
+# compose `env_file:` / `environment:` at runtime, not from a copied .env.
+.env
+.env.*
+ui/.env
+ui/.env.*
+!.env.example
+
+# Host build output / caches — reinstalled inside the image.
+node_modules
+**/node_modules
+dist
+.next
+**/.next
+ui/.screenshots
+
+# Generated site output and evidence — mounted as volumes, not baked in.
+sites
+deploys
+storage
+
+.git
+.DS_Store
+**/.DS_Store

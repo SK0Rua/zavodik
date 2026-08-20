@@ -1,13 +1,18 @@
 /**
- * Private demo deploy.
- * static  : copy the site into deploys/<random-slug>/ served by the built-in demo
- *           server with X-Robots-Tag: noindex. URL is unguessable.
- * dokploy : optional adapter for a Dokploy instance (compose deploy via API).
- * A public production domain is never created here.
+ * Stage 12 — private demo deploy (SPEC §4, §8).
+ *
+ * The exported `out/` is copied to `deploys/<token>/` under an unguessable
+ * 24-character token and served by the demo static server (`src/lib/serveDir.ts`
+ * → `startDemoServer`) with `X-Robots-Tag: noindex, nofollow` and no directory
+ * listing. A public/customer domain is NEVER created here: the demo is private
+ * until Roman approves outreach, and even then it stays on this host.
+ *
+ * The health check is a real GET: 200, noindex header, and the business name in
+ * the returned HTML. A deploy that cannot be opened is a failure, not a URL.
  */
-import { cp, mkdir } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { siteOutputDir } from './builder.js';
 import { customAlphabet } from 'nanoid';
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
@@ -15,61 +20,147 @@ import { config } from '../config.js';
 import { transition } from '../orchestrator/statuses.js';
 import { advance } from '../orchestrator/router.js';
 import type { JobPayload } from '../orchestrator/queue.js';
+import { collectWorkspaceGarbage, outputDir } from '../build/workspace.js';
+import { ensureDemoServer } from '../lib/serveDir.js';
 import { log } from '../lib/logger.js';
 
-const slug = customAlphabet('abcdefghijklmnopqrstuvwxyz0123456789', 16);
-export const DEPLOYS_ROOT = path.resolve('deploys');
+/**
+ * 24 chars from a 36-symbol alphabet ≈ 124 bits. Well past the "unguessable URL"
+ * requirement, and short enough to paste into a Telegram message.
+ */
+const token = customAlphabet('abcdefghijklmnopqrstuvwxyz0123456789', 24);
+
+export const DEPLOYS_ROOT = path.resolve(process.env.DEPLOYS_DIR ?? 'deploys');
+
+/**
+ * Rewrite root-absolute asset paths to be relative to the demo's own directory.
+ *
+ * A Next.js static export emits `/_next/static/...`, `/assets/...` and
+ * `/generated/...` with a LEADING SLASH — absolute from the server root. Each
+ * demo is served from `/<token>/`, so a browser on that page requests
+ * `/_next/...`, which does not exist: the page loads completely unstyled with
+ * every font 404ing. This was caught only by looking at the deployed page — the
+ * export itself is fine when served from its own root, so QA on `out/` passes.
+ *
+ * Rewriting to `./_next/...` at deploy time keeps the export portable (no
+ * basePath baked in, so a redeploy under a new token still works) and needs no
+ * rebuild. `trailingSlash: true` guarantees the page URL ends in `/`, so a
+ * relative path resolves inside the demo directory.
+ */
+async function relativizeAssetPaths(dir: string): Promise<number> {
+  let rewritten = 0;
+  const walk = async (current: string): Promise<void> => {
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) { await walk(full); continue; }
+      if (!/\.(html|css|js|txt)$/i.test(entry.name)) continue;
+      const original = await readFile(full, 'utf8');
+      // Depth of this file below the demo root decides how far back "./" must go.
+      const depth = path.relative(dir, path.dirname(full)).split(path.sep).filter(Boolean).length;
+      const prefix = depth === 0 ? './' : '../'.repeat(depth);
+      const updated = original
+        .replace(/(["'(])\/(_next|assets|generated)\//g, `$1${prefix}$2/`)
+        .replace(/(["'(])\\\/(_next|assets|generated)\\\//g, `$1${prefix}$2/`);
+      if (updated !== original) { await writeFile(full, updated); rewritten++; }
+    }
+  };
+  await walk(dir);
+  return rewritten;
+}
+
+/** Health-check the deployed URL: reachable, private, and actually this business. */
+async function healthCheck(url: string, businessName: string): Promise<{ ok: boolean; detail: string }> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(15_000), redirect: 'follow' });
+    if (!res.ok) return { ok: false, detail: `HTTP ${res.status}` };
+    const robots = res.headers.get('x-robots-tag') ?? '';
+    if (!/noindex/i.test(robots)) return { ok: false, detail: `missing X-Robots-Tag noindex (got "${robots}")` };
+    const html = await res.text();
+    if (!/name=["']robots["'][^>]*noindex/i.test(html)) {
+      return { ok: false, detail: 'served HTML has no robots noindex meta tag' };
+    }
+    // First word of the name: enough to prove we served the right site, tolerant
+    // of the business styling the rest of its name differently.
+    const firstWord = businessName.trim().split(/\s+/)[0] ?? '';
+    if (firstWord.length >= 3 && !html.toLowerCase().includes(firstWord.toLowerCase())) {
+      return { ok: false, detail: `served page does not mention "${firstWord}"` };
+    }
+    // The stylesheet must actually be reachable FROM THIS URL. A Next export
+    // whose asset paths are absolute serves a 200 page with a 404 stylesheet —
+    // completely unstyled, and invisible to a status-code-only check.
+    const cssHref = /<link[^>]+rel=["']stylesheet["'][^>]+href=["']([^"']+)["']/i.exec(html)?.[1]
+      ?? /<link[^>]+href=["']([^"']+\.css)["']/i.exec(html)?.[1];
+    if (cssHref) {
+      const cssUrl = new URL(cssHref, url).toString();
+      const cssRes = await fetch(cssUrl, { signal: AbortSignal.timeout(10_000) }).catch(() => null);
+      if (!cssRes?.ok) {
+        return { ok: false, detail: `stylesheet ${cssHref} is not reachable from ${url} (${cssRes?.status ?? 'network error'}) — the demo would render unstyled` };
+      }
+      const cssBody = await cssRes.text();
+      if (cssBody.trim().length < 500) {
+        return { ok: false, detail: `stylesheet ${cssHref} served only ${cssBody.length} bytes — the demo would render unstyled` };
+      }
+    }
+    return { ok: true, detail: `HTTP 200, noindex, ${html.length} bytes, stylesheet ok` };
+  } catch (err) {
+    return { ok: false, detail: String(err).slice(0, 200) };
+  }
+}
 
 export async function deployHandler(payload: JobPayload): Promise<void> {
   const businessId = payload.businessId!;
   const projectId = payload.projectId as number;
-  const [project] = await db.select().from(schema.siteProjects).where(eq(schema.siteProjects.id, projectId));
-  if (!project) throw new Error(`site project not found: ${projectId}`);
-  if (project.state !== 'ready') throw new Error(`project not ready: state=${project.state}`);
-
-  // idempotency: already deployed -> reuse
-  if (project.deployUrl) {
-    log.info('already deployed, skipping', { businessId, url: project.deployUrl });
-    await transition(businessId, 'site_ready', 'deploy-worker');
-    await advance(businessId);
-    return;
-  }
-
-  let deployUrl: string;
-  if (config.deploy.mode === 'dokploy' && config.deploy.dokployUrl) {
-    deployUrl = await deployToDokploy(businessId, project.dir);
-  } else {
-    const s = slug();
-    const target = path.join(DEPLOYS_ROOT, s);
-    await mkdir(DEPLOYS_ROOT, { recursive: true });
-    await cp(siteOutputDir(project.dir), target, {
-      recursive: true,
-      filter: (src) => !src.includes('node_modules') && !src.includes('.next') && !src.endsWith('input'),
-    });
-    deployUrl = `${config.deploy.demoBaseUrl}/${s}/`;
-  }
-
-  // health check
-  const ok = await fetch(deployUrl, { signal: AbortSignal.timeout(10_000) })
-    .then((r) => r.ok).catch(() => config.deploy.mode === 'static'); // local static: server may start later
-  if (!ok && config.deploy.mode === 'dokploy') throw new Error(`deploy health check failed: ${deployUrl}`);
-
-  await db.update(schema.siteProjects)
-    .set({ deployUrl, deployedAt: new Date(), state: 'deployed' })
+  const [project] = await db.select().from(schema.siteProjects)
     .where(eq(schema.siteProjects.id, projectId));
-  await transition(businessId, 'site_ready', 'deploy-worker', deployUrl);
-  log.info('demo deployed', { businessId, deployUrl });
-  await advance(businessId); // -> request-approval
-}
+  if (!project) throw new Error(`site project not found: ${projectId}`);
+  if (project.state !== 'ready' && project.state !== 'deployed') {
+    throw new Error(`project not ready for deploy: state=${project.state}`);
+  }
+  const [biz] = await db.select().from(schema.businesses).where(eq(schema.businesses.id, businessId));
+  if (!biz) throw new Error(`business not found: ${businessId}`);
 
-async function deployToDokploy(businessId: string, dir: string): Promise<string> {
-  // Minimal Dokploy static deploy: relies on a pre-created "demos" project with
-  // a static-site application per business. Kept as an adapter; static mode is default.
-  const res = await fetch(`${config.deploy.dokployUrl}/api/application.deploy`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': config.deploy.dokployToken },
-    body: JSON.stringify({ applicationId: businessId }),
+  const source = outputDir(project.dir);
+  if (!existsSync(path.join(source, 'index.html'))) {
+    throw new Error(`no exported site to deploy at ${source}`);
+  }
+
+  // Idempotent: a redeploy of the same project reuses its token, so an approval
+  // card that already carries the URL keeps working.
+  const slug = project.deployToken ?? token();
+  const target = path.join(DEPLOYS_ROOT, slug);
+  await mkdir(DEPLOYS_ROOT, { recursive: true });
+  await cp(source, target, {
+    recursive: true,
+    force: true,
+    filter: (src) => {
+      const base = path.basename(src);
+      return base !== 'node_modules' && base !== '.next' && base !== 'input' && base !== 'result.json';
+    },
   });
-  if (!res.ok) throw new Error(`dokploy deploy failed: ${res.status} ${await res.text().catch(() => '')}`);
-  return `${config.deploy.demoBaseUrl}/${businessId}/`;
+
+  // Absolute asset paths must become relative BEFORE the health check, or the
+  // demo serves unstyled with every asset 404ing.
+  const rewritten = await relativizeAssetPaths(target);
+
+  // The demo server must be up for the health check to mean anything.
+  await ensureDemoServer();
+
+  const deployUrl = `${config.deploy.demoBaseUrl.replace(/\/+$/, '')}/${slug}/`;
+  const health = await healthCheck(deployUrl, biz.name);
+  if (!health.ok) {
+    throw new Error(`deploy health check failed for ${deployUrl}: ${health.detail}`);
+  }
+
+  await db.update(schema.siteProjects).set({
+    deployUrl, deployToken: slug, deployedAt: new Date(), state: 'deployed',
+  }).where(eq(schema.siteProjects.id, projectId));
+
+  log.info('demo deployed', { businessId, projectId, deployUrl, health: health.detail, filesRewritten: rewritten });
+
+  // The demo now lives in deploys/<token>/ and the reports live in storage, so the
+  // build artefacts in the workspace are dead weight. Never fails the deploy.
+  await collectWorkspaceGarbage(project.dir, 'deployed').catch(() => {});
+
+  await transition(businessId, 'site_ready', 'deploy-worker', deployUrl);
+  await advance(businessId); // -> request-approval (phase D)
 }

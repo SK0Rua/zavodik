@@ -1,6 +1,14 @@
 /**
- * Scoring (deterministic) + independent QA (separate agent from the enrichment one).
- * Qualification / priority score / production readiness are three separate concepts.
+ * Stage 7 — deterministic scoring + INDEPENDENT QA (spec §4).
+ *
+ * Three separate concepts, deliberately not collapsed:
+ *   - qualified      : boolean, "is this a lead we want at all"
+ *   - score          : priority ordering, deterministic, explainable breakdown
+ *   - production_ready: stage 8's gate, "do we have enough to build a demo"
+ *
+ * The QA agent is a DIFFERENT persona from enrichment and re-reads the package
+ * looking for provenance holes and hallucination smells. It may only report;
+ * the status transition below is decided by code (spec §2.1).
  */
 import { eq, desc } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
@@ -9,22 +17,59 @@ import { transition } from '../orchestrator/statuses.js';
 import { advance } from '../orchestrator/router.js';
 import type { JobPayload } from '../orchestrator/queue.js';
 import { log } from '../lib/logger.js';
+import { translateQaNotes } from '../lib/translateNotes.js';
 
-const SITE_GAP_POINTS: Record<string, number> = {
-  none: 30, unreachable_all_endpoints: 28, working_with_https_issue: 24,
-  working_but_dated: 20, acceptable: 8, strong_modern: 0,
+/**
+ * Opportunity points: the weaker the current web presence, the more a demo
+ * site is worth to this business. `working_good` means little opportunity.
+ */
+const SITE_OPPORTUNITY: Record<string, number> = {
+  no_website: 30,
+  broken: 26,
+  working_with_https_issue: 20,
+  outdated: 18,
+  working_good: 2,
+};
+
+/** Live messenger channels are worth more than email (decision #8). */
+const CHANNEL_POINTS: Record<string, number> = {
+  whatsapp: 10, viber: 8, instagram: 6, facebook: 5, phone: 4, email: 4, contact_form: 1, website: 0, tiktok: 2, telegram: 4,
 };
 
 const QaSchema = z.object({
+  provenanceOk: z.boolean(),
+  hallucinationRisk: z.enum(['none', 'low', 'medium', 'high']),
+  contradictions: z.array(z.string()),
+  suspiciousFacts: z.array(z.object({ fact: z.string(), why: z.string() })),
   passed: z.boolean(),
-  issues: z.array(z.string()),
-  notes: z.string(),
+  summary: z.string(),
 });
+
+const QA_SYSTEM = `You are an independent QA reviewer of a sales-lead evidence package. You did NOT build this package and you have no outside knowledge of this business.
+
+Your ONLY job is to judge whether the package is internally sound:
+1. PROVENANCE — every fact should carry a source. Facts marked "sourceId: null" are a provenance failure.
+2. HALLUCINATION SMELL — do any facts look invented rather than extracted? Red flags: suspiciously round prices, generic marketing copy that no small business would write about itself, services that merely restate the category, review quotes that read like ad copy, contact details that follow a template.
+3. CONTRADICTIONS — does the website verdict match the rest of the evidence? Do the services fit the category and the reviews? Do hours/address conflict between sources?
+4. Missing data is NOT a failure. An honest, sparse package with declared gaps is GOOD. Only flag things that are present and wrong, or present and unsupported.
+
+Set passed=false only for a real problem: provenance failures, medium/high hallucination risk, or a substantive contradiction. Sparse-but-honest passes.`;
+
+/**
+ * Statuses this stage may act on. A business that was reset, rejected or has
+ * already moved on can still have a stale score job queued from an earlier run;
+ * scoring it would attempt an illegal transition and fail the job for no reason.
+ */
+const SCOREABLE = new Set(['enriching', 'needs_review', 'qualified']);
 
 export async function scoreAndQaHandler(payload: JobPayload): Promise<void> {
   const businessId = payload.businessId!;
   const [biz] = await db.select().from(schema.businesses).where(eq(schema.businesses.id, businessId));
   if (!biz) throw new Error(`business not found: ${businessId}`);
+  if (!SCOREABLE.has(biz.status)) {
+    log.info('scoring skipped: business is not in a scoreable status', { businessId, status: biz.status });
+    return;
+  }
 
   const [audit] = await db.select().from(schema.websiteAudits)
     .where(eq(schema.websiteAudits.businessId, businessId))
@@ -33,65 +78,117 @@ export async function scoreAndQaHandler(payload: JobPayload): Promise<void> {
   const contacts = await db.select().from(schema.businessContacts).where(eq(schema.businessContacts.businessId, businessId));
   const assetRows = await db.select().from(schema.assets).where(eq(schema.assets.businessId, businessId));
 
-  const services = facts.filter((f) => f.key === 'service' && f.verified);
-  const reviews = facts.filter((f) => f.key === 'review_excerpt' && f.verified);
+  const services = facts.filter((f) => f.key === 'service');
+  const reviews = facts.filter((f) => f.key === 'review' || f.key === 'review_excerpt');
   const verifiedContacts = contacts.filter((c) => c.verified);
+  // channels we can actually open a conversation on (a bare website URL is not one)
+  const reachable = verifiedContacts.filter((c) => c.channel !== 'website');
+  const verdict = audit?.verdict ?? 'no_website';
 
-  // ── deterministic score ──
+  // ── deterministic score (max 100) ────────────────────────────────────────
+  const distinctChannels = [...new Set(reachable.map((c) => c.channel))];
   const breakdown: Record<string, number> = {
-    site_gap: SITE_GAP_POINTS[audit?.verdict ?? 'none'] ?? 15,
-    contactability: Math.min(verifiedContacts.length * 8, 25),
-    content_richness: Math.min(services.length * 3 + reviews.length * 2 + assetRows.length * 2, 25),
-    business_health: Math.min(((biz.rating ?? 0) >= 4 ? 10 : 5) + Math.min((biz.reviewCount ?? 0) / 10, 10), 20),
+    site_opportunity: SITE_OPPORTUNITY[verdict] ?? 15,
+    contactability: Math.min(distinctChannels.reduce((sum, ch) => sum + (CHANNEL_POINTS[ch] ?? 2), 0), 25),
+    content_richness: Math.min(services.length * 3 + reviews.length + assetRows.length, 25),
+    business_health: Math.min(
+      ((biz.rating ?? 0) >= 4.5 ? 12 : (biz.rating ?? 0) >= 4 ? 8 : 4)
+      + Math.min((biz.reviewCount ?? 0) / 25, 8),
+      20,
+    ),
   };
-  const score = Object.values(breakdown).reduce((a, b) => a + b, 0);
+  const score = Math.round(Object.values(breakdown).reduce((a, b) => a + b, 0) * 10) / 10;
 
-  // ── qualification (boolean, independent of score) ──
+  // ── qualification (boolean, independent of score) ────────────────────────
   const reasons: string[] = [];
-  const opportunity = (audit?.verdict ?? 'none') !== 'strong_modern';
-  if (!opportunity) reasons.push('strong_modern_site_no_opportunity');
-  if (verifiedContacts.length === 0) reasons.push('no_verified_contact');
-  const qualified = opportunity && verifiedContacts.length > 0;
+  if (verdict === 'working_good') reasons.push('already_has_a_good_modern_site_no_opportunity');
+  if (reachable.length === 0) reasons.push('no_reachable_contact_channel');
+  const qualified = verdict !== 'working_good' && reachable.length > 0;
 
-  // ── independent QA agent: verifies the package coherence, not re-does enrichment ──
+  // ── independent QA agent ─────────────────────────────────────────────────
+  // Facts are handed over WITH their provenance so the agent can audit it.
+  const factsForQa = facts.map((f) => ({
+    key: f.key,
+    value: typeof f.value === 'string' ? f.value.slice(0, 400) : f.value,
+    sourceId: f.sourceId,
+    extractionMethod: f.extractionMethod,
+    confidence: f.confidence,
+  }));
+
   let qaPassed: boolean | null = null;
   let qaNotes = '';
   try {
     const qa = await runAgent(
       'independent-qa',
-      `You are an independent QA reviewer for a lead evidence package. You did NOT build this package.
-Check internal consistency: do the services fit the category? do contacts look real (not invented patterns)?
-does the website verdict match the evidence? Flag anything suspicious. Be strict.`,
+      QA_SYSTEM,
       JSON.stringify({
-        business: { name: biz.name, category: biz.category, address: biz.address, rating: biz.rating, reviewCount: biz.reviewCount },
-        websiteVerdict: audit?.verdict ?? 'none',
-        auditNotes: audit?.notes,
-        services: services.map((s) => s.value),
-        reviewExcerpts: reviews.map((r) => r.value),
-        contacts: verifiedContacts.map((c) => ({ channel: c.channel, value: c.value })),
-        assetCount: assetRows.length,
-      }, null, 2),
+        business: {
+          name: biz.name, category: biz.category, address: biz.address,
+          rating: biz.rating, reviewCount: biz.reviewCount, ownedDomain: biz.domain,
+        },
+        websiteAudit: { verdict, bestEndpoint: audit?.bestEndpoint ?? null, notes: audit?.notes ?? null },
+        facts: factsForQa,
+        contacts: contacts.map((c) => ({ channel: c.channel, value: c.value, sourceId: c.sourceId, verified: c.verified })),
+        assets: assetRows.map((a) => ({ usage: a.intendedUsage, w: a.width, h: a.height, sourceType: a.sourceType, aiGenerated: a.aiGenerated })),
+      }, null, 2).slice(0, 120_000),
       QaSchema,
+      { kind: 'qa' },
     );
     qaPassed = qa.passed;
-    qaNotes = [qa.notes, ...qa.issues].join('; ').slice(0, 1000);
-  } catch (err) {
-    log.warn('qa agent unavailable, marking for review', { businessId });
-    qaNotes = 'qa agent unavailable';
+    qaNotes = [
+      `risk=${qa.hallucinationRisk}`,
+      `provenanceOk=${qa.provenanceOk}`,
+      qa.summary,
+      ...qa.contradictions.map((c) => `CONTRADICTION: ${c}`),
+      ...qa.suspiciousFacts.map((s) => `SUSPICIOUS: ${s.fact} — ${s.why}`),
+    ].join(' | ').slice(0, 2000);
+  } catch (err: unknown) {
+    // A rate limit must bubble: the queue parks the job in retry_wait (spec §2.3).
+    if ((err as { code?: string })?.code === 'RATE_LIMITED') throw err;
+    log.warn('qa agent failed', { businessId, err: String(err).slice(0, 300) });
+    qaNotes = `qa agent unavailable: ${String(err).slice(0, 300)}`;
   }
 
+  // The critic writes English by design (it reasons about provenance, not about
+  // the business), and Roman reads this console in Ukrainian. The English stays
+  // as the record of what the critic actually said; the Ukrainian is what the
+  // Факти tab leads with. `translateQaNotes` preserves the `risk=` /
+  // `CONTRADICTION:` structure the UI parses, and returns null rather than
+  // throwing — an untranslated note is cosmetic, a failed scoring is not.
+  const qaNotesUk = await translateQaNotes(
+    qaNotes,
+    `fact-check findings about "${biz.name}", a ${biz.category ?? 'local business'}`,
+  );
+
   await db.insert(schema.qualifications).values({
-    businessId, stage: 'full', qualified, reasons, score, scoreBreakdown: breakdown, qaPassed, qaNotes,
+    businessId, stage: 'full', qualified, reasons, score, scoreBreakdown: breakdown,
+    qaPassed, qaNotes, qaNotesUk,
   });
-  await db.update(schema.businesses).set({ score, scoreBreakdown: breakdown, updatedAt: new Date() })
+  await db.update(schema.businesses)
+    .set({ score, scoreBreakdown: breakdown, updatedAt: new Date() })
     .where(eq(schema.businesses.id, businessId));
 
+  log.info('scored', { businessId, score, breakdown, qualified, qaPassed });
+
+  // ── code decides the transition; the agent only explained ────────────────
+  //
+  // Stage 7 never hard-rejects. The spec assigns `rejected` to stage 3, where
+  // the rules are objective (closed, chain, wrong category, unreachable); here
+  // the calls are judgement — "their existing site is good enough that a demo
+  // has no hook" is exactly the sort of thing Roman may disagree with on a
+  // business he wants anyway, and `rejected` is terminal with no way back.
+  // So a stage-7 no goes to `needs_review` with the reason recorded, and the
+  // decision stays reversible in the UI.
   if (!qualified) {
-    await transition(businessId, 'rejected', 'score-worker', reasons.join(','));
+    await transition(businessId, 'needs_review', 'score-worker', `not qualified: ${reasons.join(',')}`);
     return;
   }
   if (qaPassed === false) {
-    await transition(businessId, 'needs_review', 'score-worker', `QA failed: ${qaNotes.slice(0, 200)}`);
+    await transition(businessId, 'needs_review', 'score-worker', `QA failed: ${qaNotes.slice(0, 250)}`);
+    return;
+  }
+  if (qaPassed === null) {
+    await transition(businessId, 'needs_review', 'score-worker', 'QA agent unavailable — package not independently verified');
     return;
   }
   await transition(businessId, 'qualified', 'score-worker', `score=${score}`);

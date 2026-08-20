@@ -1,0 +1,36 @@
+{
+  "//": [
+    "The gate imports the UI's own server actions (`ui/lib/actions.ts`) so that",
+    "«Підтвердити», «Ще спроба» and «Відхилити» are tested through the SAME code",
+    "the buttons call, not through a reimplementation of it that could drift.",
+    "",
+    "Those modules resolve `@/…` and `@factory/…`, which are Next path aliases",
+    "declared in `ui/tsconfig.json`. tsx honours `paths` from the tsconfig it",
+    "loads, so the gate gets its own config carrying both alias sets rather than",
+    "polluting the root build config (rootDir `src`) with UI paths.",
+    "",
+    "`allowJs`/`jsx` are here because a few of those modules pull in .tsx",
+    "components transitively."
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "jsx": "preserve",
+    "noEmit": true,
+    "baseUrl": "../..",
+    "paths": {
+      "@/*": ["ui/*"],
+      "@factory/schema": ["src/db/schema.ts"],
+      "@factory/buildPolicy": ["src/orchestrator/buildPolicy.ts"],
+      "@factory/settings": ["src/lib/settings.ts"]
+    }
+  },
+  "include": ["../e2e.ts", "./**/*.ts"]
+}

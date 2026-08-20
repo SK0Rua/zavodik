@@ -1,0 +1,28 @@
+-- Wow scores: the six 0-3 motion axes from `references/motion/README.md`.
+--
+-- Roman's requirement (2026-08-18): demo sites must be "вау з моушн-дизайном".
+-- The design rubric (stage 9) now estimates wow from the written art direction,
+-- and the visual critic (stage 11) scores the same six axes from screenshots
+-- plus motion frames of the BUILT page. Both are needed to read a build:
+-- a direction can promise a scroll-linked hero and the builder can still ship a
+-- static one, and that gap is the whole reason the second score exists.
+--
+-- One jsonb column rather than twelve numeric ones: the axes are a rubric that
+-- will be recalibrated once there are 5-10 real demos (BUILD-PIPELINE §12 item 6),
+-- and a jsonb blob absorbs that without a migration each time. Shape:
+--
+--   {
+--     "design":  { "total": 13, "passed": true,  "reasons": [],
+--                  "axes": { "heroMotion": 3, "scrollChoreography": 2, ... },
+--                  "referenceSlug": "vero-studio", "heroMotion": "kenburns" },
+--     "qa":      { "iteration": 0, "total": 6, "passed": false,
+--                  "reasons": ["hero motion is 0: ..."],
+--                  "axes": { ... },
+--                  "heroMotionDetected": false, "heroMotionPixelDelta": 0.001,
+--                  "referenceCloseness": 3 }
+--   }
+--
+-- Nullable with no default: projects built before this column existed have no
+-- wow score, and inventing a zero for them would read as "we measured it and it
+-- was terrible" rather than "we never measured it".
+ALTER TABLE "site_projects" ADD COLUMN IF NOT EXISTS "wow_scores" jsonb;

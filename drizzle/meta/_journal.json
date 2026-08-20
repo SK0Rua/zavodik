@@ -8,6 +8,83 @@
       "when": 1786838637106,
       "tag": "0000_furry_slyde",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786893004759,
+      "tag": "0001_dark_mulholland_black",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786982400000,
+      "tag": "0002_media_ai_generated",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786996800000,
+      "tag": "0003_site_projects_phase_c",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787040000000,
+      "tag": "0005_phase_e_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787097600000,
+      "tag": "0006_campaign_auto_build",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787184000000,
+      "tag": "0007_contacts_verified_by",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787270400000,
+      "tag": "0008_settings_secrets",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787356800000,
+      "tag": "0009_wow_scores",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787443200000,
+      "tag": "0010_merge_social_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1787529600000,
+      "tag": "0011_audit_fullpage",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1787616000000,
+      "tag": "0012_notes_uk",
+      "breakpoints": true
     }
   ]
 }

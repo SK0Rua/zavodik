@@ -1,0 +1,23 @@
+-- Operational settings move from .env into Postgres, encrypted at rest.
+--
+-- Roman's decision (2026-08-17): "Для чого мені CLAUDE_CODE_OAUTH_TOKEN в env?
+-- Щоб потім перезавантажувати чи перебілдювати все? Чому не зробити
+-- налаштування в UI і там усе робити?" — pasting a token or flipping
+-- dry_run/live must not require editing .env and recreating containers.
+--
+-- The `settings` table already existed (phase E, IMAP cursor). It now also
+-- carries `setting:<KEY>` rows (configuration) and `heartbeat:<group>` rows
+-- (liveness for the UI's system panel), so two columns are added:
+--
+--   encrypted   — true when `value` holds an AES-256-GCM envelope
+--                 (`enc:v1:<iv>:<tag>:<ct>`) under SETTINGS_MASTER_KEY, which
+--                 stays in .env. A dump of this table is useless without it.
+--   updated_by  — who wrote the row ('roman' from the UI, 'worker' for
+--                 heartbeats). Same reasoning as `actor` on status_history:
+--                 a credential change is an operator action and must be
+--                 attributable (SPEC §5, §8).
+--
+-- Defaults keep every pre-existing row (the IMAP cursor) valid and unencrypted.
+ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "encrypted" boolean NOT NULL DEFAULT false;
+--> statement-breakpoint
+ALTER TABLE "settings" ADD COLUMN IF NOT EXISTS "updated_by" text;

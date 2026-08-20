@@ -1,178 +1,267 @@
 /**
- * Site builder. Two runtimes (AGENT_RUNTIME):
+ * Stage 10 — site build (SPEC §4, §2.3).
  *
- *  claude-code (default): a real Claude Code agent (Agent SDK) gets an isolated
- *    workspace with the Next.js template, the immutable client snapshot, content
- *    brief, chosen design contract and local assets. It writes the site, runs
- *    `pnpm install` + `pnpm build` itself, fixes its own build errors, and ships
- *    a static export in out/. QA issues come back into the SAME workspace.
+ * A real Claude Code agent (subscription runtime) gets an isolated workspace with
+ * the Next.js template, the frozen snapshot, the content brief, the chosen art
+ * direction and the local assets. It writes the site, runs `pnpm install` and
+ * `pnpm build` itself, and fixes its own build errors.
  *
- *  api: single-shot structured API call producing a static HTML/CSS/JS site.
- *    Cheap fallback; no self-iteration.
+ * Then CODE verifies, because the agent's self-report is not evidence:
+ *   1. `out/index.html` exists;
+ *   2. `pnpm build` is re-run independently and must be green;
+ *   3. the exported HTML is grepped for contact details, external links and image
+ *      sources, and every one must trace to the snapshot (src/build/provenance.ts).
  *
- * Either way the builder sees ONLY the verified client package: no web access
- * to "find" facts. Missing content returns the package to enrichment, not fantasy.
+ * A provenance failure is not a crash — it becomes a QA issue and goes back to the
+ * SAME workspace, exactly like a visual issue would.
  */
-import { cp, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { getObject } from '../lib/storage.js';
-import { config } from '../config.js';
-import { runAgent, z } from '../agents/agent.js';
 import { runCodeAgent } from '../agents/codeAgent.js';
+import { config } from '../config.js';
 import { enqueue, type JobPayload } from '../orchestrator/queue.js';
-import { buildClientSnapshot } from './snapshot.js';
+import { buildSnapshot } from '../build/snapshot.js';
+import { BuildResultSchema, type ArtDirection, type BuildResult, type ContentBrief } from '../build/schemas.js';
+import type { RubricVerdict } from '../build/rubric.js';
+import { checkProvenance, type ProvenanceReport } from '../build/provenance.js';
+import { generateDecorativeBackground, planHeroMedia } from '../build/media.js';
+import { outputDir, prepareWorkspace, workspaceDir, SITES_ROOT } from '../build/workspace.js';
 import { log } from '../lib/logger.js';
 
-export const SITES_ROOT = path.resolve('sites');
-const TEMPLATE_DIR = path.resolve('site-template');
+export { SITES_ROOT };
 
-/** Directory that actually gets served/QA'd/deployed. */
+/** Kept for callers outside phase C (deploy, QA) that only know a directory. */
 export function siteOutputDir(projectDir: string): string {
-  const out = path.join(projectDir, 'out');
-  return existsSync(path.join(out, 'index.html')) ? out : projectDir;
+  return outputDir(projectDir);
 }
 
-const BuildResultSchema = z.object({
-  ok: z.boolean(),
-  summary: z.string(),
-  pagesBuilt: z.array(z.string()).optional(),
-});
-
-const StaticSiteSchema = z.object({
-  files: z.array(z.object({ path: z.string(), content: z.string() })),
-  notes: z.string(),
-});
-
-async function prepareWorkspace(businessId: string, siteDir: string): Promise<void> {
-  await mkdir(path.join(siteDir, 'input'), { recursive: true });
-  await mkdir(path.join(siteDir, 'public', 'assets'), { recursive: true });
-  const assetRows = await db.select().from(schema.assets).where(eq(schema.assets.businessId, businessId));
-  for (const a of assetRows) {
-    const buf = await getObject('assets', a.objectKey);
-    await writeFile(path.join(siteDir, 'public', 'assets', a.objectKey.split('/').pop()!), buf);
-  }
-}
-
-export async function buildSiteHandler(payload: JobPayload): Promise<void> {
-  const businessId = payload.businessId!;
-  const projectId = payload.projectId as number;
-  const [project] = await db.select().from(schema.siteProjects).where(eq(schema.siteProjects.id, projectId));
-  if (!project) throw new Error(`site project not found: ${projectId}`);
-
-  const snapshot = await buildClientSnapshot(businessId);
-  const brief = JSON.parse((await getObject('raw', project.contentBriefKey!)).toString());
-  const design = JSON.parse((await getObject('raw', project.designContractKey!)).toString());
-  const issues = (payload.issues as string[] | undefined) ?? [];
-  const iteration = (payload.iteration as number | undefined) ?? 0;
-
-  const siteDir = path.join(SITES_ROOT, businessId);
-
-  if (config.agentRuntime === 'claude-code') {
-    const isFix = issues.length > 0 && existsSync(path.join(siteDir, 'package.json'));
-    if (!isFix) {
-      await mkdir(siteDir, { recursive: true });
-      await cp(TEMPLATE_DIR, siteDir, { recursive: true });
-      await prepareWorkspace(businessId, siteDir);
-      await writeFile(path.join(siteDir, 'input', 'snapshot.json'), JSON.stringify(snapshot, null, 2));
-      await writeFile(path.join(siteDir, 'input', 'brief.json'), JSON.stringify(brief, null, 2));
-      await writeFile(path.join(siteDir, 'input', 'design.json'), JSON.stringify(design.chosen, null, 2));
-    }
-
-    const rules = `HARD RULES (violating any of these fails the job):
-- Every fact on the site (services, prices, reviews, phone, address, hours) must come from input/snapshot.json. Никаких invented claims, awards, or "since 19XX".
-- Use ONLY images under public/assets/ (reference as /assets/<file>).
-- The site language is "${snapshot.language}" for all visible copy.
-- Keep robots noindex (already in layout metadata). This is a PRIVATE demo.
-- Fully responsive: 390px, 768px, 1440px. Zero horizontal overflow.
-- Respect prefers-reduced-motion (globals.css already does; don't undo it).
-- Follow input/design.json faithfully: its layout concept, typography, palette and motion. This must NOT look like a generic template.
-- Primary CTA uses the real contact from the snapshot.
-- Do NOT fetch anything from the internet except pnpm packages.
-- Finish with a green \`pnpm build\` producing a static export in out/.`;
-
-    const prompt = isFix
-      ? `You previously built this Next.js demo site. QA found concrete issues. Fix ONLY these issues, keep everything else intact, then re-run \`pnpm build\` until green.
-
-ISSUES (iteration ${iteration}):
-${issues.map((i, n) => `${n + 1}. ${i}`).join('\n')}
-
-${rules}
-
-result.json schema: {"ok": boolean, "summary": string, "pagesBuilt": string[]}`
-      : `Build a personalized demo website for a real local business inside this Next.js workspace (static export already configured).
-
-Inputs in the workspace:
-- input/snapshot.json  — verified facts (the ONLY source of truth)
-- input/brief.json     — content brief: sections, offer, CTA, tone
-- input/design.json    — the chosen art direction to implement
-- public/assets/       — the ONLY allowed images
-
-Steps: study inputs, replace app/page.tsx + layout metadata + globals.css with the real site (add components/ as needed), run \`pnpm install\` then \`pnpm build\`, fix any errors yourself, verify out/index.html exists.
-
-${rules}
-
-result.json schema: {"ok": boolean, "summary": string, "pagesBuilt": string[]}`;
-
-    const result = await runCodeAgent(
-      { name: `site-builder:${businessId}`, cwd: siteDir, prompt, heavy: true, maxTurns: 120 },
-      BuildResultSchema,
-    );
-    if (!result.ok) throw new Error(`builder agent reported failure: ${result.summary.slice(0, 300)}`);
-    if (!existsSync(path.join(siteDir, 'out', 'index.html'))) {
-      throw new Error('builder agent finished but out/index.html is missing');
-    }
-    log.info('site built (claude-code)', { businessId, iteration, summary: result.summary.slice(0, 200) });
-  } else {
-    // api fallback: single-shot static site
-    const previousFiles = payload.previousFiles as Array<{ path: string; content: string }> | undefined;
-    const userContent = issues.length && previousFiles
-      ? `Fix ONLY these QA issues, keep everything else intact.\n\nISSUES:\n${issues.map((i, n) => `${n + 1}. ${i}`).join('\n')}\n\nEXISTING FILES:\n${JSON.stringify(previousFiles)}\n\nSNAPSHOT:\n${JSON.stringify(snapshot)}\n\nBRIEF:\n${JSON.stringify(brief)}\n\nDESIGN:\n${JSON.stringify(design.chosen)}`
-      : `SNAPSHOT:\n${JSON.stringify(snapshot, null, 2)}\n\nBRIEF:\n${JSON.stringify(brief, null, 2)}\n\nDESIGN:\n${JSON.stringify(design.chosen, null, 2)}`;
-
-    const site = await runAgent(
-      'site-builder-api',
-      `You are an elite web designer-developer building a personalized DEMO website (static HTML/CSS/JS, single page, index.html required).
-Use ONLY snapshot facts and assets/ images. Responsive 390/768/1440, no overflow, noindex meta, prefers-reduced-motion respected, copy in the snapshot language, follow the design contract faithfully.`,
-      userContent,
-      StaticSiteSchema,
-      { heavy: true, maxTokens: 32_000, retries: 1 },
-    );
-    await mkdir(path.join(siteDir, 'assets'), { recursive: true });
-    for (const f of site.files) {
-      const target = path.join(siteDir, f.path);
-      if (!target.startsWith(siteDir)) throw new Error(`path traversal attempt: ${f.path}`);
-      await mkdir(path.dirname(target), { recursive: true });
-      await writeFile(target, f.content, 'utf8');
-    }
-    const assetRows = await db.select().from(schema.assets).where(eq(schema.assets.businessId, businessId));
-    for (const a of assetRows) {
-      const buf = await getObject('assets', a.objectKey);
-      await writeFile(path.join(siteDir, 'assets', a.objectKey.split('/').pop()!), buf);
-    }
-    log.info('site built (api)', { businessId, iteration, files: site.files.length });
-  }
-
-  await db.update(schema.siteProjects)
-    .set({ state: 'qa', dir: siteDir, buildOk: true })
-    .where(eq(schema.siteProjects.id, projectId));
-
-  await enqueue('visual-qa', {
-    businessId, projectId, campaignId: payload.campaignId,
-    iteration,
-    idempotencyKey: `visual-qa:${businessId}:${iteration}`,
+/** Run a command in the workspace and capture output; used to verify the build. */
+function run(cmd: string, args: string[], cwd: string, timeoutMs: number): Promise<{ code: number; output: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, {
+      cwd,
+      // The agent's own env is irrelevant here: this is a plain build.
+      env: { ...process.env, CI: '1', NEXT_TELEMETRY_DISABLED: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    const onData = (b: Buffer) => { output += b.toString(); if (output.length > 200_000) output = output.slice(-100_000); };
+    child.stdout.on('data', onData);
+    child.stderr.on('data', onData);
+    const timer = setTimeout(() => { child.kill('SIGKILL'); output += '\n[timeout]'; }, timeoutMs);
+    child.on('close', (code) => { clearTimeout(timer); resolve({ code: code ?? -1, output }); });
+    child.on('error', (err) => { clearTimeout(timer); resolve({ code: -1, output: `${output}\n${String(err)}` }); });
   });
 }
 
-/** Collect current source files (api runtime) to feed back into a fix iteration. */
-export async function collectSourceFiles(dir: string): Promise<Array<{ path: string; content: string }>> {
-  const files: Array<{ path: string; content: string }> = [];
-  for (const f of await readdir(dir, { recursive: true }) as string[]) {
-    if (f.includes('node_modules') || f.startsWith('assets') || f.startsWith('public') || f.startsWith('out') || f.startsWith('.next') || f.startsWith('input')) continue;
-    if (!/\.(html|css|js)$/.test(f)) continue;
-    files.push({ path: f, content: await readFile(path.join(dir, f), 'utf8') });
+/** Turn provenance findings into the same issue strings the QA loop feeds back. */
+function provenanceIssues(report: ProvenanceReport): string[] {
+  return report.findings
+    .filter((f) => f.severity === 'high')
+    .map((f) => `provenance [${f.kind}] in ${f.file}: ${f.detail}`);
+}
+
+export async function buildSiteHandler(payload: JobPayload): Promise<void> {
+  const startedAt = Date.now();
+  const businessId = payload.businessId!;
+  const projectId = payload.projectId as number;
+  const iteration = (payload.iteration as number | undefined) ?? 0;
+  const issues = (payload.issues as string[] | undefined) ?? [];
+
+  const [project] = await db.select().from(schema.siteProjects)
+    .where(eq(schema.siteProjects.id, projectId));
+  if (!project) throw new Error(`site project not found: ${projectId}`);
+
+  const dir = workspaceDir(businessId, projectId);
+  const isFix = iteration > 0 && existsSync(path.join(dir, 'package.json'));
+
+  await db.update(schema.siteProjects)
+    .set({ state: 'building', dir })
+    .where(eq(schema.siteProjects.id, projectId));
+
+  let prompt: string;
+  let snapshot = await buildSnapshot(businessId);
+
+  if (isFix) {
+    // Fix iteration: the workspace already holds the agent's own code. Only the
+    // issue list is new — re-preparing inputs would throw away its work.
+    const qaIssuesPath = path.join(dir, 'QA-ISSUES.md');
+    const qaText = existsSync(qaIssuesPath) ? await readFile(qaIssuesPath, 'utf8') : issues.map((i) => `- ${i}`).join('\n');
+    prompt = `You built this demo site. Automated QA found concrete issues. Read \`QA-ISSUES.md\`,
+fix EXACTLY those issues, and change nothing else — the rest of the page passed review.
+
+${qaText}
+
+Constraints are unchanged and still binding: re-read \`BUILD-TASK.md\` before you start. In
+particular: facts only from \`input/snapshot.json\`, only snapshot contacts, images only from
+\`public/assets/\` and \`public/generated/\`, copy in ${snapshot.languageName}, noindex stays,
+reduced motion must render a complete page.
+
+When done run \`pnpm build\` until it is green and \`out/index.html\` exists.
+
+FINAL STEP, do not skip it: write \`result.json\` in the workspace root. Write it as the very
+last action, even if you think you are finished — the pipeline reads it as your report.`;
+  } else {
+    // Fresh build: rebuild the workspace from the frozen documents.
+    const brief = JSON.parse((await getObject('raw', project.contentBriefKey!)).toString()) as ContentBrief;
+    const designDoc = JSON.parse((await getObject('raw', project.designContractKey!)).toString()) as {
+      chosen: ArtDirection;
+      rubric: {
+        ranking: RubricVerdict['ranking']; rationale: string;
+        chosenWow?: RubricVerdict['chosenWow'];
+      };
+    };
+    if (project.snapshotKey) {
+      // Use the FROZEN snapshot, not a fresh read: the design was chosen against it.
+      snapshot = JSON.parse((await getObject('raw', project.snapshotKey)).toString());
+    }
+
+    const [biz] = await db.select().from(schema.businesses).where(eq(schema.businesses.id, businessId));
+    const [campaign] = await db.select().from(schema.campaigns).where(eq(schema.campaigns.id, biz!.campaignId));
+
+    // Optional media. Both degrade silently; neither can fail the build.
+    const heroMedia = await planHeroMedia(snapshot, projectId, { category: biz?.category });
+    await generateDecorativeBackground(snapshot, projectId, designDoc.chosen);
+
+    const verdict: RubricVerdict = {
+      chosen: designDoc.chosen,
+      chosenScore: project.designScore ?? 0,
+      ranking: designDoc.rubric?.ranking ?? [],
+      rationale: designDoc.rubric?.rationale ?? '',
+      // Contracts frozen before the motion pack landed carry no wow estimate. An
+      // absent score is recorded as "not measured" (empty axes, no reasons), not
+      // as a zero — the build task only ever reads the axes it is given.
+      chosenWow: designDoc.rubric?.chosenWow
+        ?? { total: 0, ambition: 0, passed: false, reasons: ['no wow estimate in this design contract'], axes: {} as never },
+    };
+
+    await prepareWorkspace({
+      snapshot, brief, design: designDoc.chosen, verdict, heroMedia,
+      projectId, niche: campaign?.niche ?? 'beauty', fresh: true,
+    });
+
+    prompt = `Build the demo website described in \`BUILD-TASK.md\` in this workspace.
+
+Read \`BUILD-TASK.md\` first — it is the contract, written by the pipeline, not by a model.
+Then \`DESIGN.md\`, \`components/README.md\` and the ONE reference named in \`input/design.json\`.
+
+Replace \`app/page.tsx\`, the layout metadata and fonts, and \`app/globals.css\` with the real
+site. Add components under \`components/\` as needed; the pool in \`components/ui/\` is
+copy-paste code you may edit freely.
+
+Then run \`pnpm install\` and \`pnpm build\`, fix any errors yourself, and confirm
+\`out/index.html\` exists. The pipeline re-runs \`pnpm build\` independently afterwards and
+greps the exported HTML against the snapshot, so a self-report of success that does not hold
+up will simply come back to you as issues.
+
+FINAL STEP, do not skip it: write \`result.json\` in the workspace root as your very last
+action. Everything else can be perfect and the run still reports badly without it.`;
   }
-  return files;
+
+  // ── The agent works ───────────────────────────────────────────────────────
+  const agentStarted = Date.now();
+
+  /**
+   * `result.json` is the agent's SELF-REPORT, not the deliverable. The deliverable
+   * is a green `pnpm build` and an `out/` this code verifies itself a few lines
+   * below. Observed for real: a builder agent finished successfully in 36 turns,
+   * wrote a correct site, and simply never wrote result.json — throwing away a
+   * verified-good build over a missing status file is the wrong trade.
+   *
+   * So a missing/invalid result.json degrades to a synthesised one and is recorded
+   * as an unresolved note. A build that is genuinely broken still fails, because
+   * the independent build + provenance checks below are what actually gate.
+   */
+  let result: BuildResult;
+  try {
+    result = await runCodeAgent(
+      {
+        name: `site-builder:${businessId}:${iteration}`,
+        cwd: dir,
+        prompt,
+        heavy: true,
+        kind: 'builder',
+        maxTurns: isFix ? config.build.fixMaxTurns : config.build.maxTurns,
+        timeoutMs: config.build.timeoutMs,
+        // The GSAP skills copied into <workspace>/.claude/skills/ are only offered
+        // to the model when skills are explicitly enabled.
+        skills: 'all',
+        // Spec §9 metrics: turns and estimated subscription cost per build iteration.
+        onUsage: (u) => log.info('agent usage', { businessId, projectId, iteration, call: 'site-builder', ...u }),
+      },
+      BuildResultSchema,
+    );
+  } catch (err) {
+    const builtAnyway = existsSync(path.join(dir, 'out', 'index.html'));
+    if (!builtAnyway) throw err; // nothing to salvage
+    log.warn('builder agent produced no valid result.json but did produce a build; continuing to verification', {
+      businessId, projectId, iteration, err: String((err as Error)?.message ?? err).slice(0, 300),
+    });
+    result = {
+      ok: true,
+      pages: ['/'],
+      notes: 'result.json missing or invalid; reconstructed by the pipeline after finding a built out/.',
+      usedAssets: [],
+      unresolved: ['builder agent did not write a valid result.json'],
+    };
+  }
+  const agentSeconds = Math.round((Date.now() - agentStarted) / 1000);
+
+  log.info('builder agent finished', {
+    businessId, projectId, iteration, ok: result.ok, agentSeconds,
+    pages: result.pages, unresolved: result.unresolved.length,
+    notes: result.notes.slice(0, 200),
+  });
+
+  if (!result.ok) {
+    throw new Error(
+      `builder agent reported failure: ${result.notes.slice(0, 400)}` +
+      (result.unresolved.length ? ` | unresolved: ${result.unresolved.join('; ').slice(0, 300)}` : ''),
+    );
+  }
+
+  // ── CODE verifies (the agent is not trusted) ──────────────────────────────
+  const verify = await run('pnpm', ['build'], dir, config.build.verifyTimeoutMs);
+  if (verify.code !== 0) {
+    throw new Error(
+      `independent \`pnpm build\` failed after the agent reported success (exit ${verify.code}): ` +
+      verify.output.slice(-1500),
+    );
+  }
+  const out = path.join(dir, 'out');
+  if (!existsSync(path.join(out, 'index.html'))) {
+    throw new Error('independent build succeeded but out/index.html is missing');
+  }
+
+  const provenance = await checkProvenance(out, snapshot);
+  const provIssues = provenanceIssues(provenance);
+  log.info('provenance checked', {
+    businessId, projectId, ok: provenance.ok,
+    findings: provenance.findings.length, high: provIssues.length,
+    contactsPresent: provenance.contactsPresent,
+  });
+
+  await db.update(schema.siteProjects)
+    .set({ state: 'qa', dir, buildOk: true, buildSeconds: agentSeconds })
+    .where(eq(schema.siteProjects.id, projectId));
+
+  log.info('stage 10 complete', {
+    businessId, projectId, iteration, totalSeconds: Math.round((Date.now() - startedAt) / 1000),
+  });
+
+  await enqueue('visual-qa', {
+    businessId, projectId, campaignId: payload.campaignId, iteration,
+    // Provenance issues ride into QA so they land in the same report and the same
+    // fix iteration as visual issues, instead of failing the job outright.
+    provenanceIssues: provIssues,
+    provenanceFindings: provenance.findings,
+    buildNotes: result.notes,
+    unresolved: result.unresolved,
+    idempotencyKey: `visual-qa:${businessId}:${projectId}:${iteration}`,
+  });
 }

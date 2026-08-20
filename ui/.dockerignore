@@ -1,0 +1,10 @@
+# Never bake secrets or host build output into the image.
+# `.env` in ui/ is a symlink to the repo .env for local dev — the container
+# gets its config from compose `env_file`/`environment` instead.
+.env
+.env.*
+node_modules
+.next
+.screenshots
+Dockerfile
+.dockerignore

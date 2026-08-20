@@ -1,0 +1,13 @@
+# `ui/` is a standalone app, deliberately NOT part of the root workspace
+# (the root pins `packages: ["."]`), so it can build on its own and inside its
+# own Docker image without the factory's dependency tree.
+#
+# strictDepBuilds mirrors the root: an unbuilt optional native dep (sharp) must
+# warn, not fail the build.
+packages:
+  - "."
+strictDepBuilds: false
+onlyBuiltDependencies:
+  - sharp
+allowBuilds:
+  sharp: set this to true or false

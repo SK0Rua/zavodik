@@ -1,0 +1,127 @@
+@tailwind base;
+@tailwind utilities;
+
+/**
+ * Base + component layer for the console.
+ *
+ * `@tailwind components` is deliberately NOT included: every shared class below
+ * is defined as a plain rule instead. In the previous version a `.card` in the
+ * components layer and a page-level utility fought over the same property and the
+ * winner depended on class order in the emitted stylesheet. Plain rules before
+ * `@tailwind utilities` give utilities the last word, always — so `p-0` on a
+ * `.card` does what it says.
+ */
+
+@layer base {
+  html {
+    color-scheme: light;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-paper text-ink antialiased font-sans text-base;
+  }
+  /* Focus is visible everywhere and looks the same everywhere. */
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid theme('colors.accent.DEFAULT');
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  a {
+    @apply text-ink underline decoration-line-strong underline-offset-2;
+  }
+  a:hover {
+    @apply decoration-ink-mute;
+  }
+  ::placeholder {
+    @apply text-ink-mute;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* ── surfaces ────────────────────────────────────────────────────────────── */
+
+.card {
+  @apply bg-paper-card border border-line rounded-xl shadow-card;
+}
+
+/* ── type ────────────────────────────────────────────────────────────────── */
+
+/** The one small-caps label style. Used for field labels and section eyebrows. */
+.label {
+  @apply block text-label uppercase font-semibold text-ink-mute mb-1.5;
+}
+
+.h-page {
+  @apply text-2xl font-semibold text-ink;
+}
+
+.h-section {
+  @apply text-lg font-semibold text-ink;
+}
+
+/* ── controls ────────────────────────────────────────────────────────────── */
+
+.btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5
+         text-sm font-medium transition-colors
+         disabled:opacity-40 disabled:cursor-not-allowed;
+  min-height: 42px; /* comfortable thumb target on a phone */
+}
+
+/** ONE of these per screen. If a second appears, one of them is not the action. */
+.btn-primary {
+  @apply btn bg-accent text-white border border-accent hover:bg-accent-hover;
+}
+.btn-primary:hover { color: #fff; }
+
+.btn-outline {
+  @apply btn bg-paper-card text-ink border border-line hover:bg-paper-sunk hover:border-line-strong;
+}
+
+/** Text-weight action: everything tertiary, so nothing competes with the primary. */
+.btn-quiet {
+  @apply btn bg-transparent text-ink-soft border border-transparent px-2.5
+         hover:text-ink hover:bg-paper-sunk;
+}
+
+.btn-danger {
+  @apply btn bg-transparent text-dot-stop border border-transparent px-2.5
+         hover:bg-dot-stop/8;
+}
+
+.btn-sm {
+  @apply px-3 py-1.5 text-sm;
+  min-height: 34px;
+}
+
+input, textarea, select {
+  @apply bg-paper-card border border-line rounded-lg px-3 py-2.5 text-ink text-sm w-full
+         focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent;
+  min-height: 42px;
+}
+textarea { @apply leading-relaxed; }
+input[type='checkbox'] {
+  @apply w-4 h-4 min-h-0 p-0 accent-accent align-middle;
+}
+
+/* ── lists ───────────────────────────────────────────────────────────────── */
+
+/**
+ * The businesses list is a list of rows, not a <table>: on a phone a table either
+ * scrolls sideways or squeezes to unreadable. Rows are a grid that collapses to
+ * two stacked lines under 640px.
+ */
+.row {
+  @apply grid items-center gap-x-4 gap-y-1 px-4 py-3.5 border-b border-line last:border-b-0;
+}
+.row:hover { @apply bg-paper-sunk/60; }
+
+/* ── misc ────────────────────────────────────────────────────────────────── */
+
+details > summary { @apply cursor-pointer select-none list-none; }
+details > summary::-webkit-details-marker { display: none; }

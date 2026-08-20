@@ -1,3 +1,4 @@
+import { desc } from 'drizzle-orm';
 import {
   pgTable, text, integer, real, boolean, timestamp, jsonb, serial, uniqueIndex, index,
 } from 'drizzle-orm/pg-core';
@@ -15,6 +16,20 @@ export const campaigns = pgTable('campaigns', {
   targetCount: integer('target_count').notNull().default(50),
   mode: text('mode').notNull().default('dry_run'), // dry_run | live
   status: text('status').notNull().default('created'), // created | running | paused | done
+  /**
+   * Which production_ready businesses the factory starts building for on its own.
+   * Roman's rule: first serve the businesses that have NO site — a demo for a
+   * shop with a good modern site is subscription time spent on the wrong lead.
+   *
+   *   no_site_only (default) — only when the latest audit verdict is
+   *                            no_website | broken
+   *   all                    — every production_ready business
+   *   manual                 — never automatically; only the UI "Будувати демо" button
+   *
+   * The gate lives in `src/orchestrator/buildPolicy.ts`; the state machine is
+   * untouched — an ineligible business simply waits in `production_ready`.
+   */
+  autoBuild: text('auto_build').notNull().default('no_site_only'), // no_site_only | all | manual
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 
@@ -68,7 +83,7 @@ export const businessSources = pgTable('business_sources', {
   sourceType: text('source_type').notNull(), // google_maps | owned_website | facebook | instagram | search | directory
   url: text('url').notNull(),
   capturedAt: timestamp('captured_at').notNull().defaultNow(),
-  method: text('method').notNull(), // playwright | http | agent
+  method: text('method').notNull(), // gosom_api | playwright | http | agent
   rawObjectKey: text('raw_object_key'), // immutable raw snapshot in S3
   version: integer('version').notNull().default(1),
 }, (t) => [index('src_biz_idx').on(t.businessId)]);
@@ -92,6 +107,14 @@ export const businessContacts = pgTable('business_contacts', {
   value: text('value').notNull(),
   sourceId: integer('source_id').references(() => businessSources.id),
   verified: boolean('verified').notNull().default(false),
+  /**
+   * Set only when a PERSON confirmed the contact (Roman, from the business
+   * card). NULL means the matcher decided it on its own — a distinction the
+   * bare `verified` flag would lose, and the same reason status_history carries
+   * an actor.
+   */
+  verifiedBy: text('verified_by'),
+  verifiedNote: text('verified_note'),
 }, (t) => [index('contact_biz_idx').on(t.businessId)]);
 
 export const assets = pgTable('assets', {
@@ -104,8 +127,13 @@ export const assets = pgTable('assets', {
   contentType: text('content_type'),
   width: integer('width'),
   height: integer('height'),
-  intendedUsage: text('intended_usage').notNull().default('demo'), // hero | logo | gallery | menu | demo
+  intendedUsage: text('intended_usage').notNull().default('demo'), // hero | logo | gallery | menu | demo | background | pattern | og | hero_clip
   rights: text('rights').notNull().default('private_demo_only'),
+  // Media generation (SPEC §2.5, decisions #12/#13). AI media is decorative and
+  // is NEVER presented as a real photo/video of the business.
+  aiGenerated: boolean('ai_generated').notNull().default(false),
+  generator: text('generator'), // gen-image:gpt-image-2 | flowkit:veo | flowkit:omni_flash | ken-burns
+  generationMeta: jsonb('generation_meta'), // prompt, model, ref asset, duration...
   capturedAt: timestamp('captured_at').notNull().defaultNow(),
 }, (t) => [index('asset_biz_idx').on(t.businessId), uniqueIndex('asset_hash_idx').on(t.businessId, t.hash)]);
 
@@ -120,11 +148,20 @@ export const websiteAudits = pgTable('website_audits', {
   bestEndpoint: text('best_endpoint'),
   verdict: text('verdict').notNull(), // none | unreachable_all_endpoints | working_with_https_issue | working_but_dated | acceptable | strong_modern
   desktopScreenshotKey: text('desktop_screenshot_key'),
+  // Full-page desktop capture. Extra evidence next to the viewport shot: the
+  // viewport alone shows the top 900px, which on a slow JS site is a cookie
+  // banner over an empty hero — not enough to check a verdict by eye.
+  desktopFullScreenshotKey: text('desktop_full_screenshot_key'),
   mobileScreenshotKey: text('mobile_screenshot_key'),
   meaningfulContent: boolean('meaningful_content'),
   notes: text('notes'),
   auditedAt: timestamp('audited_at').notNull().defaultNow(),
-}, (t) => [index('audit_biz_idx').on(t.businessId)]);
+}, (t) => [
+  index('audit_biz_idx').on(t.businessId),
+  // "Latest verdict per business" is read by the build policy and by every
+  // funnel render, so it gets its own covering order.
+  index('audit_biz_latest_idx').on(t.businessId, desc(t.auditedAt)),
+]);
 
 export const qualifications = pgTable('qualifications', {
   id: serial('id').primaryKey(),
@@ -136,6 +173,12 @@ export const qualifications = pgTable('qualifications', {
   scoreBreakdown: jsonb('score_breakdown').$type<Record<string, number>>(),
   qaPassed: boolean('qa_passed'),
   qaNotes: text('qa_notes'),
+  /**
+   * `qaNotes` in Ukrainian. The critic writes English; Roman reads Ukrainian.
+   * The English stays as the record of what the critic actually said — null
+   * here means untranslated, and the reader falls back to `qaNotes`.
+   */
+  qaNotesUk: text('qa_notes_uk'),
   at: timestamp('at').notNull().defaultNow(),
 });
 
@@ -143,6 +186,13 @@ export const productionGaps = pgTable('production_gaps', {
   id: serial('id').primaryKey(),
   businessId: text('business_id').notNull().references(() => businesses.id),
   gap: text('gap').notNull(), // verified_contact | services_min3 | assets_min3 | hero_or_logo | review_context | identity
+  /**
+   * `gap` in Ukrainian, for the SOFT gaps only — those are whole sentences the
+   * enrichment agent writes in the language of the evidence (Greek in Patras).
+   * Hard gaps are keys with a code-side Ukrainian name, so they never need one.
+   * Null = untranslated; the UI falls back to `gap` rather than showing nothing.
+   */
+  gapUk: text('gap_uk'),
   blockerLevel: text('blocker_level').notNull().default('hard'), // hard | soft
   resolved: boolean('resolved').notNull().default(false),
   at: timestamp('at').notNull().defaultNow(),
@@ -154,18 +204,54 @@ export const siteProjects = pgTable('site_projects', {
   id: serial('id').primaryKey(),
   businessId: text('business_id').notNull().references(() => businesses.id),
   dir: text('dir').notNull(),
+  /** Frozen build snapshot (SPEC §4 stage 10): the exact facts this site was built from. */
+  snapshotKey: text('snapshot_key'),
   contentBriefKey: text('content_brief_key'),
   designContractKey: text('design_contract_key'),
   designDirection: text('design_direction'),
+  /** Score the deterministic rubric gave the chosen direction (src/build/rubric.ts). */
+  designScore: real('design_score'),
+  /**
+   * The six 0-3 wow axes (`references/motion/README.md`), scored twice: `design`
+   * is what the chosen art direction PROMISED at stage 9, `qa` is what the built
+   * page actually delivered at stage 11. The gap between them is the interesting
+   * number — a direction can promise a scroll-linked hero and still ship a static
+   * one. See `drizzle/0009_wow_scores.sql` for the shape.
+   */
+  wowScores: jsonb('wow_scores').$type<{
+    design?: {
+      total: number; ambition?: number; passed: boolean; reasons: string[];
+      axes: Record<string, number>;
+      referenceSlug?: string; heroMotion?: string;
+    };
+    qa?: {
+      iteration: number; total: number; ambition?: number; passed: boolean; reasons: string[];
+      axes: Record<string, number>;
+      heroMotionDetected?: boolean;
+      /** Entrance window, 0.15s → 1.6s after load. */
+      heroMotionPixelDelta?: number;
+      /** Sustained window, 2.4s → 3.6s: is the hero still moving once entrances end? */
+      heroSustainedPixelDelta?: number;
+      referenceCloseness?: number;
+    };
+  }>(),
   buildOk: boolean('build_ok'),
+  /** Wall-clock seconds of the last builder agent session. */
+  buildSeconds: integer('build_seconds'),
   qaIterations: integer('qa_iterations').notNull().default(0),
+  /** Latest QA report; every iteration also keeps its own key in qaReportKeys. */
   qaReportKey: text('qa_report_key'),
+  qaReportKeys: jsonb('qa_report_keys').$type<string[]>(),
   screenshotKeys: jsonb('screenshot_keys').$type<string[]>(),
+  /** Deterministic + critic issues still open at the last QA pass. */
+  openIssues: jsonb('open_issues').$type<string[]>(),
   deployUrl: text('deploy_url'),
+  /** Unguessable path segment under deploys/; kept so a redeploy reuses the URL. */
+  deployToken: text('deploy_token'),
   deployedAt: timestamp('deployed_at'),
   state: text('state').notNull().default('pending'), // pending | brief | building | qa | needs_human_review | ready | deployed
   createdAt: timestamp('created_at').notNull().defaultNow(),
-});
+}, (t) => [index('site_project_biz_idx').on(t.businessId)]);
 
 // ─── Approvals, outreach, deals ──────────────────────────────────────────────
 
@@ -232,11 +318,40 @@ export const workflowJobs = pgTable('workflow_jobs', {
   businessId: text('business_id'),
   campaignId: text('campaign_id'),
   idempotencyKey: text('idempotency_key'),
-  status: text('status').notNull().default('queued'), // queued | running | succeeded | failed | needs_human | cancelled
+  // spec §6: queued | running | succeeded | retry_wait | failed | needs_human | cancelled
+  status: text('status').notNull().default('queued'),
   attempts: integer('attempts').notNull().default(0),
   errorCode: text('error_code'),
   errorDetail: text('error_detail'),
+  /** Set with status=retry_wait: when the subscription window is expected back. */
+  nextAttemptAt: timestamp('next_attempt_at'),
   startedAt: timestamp('started_at'),
   finishedAt: timestamp('finished_at'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (t) => [index('job_biz_idx').on(t.businessId), index('job_status_idx').on(t.status)]);
+
+// ─── Settings (phase E) ──────────────────────────────────────────────────────
+
+/**
+ * Key/value store with three kinds of row, distinguished by key prefix:
+ *
+ *   `imap.cursor`        poller state (phase E) — neither evidence nor business data;
+ *   `setting:<KEY>`      operational configuration edited in the UI (/settings);
+ *   `heartbeat:<group>`  worker liveness, stamped every 30s for the UI's system panel.
+ *
+ * Configuration lives here rather than in `.env` by Roman's decision
+ * (2026-08-17): a token paste or a dry_run→live flip must take effect live,
+ * without editing a file and recreating containers. SPEC §8 is amended
+ * accordingly — SECRET values are AES-256-GCM encrypted under
+ * `SETTINGS_MASTER_KEY`, which is the one credential that stays in `.env`, so
+ * this table on its own is not a credential store. See `src/lib/settings.ts`.
+ */
+export const settings = pgTable('settings', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+  /** True when `value` is an `enc:v1:<iv>:<tag>:<ct>` envelope, not plaintext. */
+  encrypted: boolean('encrypted').notNull().default(false),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  /** 'roman' for a UI edit, 'worker' for a heartbeat. Credential changes are auditable. */
+  updatedBy: text('updated_by'),
+});

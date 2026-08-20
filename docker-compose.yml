@@ -1,5 +1,3 @@
-version: "3.9"
-
 # Full factory stack. Portable: runs on any Linux box with Docker.
 # App processes (workers/api/telegram) can run via `docker compose up` in prod
 # or via `pnpm all` locally against these services.
@@ -40,8 +38,80 @@ services:
       timeout: 5s
       retries: 10
 
+  # Google Maps discovery (spec §3). The ONLY discovery source: the factory's
+  # discovery worker is a thin client of this service's REST API.
+  # `-web` starts the web UI + REST API (POST/GET /api/v1/jobs, GET
+  # /api/v1/jobs/{id}, GET /api/v1/jobs/{id}/download -> CSV) on -addr.
+  # Inside the compose network it is reachable as http://gosom:8080.
+  # The host mapping exists only because in dev the factory runs via `pnpm` on
+  # the host (not in the compose network); it is bound to 127.0.0.1 and uses
+  # 8085 because 8080 is commonly occupied. In production, where the factory
+  # container talks to it over the compose network, this `ports:` block can be
+  # deleted and only `expose:` kept.
+  gosom:
+    # Pin an exact tag: v1.14.0 is unusable — it downloads the Playwright driver
+    # at runtime from playwright.azureedge.net, which now 404s, so every job
+    # hangs in `working` forever. v1.17.3 ships a working driver.
+    image: gosom/google-maps-scraper:v1.17.3
+    restart: unless-stopped
+    command: ["-web", "-addr", ":8080", "-data-folder", "/gmapsdata"]
+    volumes:
+      - gosomdata:/gmapsdata
+    expose:
+      - "8080"
+    ports:
+      - "127.0.0.1:8085:8080"   # dev only: factory runs on the host via pnpm
+
+  # Factory core: discovery/normalize/qualify/assets/audit/readiness, enrichment,
+  # deploy + approval + outreach, plus the internal API and the demo static server.
+  #
+  # Split from factory-build on purpose (SPEC §2.3(а)): the agent semaphore is
+  # PER PROCESS, so hosting a 40-minute `build-site` session in the same process
+  # as an enrichment backlog makes the two starve each other. Two processes = two
+  # independent slots. `pnpm all` still runs every group for local dev.
   factory:
+    image: websites-factory/factory:local
     build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      gosom:
+        condition: service_started
+    # `.env` carries INFRA only (DATABASE_URL, S3_*, UI_*, SETTINGS_MASTER_KEY,
+    # ports). Operational settings live in Postgres and are edited at /settings
+    # in the UI — env values below stay as a FALLBACK for a fresh box, and are
+    # deliberately limited to compose topology so they cannot shadow a value
+    # Roman saved in the UI (resolution order is DB -> env -> default).
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://factory:${POSTGRES_PASSWORD:-factory}@postgres:5432/factory
+      S3_ENDPOINT: http://minio:9000
+      GOSOM_URL: http://gosom:8080
+      WORKER_GROUPS: core,enrich
+      # The demo server defaults to binding 127.0.0.1, which is the right default
+      # for a bare-metal run but means "container loopback" here — Docker's port
+      # forwarding cannot reach it and every demo URL dies with a refused
+      # connection. The isolation that default protects is provided instead by
+      # the `ports:` mapping below, which publishes only to the host's 127.0.0.1.
+      DEMO_HOST: 0.0.0.0
+    volumes:
+      - ./sites:/app/sites
+      - ./deploys:/app/deploys
+      # Codex CLI subscription login (`codex login` inside the container once).
+      # A named volume, so the auth survives image rebuilds.
+      - codexhome:/home/node/.codex
+    ports:
+      - "127.0.0.1:8787:8787"   # internal API / webhooks
+      - "127.0.0.1:8788:8788"   # demo static server
+
+  # Site production only: content-and-design, build-site, visual-qa. One long
+  # agent session at a time, with its own semaphore (AGENT_CONCURRENCY_BUILD).
+  # Shares the sites/ and deploys/ volumes with `factory`, which serves the demos.
+  factory-build:
+    image: websites-factory/factory:local
     restart: unless-stopped
     depends_on:
       postgres:
@@ -52,13 +122,167 @@ services:
     environment:
       DATABASE_URL: postgres://factory:${POSTGRES_PASSWORD:-factory}@postgres:5432/factory
       S3_ENDPOINT: http://minio:9000
+      WORKER_GROUPS: build
     volumes:
       - ./sites:/app/sites
       - ./deploys:/app/deploys
+      # Shared with `factory`: gen-image runs in the build group too.
+      - codexhome:/home/node/.codex
+    # Workers only: the API and demo server belong to `factory` (one port owner).
+    # `db:migrate` is idempotent and also runs in `factory`'s CMD; whichever
+    # container starts first applies the schema, the other is a no-op.
+    command: ["sh", "-c", "pnpm db:migrate && pnpm workers"]
+
+  # Control UI (spec §2.2, decision #9): approval queue, funnel, campaigns,
+  # jobs, conversations. This is THE interface — Telegram only links into it.
+  # Built from the repo root so the Dockerfile can copy `src/db/schema.ts`
+  # (the UI shares the factory's drizzle schema, never a duplicate).
+  # Bound to 127.0.0.1: put it behind a TLS reverse proxy or a tunnel in prod;
+  # UI_BASE_URL must then be the public URL, since Telegram links use it.
+  ui:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://factory:${POSTGRES_PASSWORD:-factory}@postgres:5432/factory
+      S3_ENDPOINT: http://minio:9000
+      UI_PASSWORD: ${UI_PASSWORD:?UI_PASSWORD must be set — the control UI refuses to run without auth}
+      UI_SESSION_SECRET: ${UI_SESSION_SECRET:-}
+      UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
+      # Dates are rendered on the server. Without a TZ the container formats UTC
+      # while Roman's browser shows local time — every timestamp in the console
+      # would be off by the offset. Defaults to Greece, where the campaigns are.
+      TZ: ${TZ:-Europe/Athens}
+      # The approval preview iframes the demo server. Inside compose the browser
+      # is Roman's, not a container, so this must be a host-reachable URL.
+      DEMO_BASE_URL: ${DEMO_BASE_URL:-http://localhost:8788}
+      # Decrypts the secrets stored in the `settings` table so /settings can
+      # show a masked tail and write new ones. Same key as the factory's.
+      SETTINGS_MASTER_KEY: ${SETTINGS_MASTER_KEY:-}
+      # The UI asks the FACTORY to run connectivity checks (it owns the agent
+      # CLIs and does the real sending). Shared secret, not just network trust.
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}
+      FACTORY_API_URL: ${FACTORY_API_URL:-http://factory:8787}
+      # Read-only fallbacks for the status panel and the WAHA QR proxy; the
+      # effective values still come from the settings table first.
+      GOSOM_URL: http://gosom:8080
+      WAHA_URL: ${WAHA_URL:-http://waha:3000}
     ports:
-      - "127.0.0.1:8787:8787"   # dashboard/API
-      - "127.0.0.1:8788:8788"   # demo static server
+      - "127.0.0.1:3000:3000"
+
+  # WhatsApp channel (spec §2.2, decision #2): WAHA = self-hosted WhatsApp HTTP
+  # API, NOT the Meta Cloud API. Roman scans a QR once with the DEDICATED
+  # outreach number (never his personal one — the protocol is unofficial and the
+  # number can be banned), WAHA keeps the session in the mounted volume, and
+  # POSTs inbound messages to the factory's /webhooks/waha.
+  #
+  # Image note: `devlikeapro/waha:latest` bundles Chromium and is amd64-only.
+  # On Apple Silicon use WAHA_IMAGE=devlikeapro/waha:noweb-arm (the NOWEB engine
+  # needs no browser). Since 2026.6.1 there is no Core/Plus split: sendText,
+  # check-exists, sessions and the `message` webhook are all in the free image.
+  #
+  # Bound to 127.0.0.1 like everything else: the WhatsApp session is a
+  # credential, and an exposed WAHA is an account takeover.
+  waha:
+    image: ${WAHA_IMAGE:-devlikeapro/waha:noweb}
+    restart: unless-stopped
+    volumes:
+      - wahasessions:/app/.sessions
+    environment:
+      # Auth: every /api/* call must carry X-Api-Key. /ping and /health are excluded
+      # so healthchecks work without the key.
+      #
+      # Every variable carries a dev default. Compose interpolates EVERY
+      # service's variables on EVERY command, so a `${VAR:?}` requirement here
+      # would break unrelated commands (`docker compose exec postgres …`,
+      # `docker compose ps`) for anyone who has not configured WhatsApp yet.
+      # The defaults are deliberately obvious placeholders, and the startup
+      # check below refuses to run with them on a non-loopback binding.
+      WAHA_API_KEY: ${WAHA_API_KEY:-factory-dev-key}
+      WHATSAPP_API_KEY_EXCLUDE_PATH: ping,health
+      # Inbound -> factory. `factory` resolves inside the compose network.
+      WHATSAPP_HOOK_URL: ${WAHA_HOOK_URL:-http://factory:8787/webhooks/waha}
+      WHATSAPP_HOOK_EVENTS: message
+      WHATSAPP_HOOK_HMAC_KEY: ${WAHA_HOOK_HMAC_KEY:-}
+      # WAHA echoes this header back to us, so the factory can authenticate the
+      # webhook itself and not just trust the network.
+      WHATSAPP_HOOK_CUSTOM_HEADERS: X-Api-Key:${WAHA_API_KEY:-factory-dev-key}
+      # Bring the paired session back up after a restart instead of waiting for
+      # a manual start (the factory must survive reboots unattended).
+      WHATSAPP_START_SESSION: ${WAHA_SESSION:-default}
+      WHATSAPP_RESTART_ALL_SESSIONS: "True"
+      WHATSAPP_DEFAULT_ENGINE: ${WAHA_ENGINE:-NOWEB}
+      WAHA_LOCAL_STORE_BASE_DIR: /app/.sessions
+      # Dashboard is where Roman scans the QR. Password required.
+      WAHA_DASHBOARD_ENABLED: "true"
+      WAHA_DASHBOARD_USERNAME: ${WAHA_DASHBOARD_USERNAME:-waha}
+      WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:-factory-dev-password}
+      # Opt-in escape hatch for local dev only (see the startup check below).
+      WAHA_ALLOW_DEV_KEY: ${WAHA_ALLOW_DEV_KEY:-false}
+    # The dev defaults above keep every other compose command working, but they
+    # must never protect a real WhatsApp session: an open WAHA is an account
+    # takeover and the dashboard is the QR pairing page. So the placeholders are
+    # allowed ONLY while the service stays on loopback (WAHA_ALLOW_DEV_KEY=true,
+    # which the dev workflow sets). Anywhere else, real secrets are required.
+    #
+    # `command:` rather than `entrypoint:` so the image's tini stays PID 1
+    # (correct signal handling); the image's own CMD is /entrypoint.sh, which
+    # this wraps and then execs.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        placeholder=0
+        [ "$$WAHA_API_KEY" = "factory-dev-key" ] && placeholder=1
+        [ "$$WAHA_DASHBOARD_PASSWORD" = "factory-dev-password" ] && placeholder=1
+        if [ -z "$$WAHA_API_KEY" ] || [ -z "$$WAHA_DASHBOARD_PASSWORD" ] || \
+           { [ "$$placeholder" = "1" ] && [ "$$WAHA_ALLOW_DEV_KEY" != "true" ]; }; then
+          echo "REFUSING TO START: WAHA is using placeholder credentials." >&2
+          echo "An unprotected WAHA means anyone who reaches it owns the WhatsApp account." >&2
+          echo "Set real secrets in .env:" >&2
+          echo "  echo \"WAHA_API_KEY=\$$(openssl rand -hex 32)\" >> .env" >&2
+          echo "  echo \"WAHA_DASHBOARD_PASSWORD=\$$(openssl rand -hex 16)\" >> .env" >&2
+          echo "(local dev on 127.0.0.1 only: set WAHA_ALLOW_DEV_KEY=true)" >&2
+          exit 1
+        fi
+        exec /entrypoint.sh
+    expose:
+      - "3000"
+    ports:
+      - "127.0.0.1:3001:3000"   # QR scan + dev: factory runs on the host via pnpm
+
+  # ── DEV ONLY (profile `dev-mail`) ──────────────────────────────────────────
+  # Local SMTP+IMAP so the whole outreach cycle (send -> land -> reply -> poll)
+  # can be verified WITHOUT Roman's Gmail app password and without a single
+  # message leaving the machine. Accepts any user/password on any address.
+  # Never started by a plain `docker compose up` — it needs `--profile dev-mail`.
+  #   SMTP 3025, IMAP 3143, HTTP API 8080 (used to inject a reply in tests).
+  greenmail:
+    image: greenmail/standalone:latest
+    profiles: ["dev-mail"]
+    restart: "no"
+    environment:
+      GREENMAIL_OPTS: >-
+        -Dgreenmail.setup.test.smtp
+        -Dgreenmail.setup.test.imap
+        -Dgreenmail.hostname=0.0.0.0
+        -Dgreenmail.auth.disabled
+        -Dgreenmail.verbose
+    ports:
+      - "127.0.0.1:3025:3025"   # SMTP
+      - "127.0.0.1:3143:3143"   # IMAP
+      - "127.0.0.1:8081:8080"   # GreenMail REST API
 
 volumes:
+  codexhome:
   pgdata:
   miniodata:
+  gosomdata:
+  wahasessions:

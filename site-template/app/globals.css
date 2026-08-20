@@ -1,12 +1,287 @@
-*, *::before, *::after { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; }
-img { max-width: 100%; height: auto; display: block; }
+@import "tailwindcss";
 
+/* =========================================================================
+   DESIGN TOKENS
+   The builder agent SHOULD rewrite the values in this block to match the
+   chosen art direction (input/design.json). Do not delete the token names —
+   components in components/ui/ reference them.
+   ========================================================================= */
+:root {
+  --background: #ffffff;
+  --foreground: #0a0a0a;
+  --border: #e5e5e5;
+
+  /* Accent: one accent colour is the house rule. See DESIGN.md. */
+  --accent: #1a1a1a;
+  --muted: #737373;
+}
+
+.dark {
+  --background: #0a0a0a;
+  --foreground: #fafafa;
+  --border: #262626;
+  --muted: #a3a3a3;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-muted: var(--muted);
+
+  /* Font families are wired to the next/font variables set in app/layout.tsx.
+     Swap the fonts in layout.tsx, not here. */
+  --font-display: var(--font-display), Georgia, "Times New Roman", serif;
+  --font-body: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+
+  /* -------------------------------------------------------------------
+     Component keyframes. Each is required by the component named beside it.
+     Removing one silently disables that component's animation.
+     ------------------------------------------------------------------- */
+
+  /* marquee.tsx */
+  --animate-marquee: marquee var(--duration, 40s) linear infinite;
+  --animate-marquee-vertical: marquee-vertical var(--duration, 40s) linear infinite;
+
+  /* aurora-background.tsx */
+  --animate-aurora: aurora 60s linear infinite;
+
+  /* infinite-moving-cards.tsx */
+  --animate-scroll: scroll var(--animation-duration, 40s)
+    var(--animation-direction, forwards) linear infinite;
+
+  /* spotlight.tsx */
+  --animate-spotlight: spotlight 2s ease 0.75s 1 forwards;
+
+  /* animated-gradient-text.tsx */
+  --animate-gradient: gradient 8s linear infinite;
+
+  /* ripple.tsx */
+  --animate-ripple: ripple var(--duration, 2s) ease calc(var(--i, 0) * 0.2s) infinite;
+
+  /* shimmer-button.tsx */
+  --animate-shimmer-slide: shimmer-slide var(--speed) ease-in-out infinite alternate;
+  --animate-spin-around: spin-around calc(var(--speed) * 2) infinite linear;
+
+  /* shine-border.tsx */
+  --animate-shine: shine var(--duration) infinite linear;
+
+  /* animated-shiny-text.tsx */
+  --animate-shiny-text: shiny-text 8s infinite;
+
+  @keyframes marquee {
+    from { transform: translateX(0); }
+    to { transform: translateX(calc(-100% - var(--gap))); }
+  }
+
+  @keyframes marquee-vertical {
+    from { transform: translateY(0); }
+    to { transform: translateY(calc(-100% - var(--gap))); }
+  }
+
+  @keyframes aurora {
+    from { background-position: 50% 50%, 50% 50%; }
+    to { background-position: 350% 50%, 350% 50%; }
+  }
+
+  @keyframes scroll {
+    to { transform: translate(calc(-50% - 0.5rem)); }
+  }
+
+  @keyframes spotlight {
+    0% { opacity: 0; transform: translate(-72%, -62%) scale(0.5); }
+    100% { opacity: 1; transform: translate(-50%, -40%) scale(1); }
+  }
+
+  @keyframes gradient {
+    to { background-position: var(--bg-size, 300%) 0; }
+  }
+
+  @keyframes ripple {
+    0%, 100% { transform: translate(-50%, -50%) scale(1); }
+    50% { transform: translate(-50%, -50%) scale(0.9); }
+  }
+
+  @keyframes shimmer-slide {
+    to { transform: translate(calc(100cqw - 100%), 0); }
+  }
+
+  @keyframes spin-around {
+    0% { transform: translateZ(0) rotate(0); }
+    15%, 35% { transform: translateZ(0) rotate(90deg); }
+    65%, 85% { transform: translateZ(0) rotate(270deg); }
+    100% { transform: translateZ(0) rotate(360deg); }
+  }
+
+  @keyframes shine {
+    0% { background-position: 0% 0%; }
+    50% { background-position: 100% 100%; }
+    to { background-position: 0% 0%; }
+  }
+
+  @keyframes shiny-text {
+    0%, 90%, 100% { background-position: calc(-100% - var(--shiny-width)) 0; }
+    30%, 60% { background-position: calc(100% + var(--shiny-width)) 0; }
+  }
+}
+
+/* =========================================================================
+   BASE
+   ========================================================================= */
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html {
+    /* Lenis drives smooth scroll in JS. Native smooth scrolling would fight it. */
+    scroll-behavior: auto;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    padding: 0;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    /* Guards the QA gate: no horizontal overflow at 390/768/1440. */
+    overflow-x: hidden;
+  }
+
+  img, video { max-width: 100%; height: auto; display: block; }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+/* Lenis: required for the smooth-scroll wrapper to work. */
+html.lenis, html.lenis body { height: auto; }
+.lenis.lenis-smooth { scroll-behavior: auto !important; }
+.lenis.lenis-smooth [data-lenis-prevent] { overscroll-behavior: contain; }
+.lenis.lenis-stopped { overflow: hidden; }
+
+/* =========================================================================
+   PHOTO GRADES  (motion pack)
+   One filter applied to EVERY photo on the page is the single most reliable way
+   to make mixed-quality client photos look like one shoot — a phone snap and a
+   pro shot stop fighting once they share a colour cast.
+
+   The art direction picks ONE grade and it goes on every photo. Two grades on
+   one page defeats the purpose; none at all is what makes a gallery of client
+   photos look like a folder of client photos.
+
+   Apply to the <img>/<video>, not the wrapper:
+     <KenBurnsImage imageClassName="grade-warm" ... />
+   ========================================================================= */
+.grade-warm {
+  /* vero-studio: amber studio warmth. The default for beauty/bridal. */
+  filter: sepia(0.25) saturate(1.25) hue-rotate(-8deg) contrast(1.04);
+}
+
+.grade-bronze {
+  /* son-daven: one warm neutral hue at many values, zero saturated accent. */
+  filter: sepia(0.4) saturate(0.9) hue-rotate(-12deg) brightness(0.96) contrast(1.08);
+}
+
+.grade-cool {
+  /* izanami: cold desaturated blue-grey-green, dim, never high-key. */
+  filter: saturate(0.65) hue-rotate(8deg) brightness(0.95) contrast(1.06);
+}
+
+.grade-mono {
+  /* special-production / serotoninn's right half: full grayscale. */
+  filter: grayscale(1) contrast(1.08);
+}
+
+.grade-noir {
+  /* omr-beauty: near-black, highlights left to come from inside the photo. */
+  filter: grayscale(0.35) brightness(0.78) contrast(1.18);
+}
+
+/* Grayscale that resolves to colour on hover — serotoninn's split, as a
+   micro-interaction. Put it on a wrapper containing the image. */
+.grade-reveal img,
+.grade-reveal video {
+  filter: grayscale(1) contrast(1.06);
+  transition: filter 600ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.grade-reveal:hover img,
+.grade-reveal:hover video,
+.grade-reveal:focus-within img,
+.grade-reveal:focus-within video {
+  filter: grayscale(0) contrast(1);
+}
+
+/* -------------------------------------------------------------------------
+   GRAIN — an SVG feTurbulence noise tile as a data URI, so it costs no request
+   and survives static export. Put it on an absolutely-positioned overlay inside
+   a `relative` parent, or pass overlay="grain" to <VideoHero>.
+
+   Grain is what stops a large flat photo or colour field reading as digital
+   flatness. Keep opacity under ~0.5; above that it reads as a broken image.
+   ------------------------------------------------------------------------- */
+.grain::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.32;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  /* Static noise: no animation, so nothing to disable under reduced motion. */
+  mix-blend-mode: overlay;
+}
+
+/* =========================================================================
+   REDUCED MOTION — non-negotiable (SPEC §2.4).
+   Kills every CSS animation/transition and neutralises the utility classes
+   the component pool relies on. The JS side is handled by
+   lib/use-reduced-motion.ts (Lenis disabled, GSAP/motion animations skipped).
+   ========================================================================= */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+
+  /* Infinite decorative loops must stop outright, not run once at 0.01ms. */
+  .animate-marquee,
+  .animate-marquee-vertical,
+  .animate-aurora,
+  .animate-scroll,
+  .animate-gradient,
+  .animate-ripple,
+  .animate-shimmer-slide,
+  .animate-spin-around,
+  .animate-shine,
+  .animate-shiny-text {
+    animation: none !important;
+  }
+
+  /* Entrance animations must not leave content invisible. */
+  .animate-spotlight { animation: none !important; opacity: 1 !important; }
+
+  /* Motion pack: the grayscale->colour hover resolve becomes an instant swap
+     rather than a 600ms transition. The colour image is still reachable. */
+  .grade-reveal img,
+  .grade-reveal video {
+    transition: none !important;
+  }
+
+  /* Nothing in components/motion/ may leave a clip-path or transform applied
+     when its GSAP tween never ran. motionSafe() handles that at source; this is
+     the CSS-side backstop for anything hand-written into a build. */
+  [data-maskwipe-inner],
+  [data-split-overlay],
+  [data-split-caption] {
+    clip-path: none !important;
+    transform: none !important;
+    opacity: 1 !important;
   }
 }

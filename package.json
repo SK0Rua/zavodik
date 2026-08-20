@@ -12,15 +12,31 @@
     "factory": "tsx src/cli.ts",
     "workers": "tsx src/workers/main.ts",
     "api": "tsx src/api/server.ts",
-    "telegram": "tsx src/telegram/bot.ts",
-    "all": "tsx src/main.ts"
+    "all": "tsx src/main.ts",
+    "e2e": "tsx --tsconfig scripts/e2e/tsconfig.json scripts/e2e.ts",
+    "import:legacy": "tsx scripts/import-legacy.ts",
+    "verify:media": "tsx scripts/verify-media.ts",
+    "test:settings": "tsx scripts/test-settings.ts",
+    "test:accounts": "tsx scripts/test-accounts-parse.ts",
+    "verify:media-parsers": "tsx scripts/verify-media-parsers.ts",
+    "telegram:setup": "tsx src/telegram/bot.ts",
+    "ui:dev": "pnpm --dir ui dev",
+    "ui:build": "pnpm --dir ui build",
+    "phasec:unit": "tsx scripts/phaseC-unit.ts",
+    "phasec:fonts": "tsx scripts/phaseC-fonts.ts",
+    "phasec:workspace": "tsx scripts/phaseC-workspace-dryrun.ts",
+    "phasec:deploy-check": "tsx scripts/phaseC-deploy-check.ts",
+    "phasec:qa": "tsx scripts/phaseC-qa-only.ts",
+    "phasec:run": "tsx scripts/phaseC-run.ts",
+    "phasec:fixture": "tsx scripts/phaseC-fixture.ts",
+    "phasec:critic-check": "tsx scripts/phaseC-critic-check.ts",
+    "phasee:e2e": "tsx scripts/phaseE-e2e.ts",
+    "phasee:mail": "docker compose --profile dev-mail up -d greenmail"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.233",
-    "@anthropic-ai/sdk": "^0.65.0",
     "@aws-sdk/client-s3": "^3.700.0",
     "@hono/node-server": "^1.13.0",
-    "cheerio": "^1.0.0",
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.44.0",
     "grammy": "^1.30.0",
@@ -43,5 +59,10 @@
     "drizzle-kit": "^0.31.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }
