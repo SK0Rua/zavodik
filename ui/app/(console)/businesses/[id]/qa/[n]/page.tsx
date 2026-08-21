@@ -123,7 +123,7 @@ export default async function QaReportPage({ params }: {
 
   return (
     <div className="max-w-[900px]">
-      <Link href={`/businesses/${id}`} className="text-sm text-ink-mute no-underline hover:text-ink">
+      <Link href={`/businesses/${id}`} className="link-quiet text-sm">
         ← {biz.name}
       </Link>
 
@@ -248,7 +248,7 @@ export default async function QaReportPage({ params }: {
                 .join(' · ')}
             </p>
             <details className="mt-3">
-              <summary className="text-sm text-ink-soft hover:text-ink inline-block cursor-pointer">
+              <summary className="disclosure">
                 звіт критика (EN) — усі {issues.length} зауважень
               </summary>
               <div className="mt-3 pl-4 border-l-2 border-line">
@@ -272,7 +272,7 @@ export default async function QaReportPage({ params }: {
         {strengths.length > 0 && (
           <Panel title="Що вийшло добре">
             <details>
-              <summary className="text-sm text-ink-soft hover:text-ink inline-block cursor-pointer">
+              <summary className="disclosure">
                 {strengths.length} сильних сторін — оцінка критика (EN)
               </summary>
               <ul className="space-y-2 mt-3">
@@ -314,7 +314,7 @@ export default async function QaReportPage({ params }: {
           <Panel title="Нотатки будівельника">
             {report.builderNotes && (
               <details>
-                <summary className="text-sm text-ink-soft hover:text-ink inline-block cursor-pointer">
+                <summary className="disclosure">
                   нотатки збірки (EN)
                 </summary>
                 <p className="text-sm text-ink-soft whitespace-pre-wrap mt-3 pl-4 border-l-2 border-line">
@@ -333,7 +333,12 @@ export default async function QaReportPage({ params }: {
         )}
 
         <p className="text-sm">
-          <a href={`/api/object?bucket=raw&key=${encodeURIComponent(key)}`} target="_blank" rel="noreferrer">
+          <a
+            href={`/api/object?bucket=raw&key=${encodeURIComponent(key)}`}
+            target="_blank"
+            rel="noreferrer"
+            className="link-quiet"
+          >
             сирий JSON ↗
           </a>
         </p>

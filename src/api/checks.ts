@@ -18,7 +18,7 @@ import { spawn } from 'node:child_process';
 import nodemailer from 'nodemailer';
 import { ImapFlow } from 'imapflow';
 import { config } from '../config.js';
-import { getSetting, masterKeyConfigured } from '../lib/settings.js';
+import { getSetting, masterKeyConfigured, settingSource } from '../lib/settings.js';
 import * as waha from '../channels/waha.js';
 import { flowkitAvailable } from '../media/video.js';
 import { claudeCodeRuntime } from '../agents/claudeCodeRuntime.js';
@@ -243,6 +243,14 @@ function wahaSessionState(status: string): string {
  * "WAHA is up but the phone is not paired". Only the second is a QR situation,
  * and the UI renders the QR inline when `needsQr` comes back true.
  */
+/** Names where the factory's WAHA key came from, for the 401 message. */
+function describeWahaKeySource(): string {
+  const src = settingSource('WAHA_API_KEY');
+  const val = config.waha.apiKey;
+  const tail = val ? `ключ …${val.slice(-4)}` : 'ПОРОЖНІЙ ключ';
+  return `${tail} (джерело: ${src === 'db' ? 'переозначення в Налаштуваннях' : src === 'env' ? 'env деплою' : 'дефолт'})`;
+}
+
 async function checkWaha(): Promise<CheckResult> {
   const alive = await waha.ping();
   if (!alive) {

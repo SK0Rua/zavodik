@@ -39,11 +39,13 @@ export function OtherActionsDialog({ businessId, name, currentStatus, statuses }
 
   return (
     <>
+      {/* It opens a dialog, so it is a control, not a navigation — `btn-quiet`
+          rather than `.link`. Tertiary weight keeps it out of the way of the
+          real action beside it while still being unmistakably pressable. */}
       <button
         type="button"
         onClick={() => ref.current?.showModal()}
-        className="text-sm text-ink-mute underline decoration-line-strong underline-offset-2
-                   hover:text-ink hover:decoration-ink-mute cursor-pointer bg-transparent"
+        className="btn-quiet btn-sm"
       >
         Інше…
       </button>
@@ -152,11 +154,14 @@ export function OtherActionsDialog({ businessId, name, currentStatus, statuses }
               <span className="label">Причина</span>
               <input id="dnc-reason" name="reason" placeholder="чому блокуєш" />
             </label>
+            {/* The one irreversible action in the console, so it is the one
+                place a bordered danger button is right: `btn-danger` alone is
+                a text-weight control, and this must not look like «Скасувати».
+                The border is the only addition — colour and hover come from
+                the shared class. */}
             <button
               type="submit"
-              className="btn-sm border border-dot-stop text-dot-stop bg-transparent
-                         hover:bg-dot-stop hover:text-white transition-colors
-                         inline-flex items-center justify-center rounded-lg px-3 font-medium"
+              className="btn-danger btn-sm border-dot-stop hover:bg-dot-stop hover:text-white"
             >
               Заблокувати назавжди
             </button>

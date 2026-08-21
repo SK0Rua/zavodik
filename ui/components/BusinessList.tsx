@@ -150,7 +150,10 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
             />
 
             <div className="min-w-0">
-              <Link href={`/businesses/${r.id}`} className="font-medium no-underline hover:underline">
+              {/* The row's own title. Underlined at rest, not on hover: a name
+                  that only reveals itself as a link once the pointer is on it
+                  is unreachable knowledge on a phone, which has no hover. */}
+              <Link href={`/businesses/${r.id}`} className="link font-medium">
                 {r.name}
               </Link>
               <div className="mt-0.5">
@@ -226,7 +229,7 @@ function RowAction({ row, pending, onBuild }: {
         href={safeHttpUrl(row.deployUrl)}
         target="_blank"
         rel="noreferrer"
-        className="text-sm py-2 sm:py-0"
+        className="link text-sm"
       >
         Демо ↗
       </a>
@@ -241,8 +244,7 @@ function RowAction({ row, pending, onBuild }: {
         </span>
         <button
           type="button"
-          className="text-sm text-ink-mute underline decoration-line-strong
-                     underline-offset-2 hover:text-ink py-2 sm:py-0"
+          className="link-quiet text-sm"
           disabled={pending}
           title={row.build.hint}
           onClick={onBuild}

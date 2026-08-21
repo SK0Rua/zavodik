@@ -348,12 +348,12 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
         <Panel title="Звіти перевірки">
           <div className="flex gap-4 flex-wrap text-sm">
             {((project.qaReportKeys as string[] | null) ?? []).map((k, i, arr) => (
-              <Link key={k} href={`/businesses/${biz.id}/qa/${i + 1}`}>
+              <Link key={k} href={`/businesses/${biz.id}/qa/${i + 1}`} className="link">
                 {i === arr.length - 1 ? `Останній звіт (спроба ${i + 1})` : `Спроба ${i + 1}`}
               </Link>
             ))}
             {project.snapshotKey && (
-              <Link href={`/businesses/${biz.id}/snapshot`}>
+              <Link href={`/businesses/${biz.id}/snapshot`} className="link">
                 Факти збірки
               </Link>
             )}
@@ -432,7 +432,7 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
           </ul>
           {softGaps.length > 6 && (
             <details className="mt-3">
-              <summary className="text-sm text-ink-soft hover:text-ink inline-block cursor-pointer">
+              <summary className="disclosure">
                 ще {softGaps.length - 6}
               </summary>
               <ul className="mt-2 space-y-1.5 pl-4 border-l-2 border-line">
@@ -450,7 +450,7 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
               agent actually wrote, on the one tab whose job is provenance. */}
           {softGaps.some((g) => isSoftGapTranslated(g.gap, g.gapUk)) && (
             <details className="mt-3">
-              <summary className="text-sm text-ink-soft hover:text-ink inline-block cursor-pointer">
+              <summary className="disclosure">
                 оригінал — як написав агент
               </summary>
               <ul className="mt-2 space-y-1.5 pl-4 border-l-2 border-line">
@@ -474,7 +474,7 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
           <p className="text-sm text-ink-soft">{criticNotes.summary}</p>
           {criticNotes.findings.length > 0 && (
             <details className="mt-3">
-              <summary className="text-sm text-ink-soft hover:text-ink inline-block cursor-pointer">
+              <summary className="disclosure">
                 звіт критика — {criticNotes.findings.length} зауваж.
               </summary>
               <ul className="mt-2 space-y-2.5 pl-4 border-l-2 border-line">
@@ -491,7 +491,7 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
           )}
           {criticNotesOriginal && criticNotesOriginal.findings.length > 0 && (
             <details className="mt-2">
-              <summary className="text-sm text-ink-soft hover:text-ink inline-block cursor-pointer">
+              <summary className="disclosure">
                 оригінал — як написав критик (EN)
               </summary>
               <ul className="mt-2 space-y-2.5 pl-4 border-l-2 border-line">
@@ -552,9 +552,9 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
               href={`/api/object?bucket=raw&key=${encodeURIComponent(audit.desktopFullScreenshotKey)}`}
               target="_blank"
               rel="noreferrer"
-              className="inline-block mt-3 text-sm underline text-ink-soft hover:text-ink"
+              className="link text-sm mt-3"
             >
-              Вся сторінка цілком →
+              Вся сторінка цілком ↗
             </a>
           )}
         </Panel>
@@ -611,7 +611,7 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
                             href={`/api/object?bucket=raw&key=${encodeURIComponent(src.rawObjectKey)}`}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-sm"
+                            className="link text-sm"
                             title={`Збережена копія джерела · ${src.method ?? ''}`}
                           >
                             доказ
@@ -622,7 +622,7 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
                             href={safeHttpUrl(src.url)}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-sm text-ink-mute"
+                            className="link-quiet text-sm"
                             title={src.url ?? undefined}
                           >
                             оригінал ↗
@@ -767,7 +767,7 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
     <div>
       {/* ── header: who and where they stand. What to DO is the band below. ── */}
       <div className="mb-5">
-        <Link href="/businesses" className="text-sm text-ink-mute no-underline hover:text-ink">
+        <Link href="/businesses" className="link-quiet text-sm">
           ← Бізнеси
         </Link>
 
@@ -792,12 +792,16 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
         <div className="flex gap-4 mt-3 text-sm flex-wrap">
           {biz.phone && <span className="text-ink-soft">{biz.phone}</span>}
           {biz.websiteUrl && (
-            <a href={safeHttpUrl(biz.websiteUrl)} target="_blank" rel="noreferrer">{linkLabel(biz.websiteUrl)} ↗</a>
+            <a href={safeHttpUrl(biz.websiteUrl)} target="_blank" rel="noreferrer" className="link">
+              {linkLabel(biz.websiteUrl)} ↗
+            </a>
           )}
           {biz.listingUrl && (
-            <a href={safeHttpUrl(biz.listingUrl)} target="_blank" rel="noreferrer">Google Maps ↗</a>
+            <a href={safeHttpUrl(biz.listingUrl)} target="_blank" rel="noreferrer" className="link">
+              Google Maps ↗
+            </a>
           )}
-          <Link href={`/businesses?campaign=${encodeURIComponent(biz.campaignId)}`}>
+          <Link href={`/businesses?campaign=${encodeURIComponent(biz.campaignId)}`} className="link">
             {biz.campaignId}
           </Link>
         </div>

@@ -17,10 +17,17 @@
  *
  *  2. **One primary action per card, and it moves.** When nothing is connected
  *     the filled button is «Підключити». Once it IS connected the status is the
- *     hero and there is no filled button at all — «Оновити» is an outline, and
- *     «Відключити» hides behind «···», because disconnecting a working account
- *     is never what Roman came here to do. Anything clickable is a button;
- *     anything not clickable is muted text under the buttons, never beside them.
+ *     hero and there is no filled button at all — «Оновити» is an outline and
+ *     «Перепідключити» / «Відключити» are quiet and destructive respectively,
+ *     because neither is what Roman came here to do. Anything clickable is a
+ *     button; anything not clickable is muted text under the buttons, never
+ *     beside them.
+ *
+ *  3. **No one-item dropdowns** (Roman, 2026-08-22). The secondary actions used
+ *     to hide behind a «···» that, for Codex and Telegram, opened onto a single
+ *     item — a button wearing a costume, hiding the action and charging a click
+ *     for it. Two or fewer secondary actions render inline; a «···» would have
+ *     to earn itself with three.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -32,7 +39,7 @@ import {
   saveGmail, saveTelegramToken, startAccount, submitAccountCode, useTelegramChat,
   type AccountSession, type TelegramChat,
 } from '@/lib/accountsActions';
-import { gmailVerdict, verdictOf, type Verdict } from '@/lib/accountVerdict';
+import { gmailVerdict, verdictOf, wahaQrAvailable, type Verdict } from '@/lib/accountVerdict';
 import type { AccountsSnapshot, AccountStatus } from '@/lib/accounts';
 import type { CheckKind, ChecksByKind } from '@/lib/checks';
 
@@ -96,28 +103,6 @@ function Outcome({ outcome, prefix }: { outcome: CheckOutcome | undefined; prefi
     <div className="rounded-lg border border-dot-go/30 bg-dot-go/8 px-3 py-2 text-sm text-dot-go">
       {prefix ? `${prefix}: ` : ''}{outcome.message}
     </div>
-  );
-}
-
-/**
- * The «···» menu: actions that exist but must not compete for attention.
- *
- * A native <details> rather than a popover library — it is keyboard-reachable,
- * closes on Escape for free, and this is a settings page, not an app shell.
- */
-function MoreMenu({ children }: { children: React.ReactNode }) {
-  return (
-    <details className="relative">
-      <summary
-        className="btn-outline btn-sm cursor-pointer"
-        aria-label="Інші дії"
-      >
-        ···
-      </summary>
-      <div className="absolute right-0 z-10 mt-1 min-w-[12rem] rounded-lg border border-line bg-paper-card shadow-pop p-1 flex flex-col">
-        {children}
-      </div>
-    </details>
   );
 }
 
@@ -290,8 +275,14 @@ function useCliFlow({ provider, needsCode, onDone }: {
           </div>
 
           {session.cliTail && (session.phase === 'submitting' || session.phase === 'error') && (
-            <details>
-              <summary className="text-sm opacity-80">Що пише CLI</summary>
+            <details className="group">
+              {/* globals.css hides the native marker, so the triangle is drawn
+                  explicitly — otherwise this is an ordinary line of text that
+                  happens to respond to clicks. */}
+              <summary className="inline-flex items-center gap-1.5 text-sm opacity-80 hover:opacity-100">
+                <span aria-hidden className="transition-transform group-open:rotate-90">›</span>
+                Що пише CLI
+              </summary>
               <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-black/5 p-2 text-[11px] font-mono">{session.cliTail}</pre>
             </details>
           )}
@@ -358,9 +349,10 @@ function useCliFlow({ provider, needsCode, onDone }: {
  * is a row we can delete, Codex's is a file in the `codexhome` volume.
  *
  * The action row is where Roman's "кнопки в ряд" complaint is answered.
- * Connected means the status is the hero and the only visible button is an
- * outline «Оновити» — reconnecting a working account is a recovery action, so it
- * lives behind «···» and never sits filled and inviting next to a green status.
+ * Connected means the status is the hero and no button is filled: «Оновити» is
+ * an outline and «Перепідключити» is quiet, because reconnecting a working
+ * account is a recovery action and must never sit filled and inviting next to a
+ * green status. Quiet, not hidden — see rule 3 in the block comment above.
  */
 function CliAccountCard({
   provider, title, blurb, verdict, checkedAt, needsCode, canDisconnect,
@@ -391,18 +383,21 @@ function CliAccountCard({
       actions={flow.live ? (
         <button type="button" className="btn-outline btn-sm" onClick={flow.cancel}>Скасувати</button>
       ) : verdict.connected ? (
+        // Two secondary actions at most here, so they sit inline as buttons.
+        // «···» is for three or more (Roman, 2026-08-22: a one-item dropdown is
+        // a button wearing a costume — it hides the action AND costs a click).
+        // They stay quiet/danger rather than filled: re-connecting a working
+        // account is a recovery action, never an invitation.
         <>
           <RefreshButton kind={provider} onResult={onResult} />
-          <MoreMenu>
-            <button type="button" className="btn-quiet btn-sm justify-start" disabled={flow.busy} onClick={flow.start}>
-              Перепідключити
+          <button type="button" className="btn-quiet btn-sm" disabled={flow.busy} onClick={flow.start}>
+            Перепідключити
+          </button>
+          {canDisconnect && onDisconnect && (
+            <button type="button" className="btn-danger btn-sm" onClick={onDisconnect}>
+              Відключити
             </button>
-            {canDisconnect && onDisconnect && (
-              <button type="button" className="btn-danger btn-sm justify-start" onClick={onDisconnect}>
-                Відключити
-              </button>
-            )}
-          </MoreMenu>
+          )}
         </>
       ) : (
         <>
@@ -516,7 +511,10 @@ function TelegramFlow({ status, chatId, onCheck }: {
             <button
               key={c.id} type="button" disabled={busy !== null}
               onClick={() => void pick(c.id)}
-              className="w-full text-left rounded-lg border border-line bg-paper-sunk hover:border-line-strong px-3 py-2 text-sm flex items-center justify-between gap-2"
+              // A pick-one row, so it carries the button chrome rather than
+              // inventing a third clickable style: btn-outline plus the
+              // left-aligned two-column layout the list needs.
+              className="btn-outline w-full justify-between text-left gap-2"
             >
               <span className="truncate text-ink">{c.title}</span>
               <span className="text-sm text-ink-mute shrink-0">{c.type} · {c.id}</span>
@@ -666,6 +664,7 @@ export function ConnectedAccounts({ accounts, checks, checksError }: {
   // WAHA drives the QR: the check reports `needsQr` when the session is
   // unpaired, and the QR appears right there instead of on another port.
   const wahaNeedsQr = Boolean(live.waha?.needsQr ?? checks.waha?.needsQr);
+  const wahaReachable = wahaQrAvailable(waha, wahaNeedsQr);
 
   return (
     <section className="card p-5 space-y-4">
@@ -740,11 +739,9 @@ export function ConnectedAccounts({ accounts, checks, checksError }: {
           // together is to send a message). A second «Оновити» here would be the
           // same button twice under two names.
           actions={telegram.connected ? (
-            <MoreMenu>
-              <button type="button" className="btn-danger btn-sm justify-start" onClick={() => void doDisconnect('telegram')}>
-                Відключити
-              </button>
-            </MoreMenu>
+            <button type="button" className="btn-danger btn-sm" onClick={() => void doDisconnect('telegram')}>
+              Відключити
+            </button>
           ) : null}
           how={(
             <p>
@@ -773,7 +770,10 @@ export function ConnectedAccounts({ accounts, checks, checksError }: {
           // nothing to scan and re-checking is the only action left.
           actions={(
             <>
-              <WahaQr autoShow={wahaNeedsQr} primary={wahaNeedsQr} />
+              {/* The QR only exists when WAHA answered. An unreachable WAHA has
+                  no QR to show, and rendering the panel anyway produced a screen
+                  of empty space with a stranded «Оновити» (Roman, 2026-08-22). */}
+              <WahaQr autoShow={wahaNeedsQr} primary={wahaNeedsQr} reachable={wahaReachable} />
               <RefreshButton kind="waha" onResult={set('waha')} />
             </>
           )}

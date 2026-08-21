@@ -4,7 +4,6 @@ import { db, schema } from '@/lib/db';
 import { Status } from '@/components/Status';
 import { SettingsTabs } from '@/components/SettingsTabs';
 import { SystemStatusPanel } from '@/components/SystemStatusPanel';
-import { EffectiveConfigPanel } from '@/components/EffectiveConfigPanel';
 import { loadSystemStatus } from '@/lib/systemStatus';
 import { fmtDate, fmtTime, truncate } from '@/lib/format';
 import { humanJobLine, humanJobStatus } from '@/lib/humanStatus';
@@ -141,7 +140,7 @@ export default async function SystemPage({
                     </div>
                     <div className="text-sm text-ink-mute mt-0.5 truncate">
                       {j.businessId ? (
-                        <Link href={`/businesses/${j.businessId}`} title={j.businessId}>
+                        <Link href={`/businesses/${j.businessId}`} title={j.businessId} className="link">
                           {jobBusinessNames.get(j.businessId) ?? j.businessId}
                         </Link>
                       ) : (
@@ -152,7 +151,9 @@ export default async function SystemPage({
                     </div>
                     {j.errorCode && (
                       <details className="mt-1">
-                        <summary className="text-sm text-dot-stop">{j.errorCode}</summary>
+                        <summary className="disclosure text-dot-stop hover:text-dot-stop">
+                          {j.errorCode}
+                        </summary>
                         <pre className="text-sm text-ink-mute mt-1 whitespace-pre-wrap font-mono">
                           {truncate(j.errorDetail, 600)}
                         </pre>
@@ -179,8 +180,6 @@ export default async function SystemPage({
             </p>
           )}
         </section>
-
-        <EffectiveConfigPanel />
       </div>
     </div>
   );

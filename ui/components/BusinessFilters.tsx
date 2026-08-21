@@ -150,7 +150,7 @@ export function BusinessFilters({ campaigns }: { campaigns: Array<{ id: string }
 
       {/* ── everything else ── */}
       <details open={extrasActive}>
-        <summary className="text-sm text-ink-soft hover:text-ink inline-block">
+        <summary className="disclosure">
           ще фільтри{extrasActive && ' · застосовані'}
         </summary>
 

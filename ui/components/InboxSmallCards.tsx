@@ -37,7 +37,9 @@ export function JobProblemCard({ item }: { item: JobProblemItem }) {
 
       <p className="text-sm text-ink-soft mt-1">
         {item.businessId ? (
-          <Link href={`/businesses/${item.businessId}`}>{item.businessName ?? item.businessId}</Link>
+          <Link href={`/businesses/${item.businessId}`} className="link">
+            {item.businessName ?? item.businessId}
+          </Link>
         ) : (
           item.campaignId ?? 'без бізнесу'
         )}
@@ -80,7 +82,7 @@ export function ReplyCard({ item }: { item: ReplyItem }) {
       <Status tone="wait">Відповіли</Status>
 
       <h2 className="text-lg font-semibold mt-2">
-        <Link href={`/businesses/${item.businessId}`} className="no-underline hover:underline">
+        <Link href={`/businesses/${item.businessId}`} className="link">
           {item.name}
         </Link>
       </h2>

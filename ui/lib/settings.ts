@@ -36,6 +36,8 @@ export interface SettingView {
   options?: string[];
   hint?: string;
   placeholder?: string;
+  /** Rarely-touched field: the page keeps it behind «Показати всі параметри». */
+  advanced: boolean;
   /** Non-secret effective value, or '' for secrets. */
   value: string;
   /** Secrets only: `••••1234`. Empty when nothing is stored. */
@@ -44,10 +46,17 @@ export interface SettingView {
   /** Where the effective value comes from — surfaced so nothing is magic. */
   source: 'db' | 'env' | 'default';
   /**
+   * What the value would become if the DB row were deleted — i.e. what «Скинути»
+   * actually does. Only meaningful when `source === 'db'`; the button says it out
+   * loud so resetting is never a leap of faith. Secrets report '' here: their
+   * fallback exists or it does not, and the tail is not worth leaking twice.
+   */
+  fallback: { value: string; source: 'env' | 'default' } | null;
+  /**
    * PRE-FORMATTED on the server, not an ISO string to be formatted in a client
    * render body.
    *
-   * `SettingsGroupForm` is a client component and called
+   * The group form this replaced was a client component and called
    * `new Date(updatedAt).toLocaleString('uk-UA')` inline — the exact pattern
    * `lib/format.ts` documents as forbidden. It produced the container's
    * timezone in the streamed HTML and the viewer's in the hydrated DOM, which
@@ -95,6 +104,12 @@ export async function loadSettingViews(): Promise<SettingView[]> {
       ? (def.secret ? decryptSecret(row!.value) : row!.value)
       : (envValue !== '' ? envValue : (def.default ?? ''));
 
+    const fallback: SettingView['fallback'] = source !== 'db'
+      ? null
+      : envValue !== ''
+        ? { value: def.secret ? '' : envValue, source: 'env' }
+        : { value: def.secret ? '' : (def.default ?? ''), source: 'default' };
+
     return {
       key: def.key,
       label: def.label,
@@ -104,11 +119,13 @@ export async function loadSettingViews(): Promise<SettingView[]> {
       options: def.options,
       hint: def.hint,
       placeholder: def.placeholder,
+      advanced: Boolean(def.advanced),
       // A secret's plaintext must not reach the client component at all.
       value: def.secret ? '' : plain,
       masked: def.secret ? maskSecret(plain) : '',
       hasValue: plain !== '',
       source,
+      fallback,
       updatedAt: row?.updatedAt ? fmtDate(row.updatedAt) : null,
       updatedBy: row?.updatedBy ?? null,
     };

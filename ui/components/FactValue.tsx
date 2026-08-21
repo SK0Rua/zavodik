@@ -271,12 +271,12 @@ function ContactMarkerValue({ v }: { v: Record<string, unknown> }) {
   return (
     <span className="text-sm break-all">
       {href
-        ? <a href={href} target="_blank" rel="noreferrer">{value} ↗</a>
+        ? <a href={href} target="_blank" rel="noreferrer" className="link">{value} ↗</a>
         : value}
       {foundOn && (
         <span className="text-ink-mute">
           {' · знайдено на '}
-          <a href={foundOn} target="_blank" rel="noreferrer" className="text-ink-mute">
+          <a href={foundOn} target="_blank" rel="noreferrer" className="link-quiet">
             сторінці ↗
           </a>
         </span>
@@ -293,7 +293,7 @@ function SocialMatchValue({ v }: { v: Record<string, unknown> }) {
   const strength = typeof v.strength === 'string' ? v.strength : null;
   return (
     <span className="text-sm break-all">
-      {url ? <a href={url} target="_blank" rel="noreferrer">{raw} ↗</a> : raw}
+      {url ? <a href={url} target="_blank" rel="noreferrer" className="link">{raw} ↗</a> : raw}
       {(score !== null || strength) && (
         <span className="text-ink-mute">
           {' · збіг '}

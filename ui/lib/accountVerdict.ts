@@ -65,6 +65,23 @@ export function verdictOf(
 }
 
 /**
+ * Did WAHA ANSWER? — the question that decides whether the QR panel exists.
+ *
+ * Two different things count as an answer: the session works, or WAHA replied
+ * "unpaired, here is a QR" (`needsQr`). Anything else — refused connection,
+ * timeout, wrong API key — means there is no QR behind the button, and Roman's
+ * server screenshot (2026-08-22) is what that looks like: a screenful of empty
+ * space with a lone «Оновити» at the bottom, because the panel laid itself out
+ * before the image request had failed.
+ *
+ * Pure and here rather than inline in the component precisely because it gates
+ * whether a control renders at all, which is worth a test that needs no browser.
+ */
+export function wahaQrAvailable(verdict: Verdict, needsQr: boolean): boolean {
+  return verdict.connected || needsQr;
+}
+
+/**
  * One card, two protocols: Gmail is a single account whose SMTP and IMAP halves
  * are checked separately but share one app password.
  *

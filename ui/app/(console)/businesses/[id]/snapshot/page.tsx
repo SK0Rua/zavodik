@@ -38,7 +38,14 @@ function SourceRefs({ ids, sourceById }: { ids: number[]; sourceById: Map<number
         const src = sourceById.get(id);
         if (!src) return <span key={id} className="text-ink-mute">#{id}</span>;
         return (
-          <a key={id} href={safeHttpUrl(src.url)} target="_blank" rel="noreferrer" title={src.method}>
+          <a
+            key={id}
+            href={safeHttpUrl(src.url)}
+            target="_blank"
+            rel="noreferrer"
+            title={src.method}
+            className="link-quiet"
+          >
             {src.type} ↗
           </a>
         );
@@ -75,7 +82,7 @@ export default async function SnapshotPage({ params }: { params: Promise<{ id: s
 
   return (
     <div className="max-w-[900px]">
-      <Link href={`/businesses/${id}`} className="text-sm text-ink-mute no-underline hover:text-ink">
+      <Link href={`/businesses/${id}`} className="link-quiet text-sm">
         ← {biz.name}
       </Link>
 
@@ -265,7 +272,12 @@ export default async function SnapshotPage({ params }: { params: Promise<{ id: s
         )}
 
         <p className="text-sm">
-          <a href={`/api/object?bucket=raw&key=${encodeURIComponent(proj.snapshotKey!)}`} target="_blank" rel="noreferrer">
+          <a
+            href={`/api/object?bucket=raw&key=${encodeURIComponent(proj.snapshotKey!)}`}
+            target="_blank"
+            rel="noreferrer"
+            className="link-quiet"
+          >
             сирий JSON ↗
           </a>
         </p>

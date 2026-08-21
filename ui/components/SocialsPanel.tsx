@@ -52,7 +52,12 @@ export function SocialsPanel({ contacts, unresolvedGap }: {
             {verified.map((c) => (
               <li key={c.id} className="flex items-center gap-2 text-sm flex-wrap">
                 <Badge tone="ok">{c.channel}</Badge>
-                <a href={safeHttpUrl(c.value)} target="_blank" rel="noreferrer" className="font-mono text-xs break-all">
+                <a
+                  href={safeHttpUrl(c.value)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="link font-mono text-xs break-all"
+                >
                   {c.value} ↗
                 </a>
                 <span className="text-xs text-ink-mute">
@@ -78,7 +83,12 @@ export function SocialsPanel({ contacts, unresolvedGap }: {
               <li key={c.id} className="border-l-2 border-line pl-3">
                 <div className="flex items-center gap-2 flex-wrap">
                   <Badge tone="warn">{c.channel}</Badge>
-                  <a href={safeHttpUrl(c.value)} target="_blank" rel="noreferrer" className="font-mono text-xs break-all">
+                  <a
+                    href={safeHttpUrl(c.value)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="link font-mono text-xs break-all"
+                  >
                     {c.value} ↗
                   </a>
                   {c.match?.strength && (
@@ -92,7 +102,7 @@ export function SocialsPanel({ contacts, unresolvedGap }: {
                       href={safeHttpUrl(c.sourceUrl)}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-xs"
+                      className="link-quiet text-xs"
                       title="Захоплена сторінка профілю — evidence, на яку посилається контакт"
                     >
                       evidence ↗
@@ -118,7 +128,7 @@ export function SocialsPanel({ contacts, unresolvedGap }: {
                   </form>
                   <form action={rejectSocialContact}>
                     <input type="hidden" name="contactId" value={c.id} />
-                    <button type="submit" className="btn-danger text-xs">Відхилити</button>
+                    <button type="submit" className="btn-danger btn-sm">Відхилити</button>
                   </form>
                 </div>
               </li>

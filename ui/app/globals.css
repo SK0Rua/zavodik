@@ -26,12 +26,24 @@
     outline-offset: 2px;
     border-radius: 6px;
   }
+  /**
+   * A bare <a> is a content link, and it looks like one without being asked:
+   * accent + underline. Anything that should NOT look like a link (a whole card
+   * that happens to be wrapped in an anchor, a thumbnail, a button-shaped link)
+   * opts out with `.btn-*` or `no-underline` — which makes the exception the
+   * thing that has to be written down, not the rule.
+   */
   a {
-    @apply text-ink underline decoration-line-strong underline-offset-2;
+    @apply text-accent underline decoration-accent/40 underline-offset-2 transition-colors;
   }
   a:hover {
-    @apply decoration-ink-mute;
+    @apply text-accent-hover decoration-accent;
   }
+  /* A link wearing a button is a button: the button's own colours win. */
+  a:where(.btn, .btn-primary, .btn-outline, .btn-quiet, .btn-danger) {
+    @apply no-underline;
+  }
+  a:where(.btn-primary), a:where(.btn-primary):hover { color: #fff; }
   ::placeholder {
     @apply text-ink-mute;
   }
@@ -66,6 +78,32 @@
 
 /* ── controls ────────────────────────────────────────────────────────────── */
 
+/**
+ * THE AFFORDANCE RULE (Roman, 2026-08-21, project-wide).
+ *
+ * «Зроби нормальний вигляд кнопок. «Налаштування кампанії» — просто текст;
+ *  якби не навів, не поняв би, що клікабельне. І це стосується всього проекту
+ *  всюди.»
+ *
+ * If it can be clicked it wears ONE of these, with no third option:
+ *
+ *   .btn-primary   ONE per screen. The action the screen exists for.
+ *   .btn-outline   Secondary. A real action, not the main one.
+ *   .btn-quiet     Tertiary. Present, deliberately unloud.
+ *   .btn-danger    Destructive or negative.
+ *   .link          Inline navigation inside a sentence or a row of links.
+ *   .disclosure    A <summary>. Carries its own ▸ marker — see below.
+ *   role=tab / aria-pressed chips — a selected state IS the affordance.
+ *
+ * And the converse, which is the half that gets forgotten: text that is NOT
+ * interactive never takes a hover colour, an underline, or `cursor-pointer`.
+ * A hover that changes nothing is a promise the interface does not keep.
+ *
+ * Hand-rolled `text-sm underline decoration-line-strong hover:text-ink` on a
+ * button or an anchor is the same thing as `.link` written out five times and
+ * drifting by one property each time — use the class.
+ */
+
 .btn {
   @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5
          text-sm font-medium transition-colors
@@ -99,6 +137,48 @@
   min-height: 34px;
 }
 
+/**
+ * Inline navigation: a link inside a sentence, or a row of links that is not a
+ * row of buttons. Accent + underline — colour alone is not an affordance, and
+ * on this warm paper an accent word without a rule under it reads as emphasis.
+ *
+ * `py-1` and `-my-1`: a 13.5px link in a wrapped row is a 19px-tall tap target.
+ * The padding grows the hit box without moving the line it sits on.
+ */
+.link {
+  @apply text-accent underline decoration-accent/40 underline-offset-2
+         hover:text-accent-hover hover:decoration-accent
+         inline-block py-1 -my-1 transition-colors;
+}
+
+/** Quieter sibling: same underline promise, ink instead of accent. */
+.link-quiet {
+  @apply text-ink-soft underline decoration-line-strong underline-offset-2
+         hover:text-ink hover:decoration-ink-mute
+         inline-block py-1 -my-1 transition-colors;
+}
+
+/**
+ * A <summary>. The list-marker is suppressed globally (below), so a disclosure
+ * that does not draw its own is indistinguishable from a paragraph — which is
+ * exactly the «Налаштування кампанії» Roman could not tell was clickable.
+ *
+ * The ▸ is a real glyph rather than a border triangle so it inherits colour and
+ * font-size, and it rotates to ▾ when the browser sets `[open]` on the parent.
+ */
+.disclosure {
+  @apply inline-flex items-center gap-1.5 text-sm text-ink-soft
+         hover:text-ink transition-colors py-1;
+}
+.disclosure::before {
+  content: '▸';
+  @apply text-ink-mute transition-transform duration-150 shrink-0;
+  font-size: 0.9em;
+  line-height: 1;
+}
+details[open] > .disclosure::before { transform: rotate(90deg); }
+.disclosure:hover::before { @apply text-ink-soft; }
+
 input, textarea, select {
   @apply bg-paper-card border border-line rounded-lg px-3 py-2.5 text-ink text-sm w-full
          focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent;
@@ -123,5 +203,11 @@ input[type='checkbox'] {
 
 /* ── misc ────────────────────────────────────────────────────────────────── */
 
+/**
+ * The native marker is suppressed because it cannot be styled consistently
+ * across browsers — which means every <summary> in this codebase MUST carry
+ * `.disclosure` to draw its own ▸. A summary without it is a paragraph that
+ * happens to respond to clicks, and that is the exact bug Roman reported.
+ */
 details > summary { @apply cursor-pointer select-none list-none; }
 details > summary::-webkit-details-marker { display: none; }

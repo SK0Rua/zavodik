@@ -82,7 +82,11 @@ export function Nav({ pendingCount }: { pendingCount: number }) {
               item scrolled to the edge would otherwise show THROUGH from under
               this button. */}
           <form action="/api/auth/logout" method="post" className="ml-1 pl-2 shrink-0 bg-paper">
-            <button type="submit" className="text-sm text-ink-mute hover:text-ink">Вийти</button>
+            {/* Was bare text with a hover colour — the same "is this clickable?"
+                as «Налаштування кампанії». `btn-quiet` is the lightest thing
+                that still reads as a control, which is right for a logout
+                sitting beside the four destinations. */}
+            <button type="submit" className="btn-quiet btn-sm">Вийти</button>
           </form>
         </div>
       </div>

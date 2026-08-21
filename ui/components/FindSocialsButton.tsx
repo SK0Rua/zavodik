@@ -24,9 +24,13 @@ export function FindSocialsButton({ businessId, state }: {
 
   return (
     <div className="flex items-center gap-3 flex-wrap">
+      {/* `btn-outline`, not `btn-primary`: this sits on the Контакти tab of a
+          card whose primary action («Побудувати демо») is in the header band
+          above. Two filled buttons on one screen means neither is THE action —
+          and the demo build is the one that matters. */}
       <button
         type="button"
-        className="btn-primary"
+        className="btn-outline"
         disabled={!state.enabled || pending}
         title={state.hint}
         onClick={() => startTransition(async () => {

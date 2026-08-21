@@ -1,30 +1,25 @@
 import { inArray, sql } from 'drizzle-orm';
 import { db, schema } from '@/lib/db';
 import { SettingsTabs } from '@/components/SettingsTabs';
-import { SettingsGroupForm } from '@/components/SettingsGroupForm';
+import { SettingsBody } from '@/components/SettingsBody';
 import { FactoryModeSwitch } from '@/components/FactoryModeSwitch';
 import { ConnectedAccounts } from '@/components/ConnectedAccounts';
+import { EffectiveConfigPanel } from '@/components/EffectiveConfigPanel';
 import { SETTING_GROUPS, loadSettingViews, masterKeyConfigured } from '@/lib/settings';
 import { loadAccounts } from '@/lib/accounts';
 import { loadChecks } from '@/lib/checks';
 
 export const dynamic = 'force-dynamic';
 
-/** Which check button belongs to which group. Groups without one show none. */
-const GROUP_CHECKS: Record<string, Array<{ kind: string; label: string }>> = {
-  agents: [
-    { kind: 'claude', label: 'Перевірити Claude' },
-    { kind: 'codex', label: 'Перевірити Codex' },
-  ],
-  telegram: [{ kind: 'telegram', label: 'Надіслати тест' }],
-  email: [
-    { kind: 'smtp', label: 'Перевірити SMTP' },
-    { kind: 'imap', label: 'Перевірити IMAP' },
-  ],
-  whatsapp: [{ kind: 'waha', label: 'Перевірити WAHA' }],
-  media: [{ kind: 'flowkit', label: 'Перевірити FlowKit' }],
-};
-
+/**
+ * `/settings`, in the order Roman actually works: connect the accounts, choose
+ * the mode, then adjust the things that have no button.
+ *
+ * The per-group check buttons that used to sit in the parameter forms are gone
+ * from here — «Підключені акаунти» runs the real checks and shows their result
+ * on open, so a second «Перевірити SMTP» further down the page was the same
+ * question asked twice with two different answers.
+ */
 export default async function SettingsPage() {
   // The checks run alongside the DB reads rather than after them: on a warm
   // cache they cost milliseconds, and on a cold one they must not be serialised
@@ -63,42 +58,17 @@ docker compose up -d --force-recreate factory factory-build ui`}
           </section>
         )}
 
-        {/* Roman's own order: connect the accounts first, then choose the mode,
-            then everything that only matters when something is unusual. */}
         <ConnectedAccounts accounts={accounts} checks={checks.checks} checksError={checks.error} />
 
         <FactoryModeSwitch current={mode?.value === 'live' ? 'live' : 'dry_run'} />
 
-        <details className="card p-5 group">
-          {/* Explicit triangle: globals.css hides the native marker, so without
-              one this heading is indistinguishable from a heading. */}
-          <summary className="flex items-baseline gap-2 text-sm font-medium text-ink">
-            <span aria-hidden className="text-ink-mute transition-transform group-open:rotate-90">›</span>
-            Розширені
-            <span className="text-ink-mute font-normal">
-              ліміти, gosom, ключі вебхуків, вибір моделей
-            </span>
-          </summary>
+        <SettingsBody
+          groups={SETTING_GROUPS}
+          fields={views}
+          masterKeyConfigured={hasMasterKey}
+        />
 
-          <p className="text-sm text-ink-mute mt-3 max-w-[68ch]">
-            Те саме, що вище, але полями. Потрібне для того, що не має кнопки.
-            Значення діють наживо — фабрика перечитує їх протягом ~15 секунд, без перезапуску.
-          </p>
-
-          <div className="space-y-6 mt-5">
-            {SETTING_GROUPS.map((g) => (
-              <SettingsGroupForm
-                key={g.id}
-                group={g.id}
-                title={g.title}
-                blurb={g.blurb}
-                fields={views.filter((v) => v.group === g.id)}
-                checks={GROUP_CHECKS[g.id] ?? []}
-                masterKeyConfigured={hasMasterKey}
-              />
-            ))}
-          </div>
-        </details>
+        <EffectiveConfigPanel />
       </div>
     </div>
   );

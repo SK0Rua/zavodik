@@ -16,7 +16,7 @@
  * No database and no factory needed: both functions are pure.
  */
 import { isFresh, CHECK_TTL_MS } from '../src/api/checkCache.js';
-import { gmailVerdict, verdictOf } from '../ui/lib/accountVerdict.js';
+import { gmailVerdict, verdictOf, wahaQrAvailable } from '../ui/lib/accountVerdict.js';
 
 let failures = 0;
 function check(label: string, cond: boolean, extra?: unknown): void {
@@ -112,6 +112,27 @@ check(
 check(
   'a failure outranks an unchecked half',
   gmailVerdict(bad('535 auth'), unknown()).reason === 'SMTP: 535 auth',
+);
+
+// ─── WAHA QR availability ────────────────────────────────────────────────────
+// Whether the QR panel renders AT ALL. An unreachable WAHA that still offered
+// the panel is what produced Roman's empty-screen screenshot (2026-08-22).
+
+check(
+  'WAHA connected → QR panel may render',
+  wahaQrAvailable(ok(), false),
+);
+check(
+  'WAHA unpaired (needsQr) → QR panel renders, that IS the point',
+  wahaQrAvailable(bad('session SCAN_QR_CODE'), true),
+);
+check(
+  'WAHA refused the connection → NO QR panel',
+  !wahaQrAvailable(bad('ECONNREFUSED 127.0.0.1:3001'), false),
+);
+check(
+  'WAHA never checked → NO QR panel',
+  !wahaQrAvailable(unknown(), false),
 );
 
 console.log(failures === 0 ? '\nAll check-cache tests passed.' : `\n${failures} failure(s).`);

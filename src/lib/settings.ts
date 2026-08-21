@@ -33,8 +33,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 
 // ─── Registry ────────────────────────────────────────────────────────────────
 
-export type SettingGroup =
-  | 'agents' | 'telegram' | 'email' | 'whatsapp' | 'media' | 'outreach' | 'system';
+export type SettingGroup = 'agents' | 'outreach' | 'media' | 'system';
 
 export type SettingKind = 'text' | 'password' | 'number' | 'boolean' | 'select' | 'textarea';
 
@@ -53,6 +52,16 @@ export interface SettingDef {
   placeholder?: string;
   /** Return an error message, or null when the value is acceptable. */
   validate?: (value: string) => string | null;
+  /**
+   * Rarely touched: timeouts, poll intervals, tolerances, scrape budgets.
+   *
+   * The UI hides these behind one «Показати всі параметри» toggle per group.
+   * The test is "would Roman ever open this page in order to change it?" — a
+   * daily send limit yes, a gosom job timeout no. Marking a field advanced does
+   * NOT make it less real: it is the same registry entry, saved the same way,
+   * and env/DB still override it identically.
+   */
+  advanced?: boolean;
 }
 
 const num = (min?: number, max?: number) => (v: string): string | null => {
@@ -75,143 +84,223 @@ const csvNumbers = (v: string): string | null => {
     ? null : 'список чисел через кому, напр. 3,7';
 };
 
+/**
+ * Card order on `/settings`, and the one-line answer to "що тут живе".
+ *
+ * The three credential groups that used to be here — telegram, email, whatsapp —
+ * are gone as CARDS, not as keys: «Підключені акаунти» above now owns every
+ * token, password and QR, so a second place to paste the same Gmail password was
+ * two answers to one question. What is left of them (ports, mailbox names, TLS
+ * flags, the WAHA session name) is plumbing around a connected account, so it
+ * sits in the group whose job it serves.
+ */
 export const SETTING_GROUPS: Array<{ id: SettingGroup; title: string; blurb: string }> = [
-  { id: 'agents', title: 'Агенти', blurb: 'Claude Code / Codex по підписці. Жодного pay-per-token API.' },
-  { id: 'telegram', title: 'Telegram', blurb: 'Тільки нотифікації з лінками в цей UI (рішення №9).' },
-  { id: 'email', title: 'Email (SMTP / IMAP)', blurb: 'Резервний канал; месенджери мають пріоритет (рішення №8).' },
-  { id: 'whatsapp', title: 'WhatsApp (WAHA)', blurb: 'Self-hosted WAHA, не Meta Cloud API (рішення №2).' },
-  { id: 'media', title: 'Медіа', blurb: 'FlowKit-відео і генерація зображень — усе по підписках.' },
-  { id: 'outreach', title: 'Outreach', blurb: 'Ліміти, follow-up і режим фабрики.' },
-  { id: 'system', title: 'Система', blurb: 'Discovery, URL-и, таймзона, обслуговування.' },
+  {
+    id: 'agents', title: 'Агенти',
+    blurb: 'Які моделі будують сайти і скільки викликів іде одночасно. Усе по підписці.',
+  },
+  {
+    id: 'outreach', title: 'Outreach',
+    blurb: 'Скільки листів на день, коли нагадувати, які адреси бачить бізнес.',
+  },
+  {
+    id: 'media', title: 'Медіа',
+    blurb: 'Звідки беруться відео, картинки і референси для дизайну.',
+  },
+  {
+    id: 'system', title: 'Система',
+    blurb: 'Пошук бізнесів, соцмережі, таймзона, прибирання після білдів.',
+  },
 ];
 
 export const SETTINGS: SettingDef[] = [
   // ── Агенти ────────────────────────────────────────────────────────────────
   {
-    key: 'CLAUDE_CODE_OAUTH_TOKEN', label: 'Claude Code OAuth token', group: 'agents',
-    kind: 'password', secret: true,
-    hint: 'На сервері: `claude setup-token` локально → вставити сюди. Локально порожньо = використовується логін CLI.',
+    key: 'CLAUDE_CODE_OAUTH_TOKEN', label: 'Токен Claude Code', group: 'agents',
+    kind: 'password', secret: true, advanced: true,
+    hint: 'Звичайний шлях — кнопка «Підключити» в «Акаунтах» вище. Це поле лишається для токена, отриманого вручну через `claude setup-token`.',
     placeholder: 'sk-ant-oat01-…',
   },
   {
-    key: 'AGENT_RUNTIME', label: 'Runtime за замовчуванням', group: 'agents',
+    key: 'AGENT_RUNTIME', label: 'Чим виконувати агентні етапи', group: 'agents',
     kind: 'select', options: ['claude-code', 'codex'], default: 'claude-code',
-    hint: 'Обидва по підписці. API-білінг недоступний by construction.',
+    hint: 'Обидва працюють по підписці. Оплата за токени недоступна в принципі.',
   },
-  { key: 'AGENT_MODEL', label: 'Модель (звичайна)', group: 'agents', kind: 'text', default: 'claude-sonnet-5' },
-  { key: 'AGENT_MODEL_HEAVY', label: 'Модель (важка)', group: 'agents', kind: 'text', default: 'claude-opus-5' },
   {
-    key: 'AGENT_CONCURRENCY', label: 'Паралельних агентних викликів', group: 'agents',
+    key: 'AGENT_MODEL', label: 'Модель для звичайних етапів', group: 'agents', kind: 'text',
+    default: 'claude-sonnet-5', hint: 'Бріф, контент, перевірки — усе, крім дизайну і збірки сайту.',
+  },
+  {
+    key: 'AGENT_MODEL_HEAVY', label: 'Модель для дизайну і збірки', group: 'agents', kind: 'text',
+    default: 'claude-opus-5', hint: 'Найдорожчі етапи, де якість помітна в результаті.',
+  },
+  {
+    key: 'AGENT_CONCURRENCY', label: 'Скільки агентів працює одночасно', group: 'agents',
     kind: 'number', default: '1', validate: num(1, 8),
-    hint: 'Вікно підписки спільне — тримай низьким.',
+    hint: 'Ліміт підписки спільний на всіх. Більше за 2 — і етапи починають відбирати вікно один в одного.',
   },
   {
-    key: 'AGENT_CONCURRENCY_BUILD', label: 'Паралельність (build-процес)', group: 'agents',
-    kind: 'number', default: '', validate: num(1, 8),
-    hint: 'Порожньо = як AGENT_CONCURRENCY. Діє на factory-build.',
+    key: 'AGENT_CONCURRENCY_BUILD', label: 'Одночасних агентів на збірці сайтів', group: 'agents',
+    kind: 'number', default: '', validate: num(1, 8), advanced: true,
+    hint: 'Окремий ліміт для процесу factory-build. Порожньо = як у полі вище.',
   },
   {
-    key: 'AGENT_CONCURRENCY_ENRICH', label: 'Паралельність (enrich-процес)', group: 'agents',
-    kind: 'number', default: '', validate: num(1, 8),
-    hint: 'Порожньо = як AGENT_CONCURRENCY. Діє на factory.',
+    key: 'AGENT_CONCURRENCY_ENRICH', label: 'Одночасних агентів на зборі даних', group: 'agents',
+    kind: 'number', default: '', validate: num(1, 8), advanced: true,
+    hint: 'Окремий ліміт для процесу factory. Порожньо = як у полі вище.',
   },
 
-  // ── Telegram ──────────────────────────────────────────────────────────────
+  // ── Канали: усе, що лишилося поза «Підключеними акаунтами» ─────────────────
+  // Токени й паролі тут теж є, бо ключ мусить існувати в реєстрі, щоб UI взагалі
+  // вмів його писати — але всі вони advanced: нормальний шлях до них — картка
+  // акаунта нагорі, а не це поле.
   {
-    key: 'TELEGRAM_BOT_TOKEN', label: 'Bot token', group: 'telegram', kind: 'password', secret: true,
-    hint: 'Від @BotFather. Порожньо = нотифікації просто не шлються.',
+    key: 'TELEGRAM_BOT_TOKEN', label: 'Токен Telegram-бота', group: 'outreach',
+    kind: 'password', secret: true, advanced: true,
+    hint: 'Звичайний шлях — картка Telegram в «Акаунтах» вище.',
     placeholder: '123456789:AA…',
   },
   {
-    key: 'TELEGRAM_CHAT_ID', label: 'Chat ID', group: 'telegram', kind: 'text',
-    hint: 'Твій особистий chat id (напиши боту, потім getUpdates).',
+    key: 'TELEGRAM_CHAT_ID', label: 'Кому слати сповіщення (chat id)', group: 'outreach',
+    kind: 'text', advanced: true,
+    hint: 'Заповнюється кнопкою «Знайти» в картці Telegram.',
   },
 
-  // ── Email ─────────────────────────────────────────────────────────────────
-  { key: 'SMTP_HOST', label: 'SMTP host', group: 'email', kind: 'text', placeholder: 'smtp.gmail.com' },
-  { key: 'SMTP_PORT', label: 'SMTP port', group: 'email', kind: 'number', default: '587', validate: num(1, 65535) },
-  { key: 'SMTP_USER', label: 'SMTP user', group: 'email', kind: 'text' },
-  { key: 'SMTP_PASS', label: 'SMTP password', group: 'email', kind: 'password', secret: true, hint: 'Gmail: app password, не основний пароль.' },
-  { key: 'SMTP_FROM', label: 'From', group: 'email', kind: 'text', placeholder: 'Roman <roman@example.com>' },
+  { key: 'SMTP_HOST', label: 'Сервер вихідної пошти', group: 'outreach', kind: 'text', advanced: true, placeholder: 'smtp.gmail.com' },
+  { key: 'SMTP_PORT', label: 'Порт вихідної пошти', group: 'outreach', kind: 'number', default: '587', validate: num(1, 65535), advanced: true },
+  { key: 'SMTP_USER', label: 'Логін вихідної пошти', group: 'outreach', kind: 'text', advanced: true },
+  { key: 'SMTP_PASS', label: 'Пароль вихідної пошти', group: 'outreach', kind: 'password', secret: true, advanced: true, hint: 'Для Gmail — app password, не основний пароль акаунта.' },
   {
-    key: 'SMTP_SECURE', label: 'Явний TLS (порт 465)', group: 'email', kind: 'select',
-    options: ['', 'true', 'false'], hint: 'Порожньо = вивести з порту (465 → так, 587 → STARTTLS).',
+    key: 'SMTP_FROM', label: 'Підпис відправника', group: 'outreach', kind: 'text',
+    placeholder: 'Roman <roman@example.com>',
+    hint: 'Саме це ім\'я і адресу бізнес побачить у листі.',
   },
-  { key: 'SMTP_MESSAGE_ID_DOMAIN', label: 'Message-ID домен', group: 'email', kind: 'text', default: 'factory.local', hint: 'Має бути стабільним — по ньому матчаться відповіді.' },
-  { key: 'SMTP_UNSUBSCRIBE_TO', label: 'List-Unsubscribe адреса', group: 'email', kind: 'text', hint: 'Порожньо = адреса From.' },
-  { key: 'SMTP_TLS_REJECT_UNAUTHORIZED', label: 'Перевіряти TLS-сертифікат (SMTP)', group: 'email', kind: 'boolean', default: 'true' },
-  { key: 'IMAP_HOST', label: 'IMAP host', group: 'email', kind: 'text', placeholder: 'imap.gmail.com' },
-  { key: 'IMAP_PORT', label: 'IMAP port', group: 'email', kind: 'number', default: '993', validate: num(1, 65535) },
-  { key: 'IMAP_USER', label: 'IMAP user', group: 'email', kind: 'text' },
-  { key: 'IMAP_PASS', label: 'IMAP password', group: 'email', kind: 'password', secret: true },
-  { key: 'IMAP_MAILBOX', label: 'Поштова скринька', group: 'email', kind: 'text', default: 'INBOX' },
-  { key: 'IMAP_SECURE', label: 'TLS (IMAP)', group: 'email', kind: 'select', options: ['', 'true', 'false'], hint: 'Порожньо = вивести з порту (993 → так).' },
-  { key: 'IMAP_TLS_REJECT_UNAUTHORIZED', label: 'Перевіряти TLS-сертифікат (IMAP)', group: 'email', kind: 'boolean', default: 'true' },
-  { key: 'IMAP_MAX_PER_POLL', label: 'Максимум листів за один polling', group: 'email', kind: 'number', default: '50', validate: num(1, 500) },
+  {
+    key: 'SMTP_SECURE', label: 'Шифрування вихідної пошти', group: 'outreach', kind: 'select',
+    options: ['', 'true', 'false'], advanced: true,
+    hint: 'Порожньо = вибрати за портом (465 — одразу TLS, 587 — STARTTLS).',
+  },
+  { key: 'SMTP_MESSAGE_ID_DOMAIN', label: 'Домен у Message-ID', group: 'outreach', kind: 'text', default: 'factory.local', advanced: true, hint: 'Не міняй без потреби: по ньому фабрика впізнає відповіді на свої листи.' },
+  { key: 'SMTP_UNSUBSCRIBE_TO', label: 'Адреса для відписки', group: 'outreach', kind: 'text', advanced: true, hint: 'Порожньо = та сама, що в підписі відправника.' },
+  { key: 'SMTP_TLS_REJECT_UNAUTHORIZED', label: 'Перевіряти сертифікат вихідної пошти', group: 'outreach', kind: 'boolean', default: 'true', advanced: true },
+  { key: 'IMAP_HOST', label: 'Сервер вхідної пошти', group: 'outreach', kind: 'text', advanced: true, placeholder: 'imap.gmail.com' },
+  { key: 'IMAP_PORT', label: 'Порт вхідної пошти', group: 'outreach', kind: 'number', default: '993', validate: num(1, 65535), advanced: true },
+  { key: 'IMAP_USER', label: 'Логін вхідної пошти', group: 'outreach', kind: 'text', advanced: true },
+  { key: 'IMAP_PASS', label: 'Пароль вхідної пошти', group: 'outreach', kind: 'password', secret: true, advanced: true },
+  { key: 'IMAP_MAILBOX', label: 'Папка, де шукати відповіді', group: 'outreach', kind: 'text', default: 'INBOX', advanced: true },
+  { key: 'IMAP_SECURE', label: 'Шифрування вхідної пошти', group: 'outreach', kind: 'select', options: ['', 'true', 'false'], advanced: true, hint: 'Порожньо = вибрати за портом (993 — одразу TLS).' },
+  { key: 'IMAP_TLS_REJECT_UNAUTHORIZED', label: 'Перевіряти сертифікат вхідної пошти', group: 'outreach', kind: 'boolean', default: 'true', advanced: true },
+  { key: 'IMAP_MAX_PER_POLL', label: 'Скільки листів читати за раз', group: 'outreach', kind: 'number', default: '50', validate: num(1, 500), advanced: true },
 
-  // ── WhatsApp (WAHA) ───────────────────────────────────────────────────────
   {
-    key: 'WAHA_URL', label: 'WAHA URL', group: 'whatsapp', kind: 'text', default: 'http://127.0.0.1:3001',
-    validate: url, hint: 'У compose: http://waha:3000. З хоста: http://127.0.0.1:3001.',
+    key: 'WAHA_URL', label: 'Адреса WAHA', group: 'outreach', kind: 'text', default: 'http://waha:3000',
+    validate: url, advanced: true,
+    // The default is the COMPOSE address, because that is where the factory
+    // actually runs. `127.0.0.1:3001` used to be the default and can never work
+    // from inside a container: loopback there is the container itself, not the
+    // host, so the ping failed on a stock deploy until someone typed this in by
+    // hand. docker-compose.yml and scripts/migrate-env-to-settings.ts both
+    // already said `waha:3000`; the registry was the one place that disagreed.
+    hint: 'У Docker — http://waha:3000 (так і лишай). Тільки для запуску фабрики просто на маку, без контейнера, тут потрібно http://127.0.0.1:3001.',
   },
-  { key: 'WAHA_API_KEY', label: 'WAHA API key', group: 'whatsapp', kind: 'password', secret: true, hint: 'Той самий, що в X-Api-Key і в docker-compose.' },
-  { key: 'WAHA_SESSION', label: 'Сесія', group: 'whatsapp', kind: 'text', default: 'default' },
-  { key: 'WAHA_HOOK_HMAC_KEY', label: 'Webhook HMAC key', group: 'whatsapp', kind: 'password', secret: true, hint: 'Підписує вхідні вебхуки. Має збігатися з WHATSAPP_HOOK_HMAC_KEY у WAHA.' },
-  { key: 'WAHA_CHECK_EXISTS', label: 'Перевіряти номер перед відправкою', group: 'whatsapp', kind: 'boolean', default: 'true' },
+  { key: 'WAHA_API_KEY', label: 'Ключ доступу до WAHA', group: 'outreach', kind: 'password', secret: true, advanced: true, hint: 'Той самий рядок, що в змінній WAHA_API_KEY контейнера WAHA.' },
+  { key: 'WAHA_SESSION', label: 'Назва сесії WhatsApp', group: 'outreach', kind: 'text', default: 'default', advanced: true },
+  { key: 'WAHA_HOOK_HMAC_KEY', label: 'Ключ підпису вебхуків WAHA', group: 'outreach', kind: 'password', secret: true, advanced: true, hint: 'Має збігатися з WHATSAPP_HOOK_HMAC_KEY у контейнері WAHA, інакше вхідні відповіді відкидаються.' },
+  {
+    key: 'WAHA_CHECK_EXISTS', label: 'Перевіряти номер перед відправкою', group: 'outreach',
+    kind: 'boolean', default: 'true',
+    hint: 'Захищає від відправки на номер без WhatsApp — саме такі спроби найшвидше ведуть до блокування.',
+  },
 
   // ── Медіа ─────────────────────────────────────────────────────────────────
-  { key: 'FLOWKIT_URL', label: 'FlowKit URL', group: 'media', kind: 'text', default: 'http://localhost:8100', validate: url, hint: 'Python-агент на маку Романа (через Tailscale із сервера).' },
   {
-    key: 'FLOWKIT_MODE', label: 'Режим FlowKit', group: 'media', kind: 'select',
+    key: 'FLOWKIT_URL', label: 'Адреса FlowKit', group: 'media', kind: 'text',
+    default: 'http://localhost:8100', validate: url, advanced: true,
+    hint: 'Python-агент на маку Романа, доступний із сервера через Tailscale.',
+  },
+  {
+    key: 'FLOWKIT_MODE', label: 'Звідки брати відео для hero', group: 'media', kind: 'select',
     options: ['auto', 'live', 'mock'], default: 'auto',
-    hint: 'auto = live коли Chrome-міст живий, інакше локальний Ken Burns.',
-  },
-  { key: 'MEDIA_GEN_IMAGES', label: 'Генерувати фонові зображення', group: 'media', kind: 'boolean', default: 'true', hint: 'Помічаються як ai_generated; вимкнення робить білди швидшими й офлайновими.' },
-  {
-    key: 'LANDING_GALLERY', label: 'Референси з landing.gallery', group: 'media', kind: 'boolean', default: 'true',
-    hint: 'Публічні скриншоти лендінгів як ДОДАТКОВІ референси для арт-директора (етап 9). Механіка руху далі тільки з motion-паку, палітра — тільки з айдентики бізнесу. Вимкнено = поведінка як раніше.',
+    hint: 'auto — справжнє AI-відео, коли міст із Chrome живий, інакше плавний рух по фото. live вимагає мосту, mock ніколи його не чіпає.',
   },
   {
-    key: 'LANDING_GALLERY_MAX_REFS', label: 'Скільки референсів завантажувати', group: 'media', kind: 'number',
-    default: '6', validate: num(1, 12), hint: 'Їхній API віддає максимум 4 за виклик, тож 6 = два запити.',
+    key: 'MEDIA_GEN_IMAGES', label: 'Генерувати фонові зображення', group: 'media', kind: 'boolean', default: 'true',
+    hint: 'Позначаються як ai_generated і ніколи не видаються за фото бізнесу. Вимкнено — білди швидші й повністю офлайнові.',
+  },
+  {
+    key: 'LANDING_GALLERY', label: 'Показувати арт-директору чужі лендінги', group: 'media', kind: 'boolean', default: 'true',
+    hint: 'Публічні скриншоти з landing.gallery як додаткові референси на етапі дизайну. Палітра все одно береться тільки з айдентики бізнесу, анімація — тільки з motion-паку.',
+  },
+  {
+    key: 'LANDING_GALLERY_MAX_REFS', label: 'Скільки таких лендінгів брати', group: 'media', kind: 'number',
+    default: '6', validate: num(1, 12), advanced: true,
+    hint: 'Їхній API віддає по 4 за виклик, тож 6 — це два запити.',
   },
   {
     key: 'LANDING_GALLERY_TIMEOUT_MS', label: 'Таймаут landing.gallery (мс)', group: 'media', kind: 'number',
-    default: '5000', validate: num(1000, 30000), hint: 'Навмисно короткий: джерело натхнення ніколи не має гальмувати білд.',
+    default: '5000', validate: num(1000, 30000), advanced: true,
+    hint: 'Навмисно короткий: джерело натхнення не має права гальмувати збірку.',
   },
 
   // ── Outreach ──────────────────────────────────────────────────────────────
   {
     key: 'FACTORY_MODE', label: 'Режим фабрики', group: 'outreach', kind: 'select',
-    options: ['dry_run', 'live'], default: 'dry_run',
-    hint: 'live = реальні відправки бізнесам. Перемикати свідомо.',
+    options: ['dry_run', 'live'], default: 'dry_run', advanced: true,
+    hint: 'Перемикається кнопкою нагорі сторінки — це поле лишається як запасний шлях.',
   },
-  { key: 'OUTREACH_DAILY_LIMIT', label: 'Ліміт відправок на день', group: 'outreach', kind: 'number', default: '20', validate: num(0, 1000) },
-  { key: 'FOLLOWUP_SCHEDULE_DAYS', label: 'Follow-up через (днів)', group: 'outreach', kind: 'text', default: '3,7', validate: csvNumbers },
-  { key: 'DEMO_BASE_URL', label: 'Базовий URL демо', group: 'outreach', kind: 'text', default: 'http://localhost:8788', validate: url, hint: 'Те, що бізнес побачить у повідомленні.' },
+  {
+    key: 'OUTREACH_DAILY_LIMIT', label: 'Максимум відправок на день', group: 'outreach',
+    kind: 'number', default: '20', validate: num(0, 1000),
+    hint: 'Денний ліміт на всі канали разом. 0 — зупинити відправки, не вимикаючи бойовий режим.',
+  },
+  {
+    key: 'FOLLOWUP_SCHEDULE_DAYS', label: 'Нагадати через (днів)', group: 'outreach',
+    kind: 'text', default: '3,7', validate: csvNumbers,
+    hint: 'Через кому. «3,7» = перше нагадування на третій день після першого дотику, друге на сьомий.',
+  },
+  {
+    key: 'DEMO_BASE_URL', label: 'Адреса, за якою відкриваються демо', group: 'outreach',
+    kind: 'text', default: 'http://localhost:8788', validate: url,
+    hint: 'Саме це посилання бізнес отримає в повідомленні — воно має бути доступним ззовні.',
+  },
 
   // ── Система ───────────────────────────────────────────────────────────────
-  { key: 'UI_BASE_URL', label: 'Базовий URL цього UI', group: 'system', kind: 'text', default: 'http://localhost:3000', validate: url, hint: 'Усі Telegram-лінки ведуть сюди.' },
-  { key: 'TZ', label: 'Таймзона', group: 'system', kind: 'text', default: 'Europe/Athens', hint: 'Змінa застосується для процесів після перезапуску контейнера (Node читає TZ на старті).' },
-  { key: 'SOCIAL_DISCOVERY', label: 'Шукати соцмережі', group: 'system', kind: 'boolean', default: 'true' },
-  { key: 'SOCIAL_DISCOVERY_MAX_CANDIDATES', label: 'Профілів на бізнес', group: 'system', kind: 'number', default: '6', validate: num(1, 30) },
-  { key: 'SOCIAL_DISCOVERY_DELAY_MS', label: 'Пауза між запитами (мс)', group: 'system', kind: 'number', default: '2500', validate: num(0, 60000) },
+  {
+    key: 'UI_BASE_URL', label: 'Адреса цієї консолі', group: 'system', kind: 'text',
+    default: 'http://localhost:3000', validate: url,
+    hint: 'Сюди ведуть усі посилання зі сповіщень у Telegram.',
+  },
+  {
+    key: 'TZ', label: 'Таймзона', group: 'system', kind: 'text', default: 'Europe/Athens',
+    hint: 'У цій зоні рахуються денні ліміти і дати нагадувань. Застосується після перезапуску контейнерів — Node читає TZ один раз на старті.',
+  },
+  {
+    key: 'SOCIAL_DISCOVERY', label: 'Шукати профілі в соцмережах', group: 'system', kind: 'boolean', default: 'true',
+    hint: 'Instagram і Facebook бізнесу — часто єдине джерело реальних фото і актуальних цін.',
+  },
   {
     key: 'SOCIAL_FINDER', label: 'Хто шукає профілі', group: 'system', kind: 'select',
     options: ['both', 'engines', 'agent'], default: 'both',
-    hint: 'engines = пошуковики з нашого IP (безкоштовно, але на сервері їх блокують). '
-      + 'agent = Claude WebSearch з інфраструктури Anthropic (обходить блок, витрачає підписку). '
-      + 'both = спершу пошуковики, агент лише коли вони дали <2 кандидатів.',
+    hint: 'Пошуковики — безкоштовно, але на сервері їх часто блокують. Агент — через інфраструктуру Anthropic, обходить блок і витрачає підписку. Обидва — спершу пошуковики, агент лише коли вони дали менше двох кандидатів.',
   },
-  { key: 'SOCIAL_FINDER_MAX_CANDIDATES', label: 'Кандидатів від агента', group: 'system', kind: 'number', default: '8', validate: num(1, 12) },
-  { key: 'GOSOM_DEPTH', label: 'gosom: глибина скролу', group: 'system', kind: 'number', default: '10', validate: num(1, 100) },
-  { key: 'GOSOM_ZOOM', label: 'gosom: zoom', group: 'system', kind: 'number', default: '15', validate: num(1, 21) },
-  { key: 'GOSOM_RADIUS', label: 'gosom: радіус (м)', group: 'system', kind: 'number', default: '10000', validate: num(100, 200000) },
-  { key: 'GOSOM_MAX_TIME_SECONDS', label: 'gosom: бюджет скрейпу (с)', group: 'system', kind: 'number', default: '900', validate: num(240, 7200), hint: 'gosom відхиляє значення ≤ 180.' },
-  { key: 'GOSOM_JOB_TIMEOUT_SECONDS', label: 'gosom: таймаут очікування (с)', group: 'system', kind: 'number', default: '1800', validate: num(60, 14400) },
-  { key: 'GOSOM_EMAIL_EXTRACTION', label: 'gosom: витягувати email', group: 'system', kind: 'boolean', default: 'true' },
-  { key: 'GOSOM_PROXIES', label: 'gosom: проксі', group: 'system', kind: 'textarea', secret: true, hint: 'По одному в рядку або через кому. Порожньо = без проксі.' },
-  { key: 'WORKSPACE_GC', label: 'Чистити workspace після білду', group: 'system', kind: 'boolean', default: 'true', hint: 'Видаляє node_modules/.next/out (~735MB → кілька MB). Джерела лишаються.' },
+  { key: 'SOCIAL_DISCOVERY_MAX_CANDIDATES', label: 'Скільки профілів перевіряти на бізнес', group: 'system', kind: 'number', default: '6', validate: num(1, 30), advanced: true },
+  { key: 'SOCIAL_DISCOVERY_DELAY_MS', label: 'Пауза між пошуковими запитами (мс)', group: 'system', kind: 'number', default: '2500', validate: num(0, 60000), advanced: true, hint: 'Менша пауза швидше приводить до капчі.' },
+  { key: 'SOCIAL_FINDER_MAX_CANDIDATES', label: 'Скільки кандидатів просити в агента', group: 'system', kind: 'number', default: '8', validate: num(1, 12), advanced: true },
+  {
+    key: 'GOSOM_RADIUS', label: 'Радіус пошуку бізнесів (м)', group: 'system', kind: 'number',
+    default: '10000', validate: num(100, 200000),
+    hint: 'Від центру міста з кампанії. 10000 — це приблизно все місто середнього розміру.',
+  },
+  { key: 'GOSOM_EMAIL_EXTRACTION', label: 'Витягувати email із сайтів бізнесів', group: 'system', kind: 'boolean', default: 'true', hint: 'Повільніше, але це головне джерело адрес для email-каналу.' },
+  { key: 'GOSOM_DEPTH', label: 'Глибина прокрутки Google Maps', group: 'system', kind: 'number', default: '10', validate: num(1, 100), advanced: true, hint: 'Скільки разів догортати список результатів. Більше — більше бізнесів і довший скрейп.' },
+  { key: 'GOSOM_ZOOM', label: 'Масштаб карти при пошуку', group: 'system', kind: 'number', default: '15', validate: num(1, 21), advanced: true },
+  { key: 'GOSOM_MAX_TIME_SECONDS', label: 'Бюджет часу на один скрейп (с)', group: 'system', kind: 'number', default: '900', validate: num(240, 7200), advanced: true, hint: 'gosom відхиляє значення менші за 180.' },
+  { key: 'GOSOM_JOB_TIMEOUT_SECONDS', label: 'Скільки чекати на результат скрейпу (с)', group: 'system', kind: 'number', default: '1800', validate: num(60, 14400), advanced: true },
+  { key: 'GOSOM_PROXIES', label: 'Проксі для пошуку бізнесів', group: 'system', kind: 'textarea', secret: true, advanced: true, hint: 'По одному в рядку або через кому. Порожньо = ходити з IP сервера.' },
+  {
+    key: 'WORKSPACE_GC', label: 'Прибирати за собою після збірки', group: 'system', kind: 'boolean', default: 'true',
+    hint: 'Видаляє node_modules і кеш білду (~735 МБ на сайт). Вихідний код демо лишається.',
+  },
 ];
 
 const BY_KEY = new Map(SETTINGS.map((s) => [s.key, s]));

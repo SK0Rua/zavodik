@@ -91,6 +91,14 @@ services:
       S3_ENDPOINT: http://minio:9000
       GOSOM_URL: http://gosom:8080
       WORKER_GROUPS: core,enrich
+      # WAHA auth: the SAME interpolation the `waha` service uses, so the
+      # factory's env fallback (DB -> env -> default) matches the WAHA container
+      # BY CONSTRUCTION — with or without a real key set in the deploy env.
+      # A DB override in /settings still wins; only set one to use a key the
+      # container was NOT started with (i.e. never).
+      WAHA_API_KEY: ${WAHA_API_KEY:-factory-dev-key}
+      WAHA_HOOK_HMAC_KEY: ${WAHA_HOOK_HMAC_KEY:-}
+      WAHA_SESSION: ${WAHA_SESSION:-default}
       # The demo server defaults to binding 127.0.0.1, which is the right default
       # for a bare-metal run but means "container loopback" here — Docker's port
       # forwarding cannot reach it and every demo URL dies with a refused

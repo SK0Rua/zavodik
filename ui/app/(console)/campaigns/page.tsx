@@ -94,7 +94,10 @@ export default async function CampaignsPage() {
               </div>
 
               <details className="mt-5">
-                <summary className="text-sm text-ink-soft hover:text-ink inline-block">Налаштування кампанії</summary>
+                {/* Roman's report, verbatim: «просто текст; якби не навів, не
+                    поняв би, що клікабельне». `.disclosure` draws the ▸ that
+                    says this opens. */}
+                <summary className="disclosure">Налаштування кампанії</summary>
                 <form action={setCampaignBuildPolicy} className="mt-3 pl-4 border-l-2 border-line">
                   <label className="label" htmlFor={`ab-${c.id}`}>
                     Кому фабрика сама будує демо

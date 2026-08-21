@@ -41,7 +41,7 @@ export default async function InboxPage({
       <div className="flex items-baseline justify-between gap-3 flex-wrap mb-6">
         <h1 className="h-page">Вхідні</h1>
         {business && allTotal > total && (
-          <Link href="/inbox" className="text-sm">Показати все ({allTotal})</Link>
+          <Link href="/inbox" className="link text-sm">Показати все ({allTotal})</Link>
         )}
       </div>
 

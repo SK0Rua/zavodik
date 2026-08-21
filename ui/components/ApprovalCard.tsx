@@ -95,7 +95,7 @@ export function ApprovalCard({ item }: { item: ApprovalItem }) {
         <Status tone="wait">Демо готове — чекає на твоє слово</Status>
 
         <h2 className="text-xl font-semibold mt-2">
-          <Link href={`/businesses/${item.businessId}`} className="no-underline hover:underline">
+          <Link href={`/businesses/${item.businessId}`} className="link">
             {item.name}
           </Link>
         </h2>
@@ -112,15 +112,22 @@ export function ApprovalCard({ item }: { item: ApprovalItem }) {
           <>
             <div className="flex items-center justify-between gap-3 mb-2.5">
               <span className="label mb-0">Демосайт</span>
-              <div className="flex gap-1">
+              {/* A segmented control, not two words. The unselected half used
+                  to be bare ink-mute text whose only affordance was a hover —
+                  so on a phone there was nothing to say the preview could be
+                  switched at all. The enclosing track is what makes both halves
+                  read as one switch; the selected half is the raised one. */}
+              <div className="flex gap-0.5 rounded-lg border border-line bg-paper-sunk p-0.5">
                 {(['desktop', 'mobile'] as const).map((d) => (
                   <button
                     key={d}
                     type="button"
                     onClick={() => setDevice(d)}
                     aria-pressed={device === d}
-                    className={`rounded-lg px-2.5 py-1 text-sm transition-colors ${
-                      device === d ? 'bg-paper-sunk text-ink font-medium' : 'text-ink-mute hover:text-ink'
+                    className={`rounded-md px-2.5 py-1 text-sm transition-colors ${
+                      device === d
+                        ? 'bg-paper-card text-ink font-medium shadow-card'
+                        : 'text-ink-soft hover:text-ink'
                     }`}
                   >
                     {d === 'desktop' ? 'Комп’ютер' : 'Телефон'}
@@ -141,7 +148,7 @@ export function ApprovalCard({ item }: { item: ApprovalItem }) {
               href={safeHttpUrl(item.demoUrl)}
               target="_blank"
               rel="noreferrer"
-              className="text-sm text-ink-soft inline-block mt-2"
+              className="link text-sm mt-2"
             >
               Відкрити на весь екран ↗
             </a>
@@ -169,14 +176,17 @@ export function ApprovalCard({ item }: { item: ApprovalItem }) {
             rows={7}
           />
           <p className="text-sm text-ink-mute mt-1.5">
-            {toAddress ? `Кому: ${toAddress}` : 'Адреси немає — вибери канал у «ще».'}
+            {toAddress ? `Кому: ${toAddress}` : 'Адреси немає — вибери канал нижче.'}
             {dirty && !decided && ' · змінено вручну, запишеться в approval'}
           </p>
         </div>
 
         {/* ── everything secondary ── */}
         <details open={showMore} onToggle={(e) => setShowMore(e.currentTarget.open)}>
-          <summary className="text-sm text-ink-soft hover:text-ink">ще</summary>
+          {/* Named by what it holds. «ще» told the reader there was more of
+              something without saying of what — and the address field lives in
+              here, which the line above tells people to come looking for. */}
+          <summary className="disclosure">Канал, адреса і докази</summary>
 
           <div className="mt-4 space-y-4 pl-4 border-l-2 border-line">
             <div>

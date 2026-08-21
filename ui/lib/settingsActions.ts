@@ -13,7 +13,7 @@
  * works, not that the UI container happens to reach something.
  */
 import { revalidatePath } from 'next/cache';
-import { SETTINGS, masterKeyConfigured, saveSetting } from './settings';
+import { masterKeyConfigured, saveSetting } from './settings';
 import { settingDef } from '@factory/settings';
 
 export interface SettingsSaveResult {
@@ -23,71 +23,61 @@ export interface SettingsSaveResult {
   errors?: Record<string, string>;
 }
 
-/** Sentinel a masked secret input submits when Roman did NOT retype it. */
-const UNCHANGED = '__unchanged__';
-
 /**
- * Save one group's fields in one transaction-less pass.
+ * Save ONE field.
  *
- * Validation runs against the SHARED registry, so the UI can never store a
- * value the factory would reject at read time. A single invalid field aborts
- * the whole group rather than half-applying it — a half-saved SMTP block is a
- * worse state than an unsaved one.
+ * Per-key rather than per-group (Roman, 2026-08-22: «всюди насрано в купу,
+ * особливо у розширених»). A group form made every save a decision about eleven
+ * fields at once — it needed a sentinel to mean "don't touch this secret", and
+ * one bad port number refused to save the four fields next to it. A key and a
+ * value have neither problem: the field Roman edited is the field that is
+ * written, and everything else on the page is untouched by construction.
+ *
+ * Validation still runs against the SHARED registry, so the UI can never store
+ * a value the factory would reject at read time.
  */
-export async function saveSettingsGroup(
-  _prev: SettingsSaveResult | null,
-  formData: FormData,
-): Promise<SettingsSaveResult> {
-  const group = String(formData.get('__group') ?? '');
-  const defs = SETTINGS.filter((s) => s.group === group);
-  if (!defs.length) return { ok: false, message: `Невідома група: ${group}` };
+export async function saveSettingValue(key: string, raw: string): Promise<SettingsSaveResult> {
+  const def = settingDef(key);
+  if (!def) return { ok: false, message: `Невідомий параметр: ${key}` };
 
-  const errors: Record<string, string> = {};
-  const writes: Array<{ key: string; value: string }> = [];
-
-  for (const def of defs) {
-    if (!formData.has(def.key)) continue;
-    let raw = String(formData.get(def.key) ?? '');
-
-    if (def.secret) {
-      // The form posts the sentinel when the masked field was left alone.
-      if (raw === UNCHANGED) continue;
-      // An explicit "очистити" posts an empty string, which deletes the row.
-      if (raw !== '' && !masterKeyConfigured()) {
-        return {
-          ok: false,
-          message: 'SETTINGS_MASTER_KEY не заданий — секрети зберігати нікуди. '
-            + 'Згенеруй ключ (`openssl rand -hex 32`), додай у .env і перестартуй ui.',
-        };
-      }
-    }
-
-    // Checkboxes post nothing when unchecked; the hidden twin below carries 'false'.
-    if (def.kind === 'boolean') raw = raw === 'on' || raw === 'true' ? 'true' : 'false';
-
-    raw = def.kind === 'textarea' ? raw : raw.trim();
-
-    const err = def.validate?.(raw);
-    if (err) { errors[def.key] = err; continue; }
-    writes.push({ key: def.key, value: raw });
+  if (def.secret && raw !== '' && !masterKeyConfigured()) {
+    return {
+      ok: false,
+      message: 'SETTINGS_MASTER_KEY не заданий — секрети зберігати нікуди. '
+        + 'Згенеруй ключ (`openssl rand -hex 32`), додай у .env і перестартуй ui.',
+    };
   }
 
-  if (Object.keys(errors).length) {
-    return { ok: false, message: 'Виправ помилки у полях', errors };
-  }
+  const value = def.kind === 'textarea' ? raw : raw.trim();
+  const err = def.validate?.(value);
+  if (err) return { ok: false, message: err, errors: { [key]: err } };
 
   try {
-    for (const w of writes) await saveSetting(w.key, w.value);
-  } catch (err) {
-    return { ok: false, message: `Не збереглося: ${String(err).slice(0, 200)}` };
+    await saveSetting(key, value);
+  } catch (e) {
+    return { ok: false, message: `Не збереглося: ${String(e).slice(0, 200)}` };
   }
 
   revalidatePath('/settings');
   return {
     ok: true,
     // The TTL is the honest promise: the workers re-read within 15s, no restart.
-    message: `Збережено (${writes.length}). Фабрика підхопить протягом ~15 секунд, без перезапуску.`,
+    message: value === ''
+      ? 'Скинуто. Діє значення з .env або типове.'
+      : 'Збережено — фабрика підхопить протягом ~15 секунд.',
   };
+}
+
+/**
+ * «Скинути»: delete the DB row so the value falls back to env → default.
+ *
+ * Deliberately the same write path as saving an empty string (`saveSetting`
+ * deletes on ''), exposed under its own name because "clear this override" and
+ * "store an empty value" are the same operation but not the same intent, and the
+ * button that does it must not be spelled "save nothing".
+ */
+export async function resetSettingValue(key: string): Promise<SettingsSaveResult> {
+  return saveSettingValue(key, '');
 }
 
 /**

@@ -12,7 +12,7 @@ import { useEffect, useState } from 'react';
  * browser, and it expires on WAHA's side within about 20 seconds — hence the
  * explicit refresh button rather than a stale picture sitting on screen.
  */
-export function WahaQr({ autoShow = false, primary = false }: {
+export function WahaQr({ autoShow = false, primary = false, reachable = true }: {
   autoShow?: boolean;
   /**
    * True when scanning is the thing the card is asking for. Showing the QR is
@@ -20,12 +20,31 @@ export function WahaQr({ autoShow = false, primary = false }: {
    * outline button among several.
    */
   primary?: boolean;
+  /**
+   * Whether the WAHA ping succeeded.
+   *
+   * False renders NOTHING at all — not a collapsed button, not an empty frame.
+   * Roman's server screenshot (2026-08-22) was a full screen of blank space with
+   * a lone «Оновити» stranded at the bottom: the panel laid itself out first and
+   * only learned the fetch had failed once the <img> errored, by which point the
+   * QR box, its heading and its instructions were already on screen telling him
+   * to scan something that was never going to appear. A control for an
+   * unreachable service is not a control, so the card shows the error and its
+   * «Оновити» instead, and this component stays out of the way.
+   */
+  reachable?: boolean;
 }) {
   const [open, setOpen] = useState(autoShow);
   const [nonce, setNonce] = useState(() => Date.now());
   const [failed, setFailed] = useState<string | null>(null);
 
   useEffect(() => { if (autoShow) setOpen(true); }, [autoShow]);
+
+  // Collapse if WAHA goes away while the panel is open, so a live failure does
+  // not leave the same empty frame behind.
+  useEffect(() => { if (!reachable) setOpen(false); }, [reachable]);
+
+  if (!reachable) return null;
 
   function refresh() {
     setFailed(null);

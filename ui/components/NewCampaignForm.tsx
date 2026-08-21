@@ -71,7 +71,7 @@ export function NewCampaignForm() {
         </div>
 
         <details>
-          <summary className="text-sm text-ink-soft hover:text-ink">Додаткові налаштування</summary>
+          <summary className="disclosure">Додаткові налаштування</summary>
           <div className="mt-4 space-y-4 pl-4 border-l-2 border-line">
             <div>
               <label className="label" htmlFor="queries">Пошукові запити, по одному в рядок</label>

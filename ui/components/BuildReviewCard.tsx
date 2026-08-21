@@ -73,7 +73,7 @@ export function BuildReviewCard({ item, showName = true, showDecision = true }: 
 
         {showName && (
           <h2 className="text-xl font-semibold mt-2">
-            <Link href={`/businesses/${item.businessId}`} className="no-underline hover:underline">
+            <Link href={`/businesses/${item.businessId}`} className="link">
               {item.name}
             </Link>
           </h2>
@@ -106,7 +106,7 @@ export function BuildReviewCard({ item, showName = true, showDecision = true }: 
               href={preview}
               target="_blank"
               rel="noreferrer"
-              className="text-sm text-ink-soft inline-block mt-2"
+              className="link text-sm mt-2"
             >
               Відкрити на весь екран ↗
             </a>
@@ -122,7 +122,7 @@ export function BuildReviewCard({ item, showName = true, showDecision = true }: 
         {/* ── what the critic said, out of the way until asked for ── */}
         {item.openIssues.length > 0 && (
           <details className="mt-5">
-            <summary className="text-sm text-ink-soft hover:text-ink">
+            <summary className="disclosure">
               Що не сподобалось критику ({item.openIssues.length})
             </summary>
             <ul className="mt-3 space-y-2.5 max-w-[70ch]">
@@ -137,8 +137,11 @@ export function BuildReviewCard({ item, showName = true, showDecision = true }: 
 
         {item.qaReportKeys.length > 0 && (
           <p className="text-sm mt-3">
-            <Link href={`/businesses/${item.businessId}/qa/${item.qaReportKeys.length}`}>
-              Повний звіт перевірки ↗
+            <Link
+              href={`/businesses/${item.businessId}/qa/${item.qaReportKeys.length}`}
+              className="link"
+            >
+              Повний звіт перевірки
             </Link>
           </p>
         )}

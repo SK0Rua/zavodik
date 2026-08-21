@@ -27,11 +27,16 @@ import { startDemoBuild, startSocialsDiscovery } from '@/lib/actions';
 import { BuildDecisionActions } from './BuildDecisionActions';
 import type { CardAction, CardActionBar as Bar } from '@/lib/cardActions';
 
+/**
+ * `link` used to map to the empty string, which drew an unstyled <button> —
+ * browser-default chrome on a page that has none. A link-KIND action that is
+ * not a navigation is still a click, so it wears `.link`.
+ */
 const KIND_CLASS: Record<CardAction['kind'], string> = {
   primary: 'btn-primary',
   secondary: 'btn-outline',
   danger: 'btn-danger',
-  link: '',
+  link: 'link text-sm',
 };
 
 export function CardActionBar({ bar, businessId, name, status, other }: {
@@ -137,7 +142,9 @@ export function CardActionBar({ bar, businessId, name, status, other }: {
             )}
           </div>
 
-          <div className="shrink-0 pt-2.5">{other}</div>
+          {/* `pt-2.5` used to nudge a bare text link onto the buttons' baseline.
+              «Інше…» is a real btn-sm now, so it aligns on its own box. */}
+          <div className="shrink-0">{other}</div>
         </div>
 
         {showExplanation && (
@@ -177,9 +184,7 @@ function ActionControl({ action, pending, onBuild, onSocials }: {
       <a
         href={action.href}
         {...(action.external ? { target: '_blank', rel: 'noreferrer' } : {})}
-        className={primaryish
-          ? 'btn-primary no-underline'
-          : 'text-sm text-ink underline decoration-line-strong underline-offset-2 hover:decoration-ink-mute py-2'}
+        className={primaryish ? 'btn-primary' : 'link text-sm'}
       >
         {action.label}
         {action.external ? ' ↗' : primaryish ? ' →' : ''}
