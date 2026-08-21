@@ -28,7 +28,7 @@ export function EffectiveConfigPanel() {
     <section className="card p-4 space-y-3">
       <div className="flex flex-wrap items-center gap-3">
         <h2 className="text-sm font-medium text-ink">Що бачить фабрика зараз</h2>
-        <button type="button" className="btn-ghost text-xs" onClick={load} disabled={pending}>
+        <button type="button" className="btn-outline btn-sm" onClick={load} disabled={pending}>
           {pending ? 'Питаю…' : 'Запитати процес factory'}
         </button>
       </div>

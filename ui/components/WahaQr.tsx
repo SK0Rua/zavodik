@@ -12,7 +12,15 @@ import { useEffect, useState } from 'react';
  * browser, and it expires on WAHA's side within about 20 seconds — hence the
  * explicit refresh button rather than a stale picture sitting on screen.
  */
-export function WahaQr({ autoShow = false }: { autoShow?: boolean }) {
+export function WahaQr({ autoShow = false, primary = false }: {
+  autoShow?: boolean;
+  /**
+   * True when scanning is the thing the card is asking for. Showing the QR is
+   * then THE action and gets the filled button; the rest of the time it is one
+   * outline button among several.
+   */
+  primary?: boolean;
+}) {
   const [open, setOpen] = useState(autoShow);
   const [nonce, setNonce] = useState(() => Date.now());
   const [failed, setFailed] = useState<string | null>(null);
@@ -26,24 +34,31 @@ export function WahaQr({ autoShow = false }: { autoShow?: boolean }) {
 
   if (!open) {
     return (
-      <button type="button" className="btn-ghost text-xs" onClick={() => { setOpen(true); refresh(); }}>
-        Показати QR для сканування
+      <button
+        type="button" className={`${primary ? 'btn-primary' : 'btn-outline'} btn-sm`}
+        onClick={() => { setOpen(true); refresh(); }}
+      >
+        Показати QR
       </button>
     );
   }
 
+  // `w-full` because the collapsed trigger sits in the card's flex action row:
+  // once expanded this block must take the whole line rather than squeeze in
+  // beside «Оновити».
   return (
-    <div className="space-y-2">
+    <div className="w-full space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className="btn-ghost text-xs" onClick={refresh}>Оновити QR</button>
-        <button type="button" className="btn-ghost text-xs" onClick={() => setOpen(false)}>Сховати</button>
-        <span className="text-xs text-ink-mute">
-          WhatsApp → Пристрої → Прив’язати пристрій. QR живе ~20 секунд.
-        </span>
+        <button type="button" className="btn-outline btn-sm" onClick={refresh}>Оновити QR</button>
+        <button type="button" className="btn-quiet btn-sm" onClick={() => setOpen(false)}>Сховати</button>
       </div>
+      <p className="text-sm text-ink-mute">
+        WhatsApp → Пристрої → Прив’язати пристрій. QR живе ~20 секунд, тому оновлюй його,
+        якщо не встиг.
+      </p>
 
       {failed ? (
-        <div className="rounded-md border border-dot-wait/40 bg-dot-wait/10 px-3 py-2 text-sm text-dot-wait">
+        <div className="rounded-lg border border-dot-wait/30 bg-dot-wait/8 px-3 py-2 text-sm text-dot-wait">
           {failed}
         </div>
       ) : (
@@ -57,17 +72,12 @@ export function WahaQr({ autoShow = false }: { autoShow?: boolean }) {
             width={264}
             height={264}
             onError={() => setFailed(
-              'QR недоступний. Або сесія вже WORKING (тоді все добре — натисни «Перевірити WAHA»), '
+              'QR недоступний. Або сесія вже підключена (тоді все добре — натисни «Оновити» у картці), '
               + 'або WAHA не піднятий / невірний API key.',
             )}
           />
         </div>
       )}
-
-      <p className="text-xs text-ink-mute">
-        Скануй ВИДІЛЕНИМ номером для outreach, не особистим: протокол неофіційний і номер можуть заблокувати
-        (рішення №2).
-      </p>
     </div>
   );
 }

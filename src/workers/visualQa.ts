@@ -36,6 +36,7 @@ import {
   WOW_MAX, motionRefDir, renderWowGate, renderWowRubric, wowVerdict,
 } from '../build/motionRefs.js';
 import { collectWorkspaceGarbage, outputDir, writeQaIssues } from '../build/workspace.js';
+import { buildLogPath, logStage } from '../build/buildLog.js';
 import { notifyTelegram, uiLinks } from '../telegram/notify.js';
 import { log } from '../lib/logger.js';
 import { resolveProject } from '../build/projectRef.js';
@@ -705,6 +706,8 @@ export async function runVisualCritique(opts: {
   screenshots: Array<{ name: string; buf: Buffer }>;
   motion: MotionEvidence | null;
   onUsage?: (usage: import('../agents/types.js').AgentUsage) => void;
+  /** Project's live build log; the critic's own turns are traced into it too. */
+  buildLogPath?: string;
 }): Promise<import('../build/schemas.js').VisualCritique> {
   const shotDir = await mkdtemp(path.join(tmpdir(), 'factory-qa-'));
   try {
@@ -773,6 +776,7 @@ export async function runVisualCritique(opts: {
         kind: 'visual-critique', heavy: true, imagePaths, cwd: shotDir,
         timeoutMs: 15 * 60_000,
         onUsage: opts.onUsage,
+        buildLogPath: opts.buildLogPath,
       },
     );
   } finally {
@@ -841,6 +845,8 @@ export async function visualQaHandler(payload: JobPayload): Promise<void> {
     : await buildSnapshot(businessId);
 
   const dir = project.dir || path.resolve('sites', businessId, String(projectId));
+  const logPath = buildLogPath(businessId, projectId);
+  await logStage(logPath, `Перевірка сторінки, ітерація ${iteration + 1}: відкриваю в браузері`, 'visual-qa');
   const serveRoot = outputDir(dir);
   const { url, close } = await serveDir(serveRoot);
 
@@ -873,6 +879,11 @@ export async function visualQaHandler(payload: JobPayload): Promise<void> {
     issues.push(...det.issues);
     screenshots = det.screenshots;
     metrics = det.metrics;
+    await logStage(
+      logPath,
+      `Технічні перевірки (390/768/1440 + без анімацій): ${det.issues.length} зауваж.`,
+      'visual-qa',
+    );
 
     // ── motion evidence ─────────────────────────────────────────────────────
     // Deterministic, and captured whether or not the critic later runs: a static
@@ -918,8 +929,10 @@ export async function visualQaHandler(payload: JobPayload): Promise<void> {
     }
 
     // ── multimodal critique ─────────────────────────────────────────────────
+    await logStage(logPath, 'Дизайн-критик дивиться скриншоти', 'visual-qa');
     try {
       const critique = await runVisualCritique({
+        buildLogPath: logPath,
         business: {
           name: snapshot.name, category: snapshot.category, city: snapshot.city,
           languageName: snapshot.languageName,
@@ -1051,6 +1064,7 @@ export async function visualQaHandler(payload: JobPayload): Promise<void> {
 
   // ── verdict ───────────────────────────────────────────────────────────────
   if (blocking.length === 0) {
+    await logStage(logPath, 'Перевірка пройдена — публікую демо', 'visual-qa');
     await db.update(schema.siteProjects).set({ state: 'ready' })
       .where(eq(schema.siteProjects.id, projectId));
     await enqueue('deploy-demo', {
@@ -1061,6 +1075,11 @@ export async function visualQaHandler(payload: JobPayload): Promise<void> {
   }
 
   if (iteration + 1 >= config.maxQaIterations) {
+    await logStage(
+      logPath,
+      `Ліміт ${config.maxQaIterations} ітерацій вичерпано, ${blocking.length} проблем лишилось — чекає на Романа`,
+      'visual-qa',
+    );
     await db.update(schema.siteProjects).set({ state: 'needs_human_review' })
       .where(eq(schema.siteProjects.id, projectId));
     await transition(businessId, 'needs_review', 'visual-qa',
@@ -1082,6 +1101,11 @@ export async function visualQaHandler(payload: JobPayload): Promise<void> {
   }
 
   // Feed the issues back into the SAME workspace and let the builder iterate.
+  await logStage(
+    logPath,
+    `${blocking.length} проблем — повертаю агенту на ітерацію ${iteration + 2} з ${config.maxQaIterations}`,
+    'visual-qa',
+  );
   await writeQaIssues(dir, renderQaIssues(issues, iteration + 1, snapshot));
   await enqueue('build-site', {
     businessId, projectId, campaignId: payload.campaignId,

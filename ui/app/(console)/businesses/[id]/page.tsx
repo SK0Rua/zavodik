@@ -25,6 +25,7 @@ import { SocialsPanel, type SocialContactRow } from '@/components/SocialsPanel';
 import { isSocialChannel, socialsButtonState } from '@/lib/socials';
 import { BrandSwatches } from '@/components/BrandSwatches';
 import { RefreshBrandButton } from '@/components/RefreshBrandButton';
+import { LiveBuildPanel } from '@/components/LiveBuildPanel';
 
 export const dynamic = 'force-dynamic';
 
@@ -215,8 +216,16 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
   });
 
   // ── Демо ──────────────────────────────────────────────────────────────────
+  // States in which a build is (or should be) moving. A build takes an hour, so
+  // for exactly these states the tab leads with the live trace instead of a
+  // one-word status — see LiveBuildPanel for why that word was not enough.
+  const IN_FLIGHT_STATES = new Set(['pending', 'brief', 'building', 'qa']);
   const demoTab = (
     <div className="space-y-4">
+      {project && IN_FLIGHT_STATES.has(project.state) && (
+        <LiveBuildPanel projectId={project.id} projectState={project.state} />
+      )}
+
       {/* A build the critic rejected gets the full decision card right here —
           the SAME component the inbox renders, so the three actions have one
           implementation and one behaviour to keep working. */}

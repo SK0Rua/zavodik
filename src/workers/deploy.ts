@@ -21,6 +21,7 @@ import { transition } from '../orchestrator/statuses.js';
 import { advance } from '../orchestrator/router.js';
 import type { JobPayload } from '../orchestrator/queue.js';
 import { collectWorkspaceGarbage, outputDir } from '../build/workspace.js';
+import { buildLogPath, logStage } from '../build/buildLog.js';
 import { ensureDemoServer } from '../lib/serveDir.js';
 import { log } from '../lib/logger.js';
 import { resolveProject } from '../build/projectRef.js';
@@ -156,6 +157,9 @@ export async function deployHandler(payload: JobPayload): Promise<void> {
   }).where(eq(schema.siteProjects.id, projectId));
 
   log.info('demo deployed', { businessId, projectId, deployUrl, health: health.detail, filesRewritten: rewritten });
+  // Last line of this project's build log: the panel that showed the run turns
+  // into a record of it, ending where the demo starts existing.
+  await logStage(buildLogPath(businessId, projectId), `Демо опубліковано: ${deployUrl}`, 'deploy');
 
   // The demo now lives in deploys/<token>/ and the reports live in storage, so the
   // build artefacts in the workspace are dead weight. Never fails the deploy.

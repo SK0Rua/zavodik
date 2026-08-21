@@ -62,6 +62,14 @@ export interface StructuredOptions {
    */
   onUsage?: (usage: AgentUsage) => void;
   /**
+   * Absolute path of the project's `build-log.ndjson`. When set, every SDK
+   * message worth showing is summarised into it as it streams, so the console
+   * can display a live trace of a run that takes an hour. Optional everywhere:
+   * an agent that supplies no path produces no trace, and a log that cannot be
+   * written never disturbs the run.
+   */
+  buildLogPath?: string;
+  /**
    * @deprecated No effect. Kept so existing call sites compile: the subscription
    * runtimes manage their own output budget, there is no per-request max_tokens.
    */
@@ -104,6 +112,18 @@ export interface CodeAgentOptions {
    * Claude Code only; the Codex adapter ignores it.
    */
   skills?: string[] | 'all';
+  /**
+   * Absolute path of the project's `build-log.ndjson`. When set, the runtime
+   * appends a one-line summary of every SDK message as it streams — which is
+   * what makes an hour-long build visible in the console instead of a single
+   * «Виконується». The builder and the QA critic supply it; agents with no
+   * project (brand, social finder) leave it unset and produce no trace.
+   *
+   * Claude Code only. The Codex adapter drives a CLI over stdout rather than a
+   * typed message stream, so it ignores this — the worker's own stage markers
+   * are still written and the timeline stays honest, just without agent chatter.
+   */
+  buildLogPath?: string;
 }
 
 /**

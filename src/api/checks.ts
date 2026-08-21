@@ -96,9 +96,12 @@ function run(bin: string, args: string[], timeoutMs = 20_000): Promise<{ code: n
 
 /**
  * `codex login status` is the CLI's own answer to "am I signed in?".
- * We only ever REPORT it: logging in is an interactive device flow Roman runs
- * himself (`docker compose exec factory codex login`), and doing it for him
- * from a web button would mean brokering his ChatGPT session.
+ *
+ * This function only REPORTS. The login itself is a device flow started from
+ * the settings page («Підключити» → `/internal/accounts/codex/start`, see
+ * `accounts.ts`): the CLI prints a URL and a code, Roman signs in on
+ * openai.com, and the CLI polls until the credential lands in the `codexhome`
+ * volume. Nothing here brokers his ChatGPT session — the browser step is his.
  */
 async function checkCodex(): Promise<CheckResult> {
   const bin = config.agents.codexBin;
@@ -112,7 +115,10 @@ async function checkCodex(): Promise<CheckResult> {
     ok: loggedIn,
     message: loggedIn
       ? `Codex залогінений: ${text.slice(0, 160) || 'ok'}`
-      : 'Codex не залогінений. Виконай на сервері: `docker compose exec factory codex login` (device-auth код у виводі).',
+      // The remedy is the «Підключити» button on this very card (it runs
+      // `codex login --device-auth` in the factory container), so the message
+      // must not send Roman to a terminal for something the page now does.
+      : 'Codex не залогінений — натисни «Підключити».',
     detail: { bin, exit: code, output: text.slice(0, 300) },
   };
 }

@@ -116,6 +116,15 @@ export interface CheckOutcome {
   detail?: Record<string, unknown>;
   needsQr?: boolean;
   ms?: number;
+  /**
+   * A check that is still running.
+   *
+   * The in-flight state used to be encoded as `{ok: false, message: 'перевіряю…'}`
+   * and recognised by string-matching that message, which meant a check that
+   * legitimately failed with those words would have rendered as a spinner
+   * forever. It is a state, so it gets a field.
+   */
+  pending?: boolean;
 }
 
 /** Base URL of the factory's internal API, as seen from the UI container. */
@@ -154,6 +163,21 @@ export async function runCheck(kind: string): Promise<CheckOutcome> {
         + 'Контейнер factory піднятий?',
     };
   }
+}
+
+/**
+ * Re-run ONE check and return its fresh result, updating the factory's cache
+ * along the way — this is a card's «Оновити» button.
+ *
+ * It goes through `/internal/check/:kind` rather than
+ * `/internal/checks-cached?refresh=`, because that endpoint already caches what
+ * it runs and returns the single result the card needs, instead of six others
+ * the card would throw away.
+ */
+export async function refreshCheck(kind: string): Promise<CheckOutcome> {
+  const out = await runCheck(kind);
+  revalidatePath('/settings');
+  return out;
 }
 
 /** Effective config as the RUNNING factory process sees it right now. */

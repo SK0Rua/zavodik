@@ -114,7 +114,7 @@ export function SocialsPanel({ contacts, unresolvedGap }: {
                       className="text-xs"
                       aria-label={`Нотатка до ${c.value}`}
                     />
-                    <button type="submit" className="btn-ghost text-xs">Підтвердити</button>
+                    <button type="submit" className="btn-outline btn-sm">Підтвердити</button>
                   </form>
                   <form action={rejectSocialContact}>
                     <input type="hidden" name="contactId" value={c.id} />

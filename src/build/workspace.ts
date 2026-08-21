@@ -13,7 +13,7 @@
  * The agent has no network beyond package registries and no DB access, so this
  * directory is the complete universe it can build from.
  */
-import { copyFile, cp, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { getObject } from '../lib/storage.js';
@@ -489,8 +489,16 @@ export async function prepareWorkspace(opts: {
   const fresh = opts.fresh ?? true;
 
   if (fresh) {
+    // The live build log is a record of the run that is HAPPENING, and the
+    // builder has already written its opening stage lines by the time it gets
+    // here. Wiping the directory under it would blank the panel Roman is
+    // watching and reset the reader's byte offset mid-poll, so it is carried
+    // across the wipe rather than treated as build output.
+    const logFile = path.join(dir, 'build-log.ndjson');
+    const carried = existsSync(logFile) ? await readFile(logFile).catch(() => null) : null;
     await rm(dir, { recursive: true, force: true });
     await copyTemplate(dir);
+    if (carried) await writeFile(logFile, carried);
   }
 
   const skills = await copySkills(dir);

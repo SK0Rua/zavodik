@@ -6,6 +6,7 @@ import { FactoryModeSwitch } from '@/components/FactoryModeSwitch';
 import { ConnectedAccounts } from '@/components/ConnectedAccounts';
 import { SETTING_GROUPS, loadSettingViews, masterKeyConfigured } from '@/lib/settings';
 import { loadAccounts } from '@/lib/accounts';
+import { loadChecks } from '@/lib/checks';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,9 +26,13 @@ const GROUP_CHECKS: Record<string, Array<{ kind: string; label: string }>> = {
 };
 
 export default async function SettingsPage() {
-  const [views, accounts, problemRows] = await Promise.all([
+  // The checks run alongside the DB reads rather than after them: on a warm
+  // cache they cost milliseconds, and on a cold one they must not be serialised
+  // behind three queries that were going to be instant anyway.
+  const [views, accounts, checks, problemRows] = await Promise.all([
     loadSettingViews(),
     loadAccounts(),
+    loadChecks(),
     db.select({ n: sql<number>`count(*)` }).from(schema.workflowJobs)
       .where(inArray(schema.workflowJobs.status, ['failed', 'needs_human'])),
   ]);
@@ -60,14 +65,17 @@ docker compose up -d --force-recreate factory factory-build ui`}
 
         {/* Roman's own order: connect the accounts first, then choose the mode,
             then everything that only matters when something is unusual. */}
-        <ConnectedAccounts accounts={accounts} />
+        <ConnectedAccounts accounts={accounts} checks={checks.checks} checksError={checks.error} />
 
         <FactoryModeSwitch current={mode?.value === 'live' ? 'live' : 'dry_run'} />
 
-        <details className="card p-5">
-          <summary className="text-sm font-medium text-ink">
+        <details className="card p-5 group">
+          {/* Explicit triangle: globals.css hides the native marker, so without
+              one this heading is indistinguishable from a heading. */}
+          <summary className="flex items-baseline gap-2 text-sm font-medium text-ink">
+            <span aria-hidden className="text-ink-mute transition-transform group-open:rotate-90">›</span>
             Розширені
-            <span className="text-ink-mute font-normal ml-2">
+            <span className="text-ink-mute font-normal">
               ліміти, gosom, ключі вебхуків, вибір моделей
             </span>
           </summary>

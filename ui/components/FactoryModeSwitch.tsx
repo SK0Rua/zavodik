@@ -39,11 +39,11 @@ export function FactoryModeSwitch({ current }: { current: 'dry_run' | 'live' }) 
           <span title={mode}>{live ? 'Бойовий — реальні відправки' : 'Тестовий — лише симуляція'}</span>
         </Badge>
         {live ? (
-          <button type="button" className="btn-ghost text-xs" disabled={pending} onClick={() => apply('dry_run')}>
+          <button type="button" className="btn-outline btn-sm" disabled={pending} onClick={() => apply('dry_run')}>
             Повернути в тестовий
           </button>
         ) : confirming ? null : (
-          <button type="button" className="btn-ghost text-xs" onClick={() => setConfirming(true)}>
+          <button type="button" className="btn-outline btn-sm" onClick={() => setConfirming(true)}>
             Перемкнути в бойовий
           </button>
         )}
@@ -61,13 +61,13 @@ export function FactoryModeSwitch({ current }: { current: 'dry_run' | 'live' }) 
               placeholder="live" className="font-mono text-sm w-32"
             />
             <button
-              type="button" className="btn-danger text-xs"
+              type="button" className="btn-danger btn-sm"
               disabled={typed.trim() !== 'live' || pending}
               onClick={() => apply('live')}
             >
               Увімкнути live
             </button>
-            <button type="button" className="btn-ghost text-xs" onClick={() => { setConfirming(false); setTyped(''); }}>
+            <button type="button" className="btn-outline btn-sm" onClick={() => { setConfirming(false); setTyped(''); }}>
               Скасувати
             </button>
           </div>

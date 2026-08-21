@@ -31,6 +31,7 @@ import {
   GREEK_SAFE_BODY, GREEK_SAFE_DISPLAY, GREEK_UNSAFE_NOTE,
 } from '../build/schemas.js';
 import { chooseDirection } from '../build/rubric.js';
+import { buildLogPath, logStage } from '../build/buildLog.js';
 import type { ArtDirection, ContentBrief, DirectionScore } from '../build/schemas.js';
 import {
   HERO_MOTION_KINDS, MOTION_COMPONENTS, PHOTO_GRADES, WOW_MAX,
@@ -692,6 +693,17 @@ export async function contentDesignHandler(payload: JobPayload): Promise<void> {
   log.info('stage 9 complete', {
     businessId, projectId: project!.id, seconds: Math.round((Date.now() - startedAt) / 1000),
   });
+
+  // First line of this project's live build log. It can only be written here,
+  // not at the top of the stage: the log is keyed by project id and the project
+  // row is created a few lines above. Everything stage 9 did is summarised into
+  // this one line rather than back-dated into a timeline that did not exist yet.
+  await logStage(
+    buildLogPath(businessId, project!.id),
+    `Текст і дизайн готові за ${Math.round((Date.now() - startedAt) / 60_000)} хв · `
+    + `обрано напрямок «${verdict.chosen.name}»`,
+    'content-design',
+  );
 
   await enqueue('build-site', {
     businessId, campaignId: biz.campaignId, projectId: project!.id, iteration: 0,

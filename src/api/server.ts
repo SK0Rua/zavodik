@@ -14,15 +14,17 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
-import { eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { ensureDemoServer, registerPreview, startDemoServer } from '../lib/serveDir.js';
 import { writeQaIssues } from '../build/workspace.js';
+import { buildLogPath, readBuildLog } from '../build/buildLog.js';
 import { config } from '../config.js';
 import { log } from '../lib/logger.js';
 import { handleWahaWebhook } from '../outreach/wahaInbound.js';
 import { verifyApiKey, verifyHmac } from '../outreach/wahaWebhook.js';
 import { effectiveConfig, isCheckKind, runCheck } from './checks.js';
+import { cacheCheckResult, collectChecks, invalidateCheck } from './checkCache.js';
 import {
   activeSession, cancelSession, disconnect, isAccountProvider,
   startSession, submitCode, telegramChats,
@@ -75,7 +77,31 @@ export async function startApi(): Promise<void> {
     await reloadSettings().catch(() => { /* stale snapshot is still better than a 500 */ });
     const result = await runCheck(kind);
     log.info('settings check run', { kind, ok: result.ok, ms: Date.now() - started });
+    // A manual click is the freshest possible answer, so it becomes the cached
+    // one — otherwise the chip at the top of the card could keep showing a
+    // ten-minute-old failure next to the green result of the click below it.
+    await cacheCheckResult(kind, result);
     return c.json({ ...result, ms: Date.now() - started });
+  });
+
+  /**
+   * Every check at once, from a 10-minute cache — what the settings page reads
+   * on render so its status chips are REAL rather than inferred from "a row
+   * exists in the settings table".
+   *
+   * Cached because `claude` is a real subscription call: without a cache, this
+   * would put tens of seconds of dependency calls on every page load, and with
+   * it a reload is free. `?refresh=<kind>` is one card's «Оновити» button and
+   * re-runs exactly that check.
+   */
+  app.get('/internal/checks-cached', internalAuth, async (c) => {
+    await reloadSettings().catch(() => {});
+    const raw = c.req.query('refresh') ?? '';
+    const refresh = isCheckKind(raw) ? raw : null;
+    if (raw && !refresh) return c.json({ ok: false, message: `unknown check: ${raw}` }, 400);
+    const started = Date.now();
+    const checks = await collectChecks({ refresh });
+    return c.json({ ok: true, checks, ms: Date.now() - started });
   });
 
   /**
@@ -138,6 +164,9 @@ export async function startApi(): Promise<void> {
     const p = c.req.param('provider');
     if (!isAccountProvider(p)) return c.json({ ok: false, message: `невідомий провайдер: ${p}` }, 400);
     const res = await disconnect(p);
+    // The cached chip would otherwise keep saying «підключено» for up to ten
+    // minutes about a credential that has just been deleted.
+    if (isCheckKind(p)) await invalidateCheck(p);
     return c.json(res);
   });
 
@@ -252,6 +281,65 @@ ${previous || '(попередніх автоматичних зауважень
 
     log.info('human QA note written', { projectId, dir: project.dir, chars: note.length });
     return c.json({ ok: true, message: 'нотатку записано' });
+  });
+
+  /**
+   * The live build log for one project — what the agent is doing right now.
+   *
+   * A build runs for an hour and the console could previously only say
+   * «Виконується», which is indistinguishable from a hung job. This is the
+   * read side of `src/build/buildLog.ts`: the file is written by
+   * `factory-build` into the shared `sitesdata` volume, and this process (which
+   * mounts the same volume) tails it by byte offset.
+   *
+   * Read-only by construction: there is no way to influence a running build
+   * from here, and no way to start one.
+   *
+   * `after` is the byte offset from the previous poll. `active` comes from
+   * workflow_jobs rather than from the project state, because "the project says
+   * building" and "a job is actually running" are exactly the two things that
+   * disagree when something is wrong — which is the case this panel exists for.
+   */
+  app.get('/internal/build-log/:projectId', internalAuth, async (c) => {
+    const projectId = Number(c.req.param('projectId'));
+    if (!Number.isInteger(projectId) || projectId <= 0) {
+      return c.json({ ok: false, message: 'invalid project id' }, 400);
+    }
+    const after = Number(c.req.query('after') ?? 0);
+
+    const [project] = await db.select().from(schema.siteProjects)
+      .where(eq(schema.siteProjects.id, projectId));
+    if (!project) return c.json({ ok: false, message: 'проєкт не знайдено' }, 404);
+
+    // The most recent build-ish job for this business. `running` is the live
+    // state; `retry_wait` counts as active too — the job is parked waiting for
+    // a subscription window, which is progress, not a stall.
+    const [job] = await db.select().from(schema.workflowJobs)
+      .where(and(
+        eq(schema.workflowJobs.businessId, project.businessId),
+        inArray(schema.workflowJobs.jobType, ['content-and-design', 'build-site', 'visual-qa', 'deploy-demo']),
+      ))
+      .orderBy(desc(schema.workflowJobs.createdAt))
+      .limit(1);
+
+    const tail = await readBuildLog(buildLogPath(project.businessId, projectId), after);
+
+    return c.json({
+      ok: true,
+      lines: tail.lines,
+      nextOffset: tail.nextOffset,
+      lastEventAgoSec: tail.lastEventAgoSec,
+      size: tail.size,
+      active: job?.status === 'running' || job?.status === 'retry_wait',
+      jobStatus: job?.status ?? null,
+      jobType: job?.jobType ?? null,
+      // Since the job actually started, not since it was enqueued: the queue
+      // wait is not build time and showing it as such would misreport a stall.
+      runningForSec: job?.startedAt && (job.status === 'running' || job.status === 'retry_wait')
+        ? Math.max(0, Math.round((Date.now() - new Date(job.startedAt).getTime()) / 1000))
+        : null,
+      projectState: project.state,
+    });
   });
 
   /**

@@ -30,7 +30,7 @@ function SecretField({ field }: { field: SettingView }) {
       <div className="flex items-center gap-2">
         <input type="hidden" name={field.key} value="" />
         <span className="text-sm text-dot-wait">буде очищено при збереженні</span>
-        <button type="button" className="btn-ghost text-xs px-2 py-1" onClick={() => setCleared(false)}>
+        <button type="button" className="btn-quiet btn-sm" onClick={() => setCleared(false)}>
           скасувати
         </button>
       </div>
@@ -42,10 +42,10 @@ function SecretField({ field }: { field: SettingView }) {
       <div className="flex flex-wrap items-center gap-2">
         <input type="hidden" name={field.key} value={UNCHANGED} />
         <code className="text-sm bg-paper-sunk border border-line rounded px-2 py-1.5">{field.masked}</code>
-        <button type="button" className="btn-ghost text-xs px-2 py-1" onClick={() => setEditing(true)}>
+        <button type="button" className="btn-quiet btn-sm" onClick={() => setEditing(true)}>
           змінити
         </button>
-        <button type="button" className="btn-ghost text-xs px-2 py-1" onClick={() => setCleared(true)}>
+        <button type="button" className="btn-quiet btn-sm" onClick={() => setCleared(true)}>
           очистити
         </button>
       </div>
@@ -64,7 +64,7 @@ function SecretField({ field }: { field: SettingView }) {
       )}
       {field.hasValue && (
         <button
-          type="button" className="btn-ghost text-xs px-2 py-1"
+          type="button" className="btn-quiet btn-sm"
           onClick={() => setEditing(false)}
         >
           лишити поточне ({field.masked})
@@ -146,7 +146,7 @@ function CheckButtons({ checks, onQr }: {
       <div className="flex flex-wrap gap-2">
         {checks.map((c) => (
           <button
-            key={c.kind} type="button" className="btn-ghost text-xs"
+            key={c.kind} type="button" className="btn-outline btn-sm"
             disabled={busy !== null} onClick={() => void fire(c.kind)}
           >
             {busy === c.kind ? '…' : c.label}

@@ -1,34 +1,40 @@
 'use client';
 
 /**
- * "Підключені акаунти" — the primary path for every credential the factory needs.
+ * "Підключені акаунти" — every credential the factory needs, one card each.
  *
- * Roman's framing (2026-08-17): the Claude token field was "одноразова дія, а не
- * налаштування". A one-time action belongs behind a button, not in a form of
- * persistent settings. So each provider is a row with a state and a
- * **Підключити** button that runs the whole flow here — no terminal, no copying
- * a secret between two machines.
+ * Two rules decide everything on this screen, both of them from Roman's
+ * feedback on 2026-08-21 ("Заходжу — Claude 'налаштовано', Codex 'частково',
+ * хоча обидва підключені; тисну Перевірити — все ок. Кнопки в ряд, не зрозуміло
+ * де текст а де кнопка"):
  *
- * The raw fields still exist under «Розширені» further down the page: this block
- * is the path, not a cage. Anything that can be done here can still be done by
- * hand, which is what makes the block safe to trust.
+ *  1. **The status is the answer, not a guess.** A card opens showing the
+ *     result of a REAL check (cached ten minutes in the factory, see
+ *     `src/api/checkCache.ts`), so the page no longer needs to be asked before
+ *     it tells the truth. The old two-word vocabulary — «налаштовано» meaning
+ *     "a row exists" versus «підключено» meaning "verified" — is gone: it made
+ *     the page's most prominent word describe the least interesting fact.
  *
- * Two shapes of flow, because the two CLIs genuinely differ:
- *   Claude — we show a URL, he pastes a code back (the CLI blocks on a prompt);
- *   Codex  — we show a URL + a one-time code, and the CLI polls by itself, so
- *            there is nothing to type back and no submit step to render.
+ *  2. **One primary action per card, and it moves.** When nothing is connected
+ *     the filled button is «Підключити». Once it IS connected the status is the
+ *     hero and there is no filled button at all — «Оновити» is an outline, and
+ *     «Відключити» hides behind «···», because disconnecting a working account
+ *     is never what Roman came here to do. Anything clickable is a button;
+ *     anything not clickable is muted text under the buttons, never beside them.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Badge } from '@/components/Badge';
+import { Status } from '@/components/Status';
 import { WahaQr } from '@/components/WahaQr';
-import { runCheck, type CheckOutcome } from '@/lib/settingsActions';
+import { refreshCheck, runCheck, type CheckOutcome } from '@/lib/settingsActions';
 import {
   cancelAccount, disconnectAccount, findTelegramChats, pollAccount,
   saveGmail, saveTelegramToken, startAccount, submitAccountCode, useTelegramChat,
   type AccountSession, type TelegramChat,
 } from '@/lib/accountsActions';
+import { gmailVerdict, verdictOf, type Verdict } from '@/lib/accountVerdict';
 import type { AccountsSnapshot, AccountStatus } from '@/lib/accounts';
+import type { CheckKind, ChecksByKind } from '@/lib/checks';
 
 /** http(s) only — the URL comes from CLI output, so it is never blindly trusted. */
 function safeHttpUrl(u: string | null | undefined): string | undefined {
@@ -39,75 +45,151 @@ function safeHttpUrl(u: string | null | undefined): string | undefined {
   } catch { return undefined; }
 }
 
-// ─── Shared row chrome ───────────────────────────────────────────────────────
-
-type Tone = 'ok' | 'bad' | 'warn' | 'idle';
+// ─── Status ──────────────────────────────────────────────────────────────────
 
 /**
- * The state a row shows. A live check outranks the stored-config guess: once
- * something has really been asked, its answer is the truth on screen.
+ * «перевірено N хв тому», computed AFTER mount.
+ *
+ * Anything derived from `now` differs between the server's HTML and the
+ * browser's hydration pass, which is React #418 — the same trap `lib/format.ts`
+ * documents. Rendering nothing on the first paint makes both passes agree, and
+ * the label appears a frame later.
  */
-function rowTone(status: AccountStatus, check: CheckOutcome | undefined): { tone: Tone; label: string } {
-  if (check) {
-    if (check.message === 'перевіряю…') return { tone: 'idle', label: '… перевіряю' };
-    return check.ok ? { tone: 'ok', label: '✓ підключено' } : { tone: 'bad', label: '✗ помилка' };
-  }
-  if (status.readiness === 'configured') return { tone: 'warn', label: '• налаштовано' };
-  if (status.readiness === 'partial') return { tone: 'warn', label: '• частково' };
-  return { tone: 'idle', label: '✗ не підключено' };
+function CheckedAgo({ at }: { at: string | null | undefined }) {
+  const [label, setLabel] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!at) { setLabel(null); return; }
+    const tick = () => {
+      const ms = Date.now() - Date.parse(at);
+      if (!Number.isFinite(ms)) { setLabel(null); return; }
+      const min = Math.floor(ms / 60_000);
+      setLabel(
+        min < 1 ? 'перевірено щойно'
+          : min < 60 ? `перевірено ${min} хв тому`
+            : `перевірено ${Math.floor(min / 60)} год тому`,
+      );
+    };
+    tick();
+    const t = setInterval(tick, 30_000);
+    return () => clearInterval(t);
+  }, [at]);
+
+  if (!label) return null;
+  return <span className="text-sm text-ink-mute whitespace-nowrap">{label}</span>;
 }
 
-function AccountRow({ title, blurb, status, check, children }: {
-  title: string;
-  blurb: string;
-  status: AccountStatus;
-  check?: CheckOutcome;
-  children: React.ReactNode;
-}) {
-  const { tone, label } = rowTone(status, check);
+// ─── Card chrome ─────────────────────────────────────────────────────────────
+
+/**
+ * A SUCCESSFUL check's own words, under the actions.
+ *
+ * Failures are deliberately not rendered here: the card header already shows
+ * «помилка» with the reason underneath it, and printing the same sentence twice
+ * in one card is how the old page got noisy. A success, on the other hand, says
+ * something the one-word status cannot — «Тестове повідомлення надіслано»
+ * tells Roman to go look at his phone.
+ */
+function Outcome({ outcome, prefix }: { outcome: CheckOutcome | undefined; prefix?: string }) {
+  if (!outcome || outcome.pending || !outcome.ok) return null;
   return (
-    <div className="rounded-lg border border-line bg-paper-sunk p-3 space-y-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h3 className="text-sm font-medium text-ink">{title}</h3>
-            <Badge tone={tone === 'warn' ? 'info' : tone}>{label}</Badge>
-          </div>
-          <p className="text-xs text-ink-mute mt-0.5">{blurb}</p>
-          <p className="text-xs text-ink-mute mt-1 break-all">{status.detail}</p>
-        </div>
-      </div>
-      {children}
-      {check && check.message !== 'перевіряю…' && (
-        <div className={`rounded-md border px-3 py-2 text-sm ${
-          check.ok
-            ? 'border-dot-go/40 bg-dot-go/10 text-dot-go'
-            : 'border-dot-stop/40 bg-dot-stop/10 text-dot-stop'
-        }`}
-        >
-          {check.message}
-        </div>
-      )}
+    <div className="rounded-lg border border-dot-go/30 bg-dot-go/8 px-3 py-2 text-sm text-dot-go">
+      {prefix ? `${prefix}: ` : ''}{outcome.message}
     </div>
   );
 }
 
-/** "Перевірити" — the real check in the factory, shared by every row. */
-function CheckButton({ kind, label, onResult, disabled }: {
-  kind: string; label?: string; onResult: (o: CheckOutcome) => void; disabled?: boolean;
+/**
+ * The «···» menu: actions that exist but must not compete for attention.
+ *
+ * A native <details> rather than a popover library — it is keyboard-reachable,
+ * closes on Escape for free, and this is a settings page, not an app shell.
+ */
+function MoreMenu({ children }: { children: React.ReactNode }) {
+  return (
+    <details className="relative">
+      <summary
+        className="btn-outline btn-sm cursor-pointer"
+        aria-label="Інші дії"
+      >
+        ···
+      </summary>
+      <div className="absolute right-0 z-10 mt-1 min-w-[12rem] rounded-lg border border-line bg-paper-card shadow-pop p-1 flex flex-col">
+        {children}
+      </div>
+    </details>
+  );
+}
+
+function AccountCard({ title, blurb, verdict, checkedAt, actions, children, footnote, how }: {
+  title: string;
+  blurb: string;
+  verdict: Verdict;
+  checkedAt?: string | null;
+  /** The action row. Exactly one filled button in here, or none — or nothing at all. */
+  actions?: React.ReactNode;
+  children?: React.ReactNode;
+  /** One muted paragraph, under the actions. Longer text belongs in `how`. */
+  footnote?: React.ReactNode;
+  /** Collapsed «Як це працює» — the multi-step explanations live here. */
+  how?: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-xl border border-line bg-paper-card p-4 space-y-3">
+      <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <h3 className="text-base font-medium text-ink">{title}</h3>
+            <Status tone={verdict.tone}>{verdict.label}</Status>
+          </div>
+          <p className="text-sm text-ink-mute mt-0.5">{blurb}</p>
+        </div>
+        <CheckedAgo at={checkedAt} />
+      </header>
+
+      {verdict.reason && (
+        <p className="text-sm text-dot-stop break-words">{verdict.reason}</p>
+      )}
+
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+
+      {children}
+
+      {footnote && <p className="text-sm text-ink-mute max-w-[70ch]">{footnote}</p>}
+
+      {/* The disclosure triangle is drawn explicitly: globals.css hides the
+          native marker, and without a replacement a <summary> is a line of text
+          that happens to be clickable — which is the confusion this whole
+          screen is being fixed for. */}
+      {how && (
+        <details className="text-sm group">
+          <summary className="inline-flex items-center gap-1.5 text-ink-soft hover:text-ink">
+            <span aria-hidden className="text-ink-mute transition-transform group-open:rotate-90">›</span>
+            Як це працює
+          </summary>
+          <div className="mt-2 space-y-2 text-ink-mute max-w-[70ch]">{how}</div>
+        </details>
+      )}
+    </section>
+  );
+}
+
+/** «Оновити» — re-runs one check and replaces the card's status. */
+function RefreshButton({ kind, onResult, label = 'Оновити' }: {
+  kind: CheckKind; onResult: (o: CheckOutcome) => void; label?: string;
 }) {
   const [busy, setBusy] = useState(false);
   return (
     <button
-      type="button" className="btn-ghost text-xs" disabled={busy || disabled}
+      type="button" className="btn-outline btn-sm" disabled={busy}
       onClick={async () => {
         setBusy(true);
-        onResult({ ok: false, message: 'перевіряю…' });
-        onResult(await runCheck(kind));
+        onResult({ ok: false, message: '', pending: true });
+        onResult(await refreshCheck(kind));
         setBusy(false);
       }}
     >
-      {busy ? '…' : (label ?? 'Перевірити')}
+      {busy ? 'Перевіряю…' : label}
     </button>
   );
 }
@@ -121,20 +203,27 @@ function CheckButton({ kind, label, onResult, disabled }: {
  * has to open a browser and sign in), and a 1.5s poll over a server action is
  * both simpler and more robust than holding a stream open across a container
  * boundary for five minutes.
+ *
+ * A HOOK rather than a component, because its two outputs belong in two
+ * different places on the card: the trigger goes in the action row (where its
+ * prominence depends on whether the account is already connected — something
+ * this hook does not know), and the progress panel goes below it, in the card
+ * body. As a component it could only return both together, which put a status
+ * panel inside a flex row of buttons.
  */
-function CliFlow({ provider, needsCode, onDone }: {
+function useCliFlow({ provider, needsCode, onDone }: {
   provider: 'claude' | 'codex';
   /** Claude blocks on a "Paste code here" prompt; Codex does not. */
   needsCode: boolean;
   onDone: (check: CheckOutcome) => void;
-}) {
+}): { start: () => void; cancel: () => void; busy: boolean; live: boolean; panel: React.ReactNode } {
   const [session, setSession] = useState<AccountSession | null>(null);
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const live = session
-    && session.phase !== 'done' && session.phase !== 'error' && session.phase !== 'cancelled';
+  const live = Boolean(session
+    && session.phase !== 'done' && session.phase !== 'error' && session.phase !== 'cancelled');
 
   const stopPolling = useCallback(() => {
     if (timer.current) { clearInterval(timer.current); timer.current = null; }
@@ -160,17 +249,16 @@ function CliFlow({ provider, needsCode, onDone }: {
   // A component unmounting (page nav) must not leave an interval running.
   useEffect(() => stopPolling, [stopPolling]);
 
-  async function start() {
+  const start = useCallback(() => {
     setBusy(true);
     setCode('');
-    setSession(await startAccount(provider));
-    setBusy(false);
-  }
+    void startAccount(provider).then((s) => { setSession(s); setBusy(false); });
+  }, [provider]);
 
-  async function cancel() {
+  const cancel = useCallback(() => {
     stopPolling();
-    setSession(await cancelAccount(provider));
-  }
+    void cancelAccount(provider).then(setSession);
+  }, [provider, stopPolling]);
 
   async function submit() {
     if (!code.trim()) return;
@@ -182,40 +270,29 @@ function CliFlow({ provider, needsCode, onDone }: {
 
   const url = safeHttpUrl(session?.url);
 
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-2">
-        {!live && (
-          <button type="button" className="btn-primary text-xs" disabled={busy} onClick={() => void start()}>
-            {busy ? '…' : (session?.phase === 'done' ? 'Підключити заново' : 'Підключити')}
-          </button>
-        )}
-        {live && (
-          <button type="button" className="btn-ghost text-xs" onClick={() => void cancel()}>
-            Скасувати
-          </button>
-        )}
-        {live && session?.expiresInMs ? (
-          <span className="text-xs text-ink-mute">
-            лишилось ~{Math.ceil(session.expiresInMs / 60_000)} хв
-          </span>
-        ) : null}
-      </div>
-
-      {session && session.phase !== 'cancelled' && (
-        <div className={`rounded-md border px-3 py-2 text-sm space-y-2 ${
+  const panel = session && session.phase !== 'cancelled'
+    ? (
+        <div className={`rounded-lg border px-3 py-2.5 text-sm space-y-2 ${
           session.phase === 'error'
-            ? 'border-dot-stop/40 bg-dot-stop/10 text-dot-stop'
+            ? 'border-dot-stop/30 bg-dot-stop/8 text-dot-stop'
             : session.phase === 'done'
-              ? 'border-dot-go/40 bg-dot-go/10 text-dot-go'
-              : 'border-line bg-paper-card text-ink-soft'
+              ? 'border-dot-go/30 bg-dot-go/8 text-dot-go'
+              : 'border-line bg-paper-sunk text-ink-soft'
         }`}
         >
-          <div>{session.message}</div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span>{session.message}</span>
+            {live && session.expiresInMs ? (
+              <span className="text-sm text-ink-mute">
+                лишилось ~{Math.ceil(session.expiresInMs / 60_000)} хв
+              </span>
+            ) : null}
+          </div>
+
           {session.cliTail && (session.phase === 'submitting' || session.phase === 'error') && (
-            <details className="mt-2">
-              <summary className="cursor-pointer text-xs opacity-70">Що пише CLI</summary>
-              <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-black/5 p-2 text-[11px]">{session.cliTail}</pre>
+            <details>
+              <summary className="text-sm opacity-80">Що пише CLI</summary>
+              <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-black/5 p-2 text-[11px] font-mono">{session.cliTail}</pre>
             </details>
           )}
 
@@ -223,22 +300,25 @@ function CliFlow({ provider, needsCode, onDone }: {
             <div className="space-y-2">
               <a
                 href={url} target="_blank" rel="noreferrer"
-                className="inline-block btn-ghost text-xs"
+                className="btn-outline btn-sm no-underline"
               >
                 Відкрити сторінку входу ↗
               </a>
               {/* The full URL in copyable form: the button opens a new tab, but
                   if Roman is doing this on a headless server over SSH he needs
                   the text to paste into a browser on another machine. */}
-              <input
-                readOnly value={url} onFocus={(e) => e.currentTarget.select()}
-                className="w-full font-mono text-[11px] bg-paper-sunk border border-line rounded px-2 py-1"
-              />
+              <label className="block">
+                <span className="label">Або скопіюй посилання</span>
+                <input
+                  readOnly value={url} onFocus={(e) => e.currentTarget.select()}
+                  className="w-full font-mono text-[11px]"
+                />
+              </label>
 
               {session.userCode && (
-                <div className="text-sm">
+                <div className="text-sm text-ink">
                   Одноразовий код на сторінці:{' '}
-                  <code className="bg-paper-sunk border border-line rounded px-2 py-1 text-base tracking-widest">
+                  <code className="bg-paper-card border border-line rounded px-2 py-1 text-base tracking-widest">
                     {session.userCode}
                   </code>
                 </div>
@@ -247,40 +327,121 @@ function CliFlow({ provider, needsCode, onDone }: {
           )}
 
           {needsCode && session.phase === 'awaiting' && (
-            <div className="flex flex-wrap gap-2 items-center">
-              <input
-                type="text" value={code} onChange={(e) => setCode(e.target.value)}
-                placeholder="Вставте код зі сторінки"
-                autoComplete="off" spellCheck={false}
-                className="flex-1 min-w-[16rem] font-mono text-sm"
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void submit(); } }}
-              />
-              <button type="button" className="btn-primary text-xs" disabled={busy || !code.trim()} onClick={() => void submit()}>
-                {busy ? '…' : 'Надіслати код'}
-              </button>
-            </div>
+            <label className="block">
+              <span className="label">Код зі сторінки входу</span>
+              <div className="flex flex-wrap gap-2 items-center">
+                <input
+                  type="text" value={code} onChange={(e) => setCode(e.target.value)}
+                  placeholder="встав код сюди"
+                  autoComplete="off" spellCheck={false}
+                  className="flex-1 min-w-[14rem] font-mono text-sm"
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void submit(); } }}
+                />
+                <button type="button" className="btn-primary btn-sm" disabled={busy || !code.trim()} onClick={() => void submit()}>
+                  {busy ? 'Надсилаю…' : 'Надіслати код'}
+                </button>
+              </div>
+            </label>
           )}
         </div>
+      )
+    : null;
+
+  return { start, cancel, busy, live, panel };
+}
+
+/**
+ * Claude and Codex: one card shape, because they are the same job — an
+ * interactive CLI login driven from the browser. They differ only in whether a
+ * code comes back here (Claude) or is entered on the provider's own page
+ * (Codex), and in whether disconnecting is possible at all: Claude's credential
+ * is a row we can delete, Codex's is a file in the `codexhome` volume.
+ *
+ * The action row is where Roman's "кнопки в ряд" complaint is answered.
+ * Connected means the status is the hero and the only visible button is an
+ * outline «Оновити» — reconnecting a working account is a recovery action, so it
+ * lives behind «···» and never sits filled and inviting next to a green status.
+ */
+function CliAccountCard({
+  provider, title, blurb, verdict, checkedAt, needsCode, canDisconnect,
+  onResult, onDisconnect, footnote, how,
+}: {
+  provider: 'claude' | 'codex';
+  title: string;
+  blurb: string;
+  verdict: Verdict;
+  checkedAt: string | null;
+  needsCode: boolean;
+  canDisconnect: boolean;
+  onResult: (o: CheckOutcome) => void;
+  onDisconnect?: () => void;
+  footnote?: React.ReactNode;
+  how?: React.ReactNode;
+}) {
+  const flow = useCliFlow({ provider, needsCode, onDone: onResult });
+
+  return (
+    <AccountCard
+      title={title}
+      blurb={blurb}
+      verdict={verdict}
+      checkedAt={checkedAt}
+      footnote={footnote}
+      how={how}
+      actions={flow.live ? (
+        <button type="button" className="btn-outline btn-sm" onClick={flow.cancel}>Скасувати</button>
+      ) : verdict.connected ? (
+        <>
+          <RefreshButton kind={provider} onResult={onResult} />
+          <MoreMenu>
+            <button type="button" className="btn-quiet btn-sm justify-start" disabled={flow.busy} onClick={flow.start}>
+              Перепідключити
+            </button>
+            {canDisconnect && onDisconnect && (
+              <button type="button" className="btn-danger btn-sm justify-start" onClick={onDisconnect}>
+                Відключити
+              </button>
+            )}
+          </MoreMenu>
+        </>
+      ) : (
+        <>
+          <button type="button" className="btn-primary btn-sm" disabled={flow.busy} onClick={flow.start}>
+            {flow.busy ? 'Запускаю…' : 'Підключити'}
+          </button>
+          <RefreshButton kind={provider} onResult={onResult} />
+        </>
       )}
-    </div>
+    >
+      {flow.panel}
+    </AccountCard>
   );
 }
 
 // ─── Telegram ────────────────────────────────────────────────────────────────
 
 /**
- * Bot token → chat id → test message, in that order, all in one row.
+ * Bot token, then chat id, then a test message — three labelled rows in that
+ * order, each unlocked by the one above it.
  *
- * The chat-id step is the one that used to send Roman to a terminal
- * (`pnpm telegram:setup`). `getUpdates` needs the bot to have been messaged
- * first, so the instruction is inline rather than in a doc he would have to
- * find after the button confused him.
+ * They used to be four buttons on one line with an unlabelled password box,
+ * which is the row Roman could not read. The ordering is not decoration: a chat
+ * id cannot be found without a token, and a test message needs both, so a
+ * disabled button here is telling him what to do next.
  */
-function TelegramFlow({ status, onCheck }: { status: AccountStatus; onCheck: (o: CheckOutcome) => void }) {
+function TelegramFlow({ status, chatId, onCheck }: {
+  status: AccountStatus;
+  /** Current chat id, so the row can show it instead of hiding it in `detail`. */
+  chatId: string | null;
+  onCheck: (o: CheckOutcome) => void;
+}) {
   const [token, setToken] = useState('');
   const [chats, setChats] = useState<TelegramChat[] | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+
+  const hasToken = status.readiness !== 'missing' || token.trim() !== '';
+  const hasChat = Boolean(chatId);
 
   async function saveToken() {
     setBusy('token');
@@ -308,41 +469,46 @@ function TelegramFlow({ status, onCheck }: { status: AccountStatus; onCheck: (o:
     if (r.ok) {
       // Saved id + saved token = the only thing left worth knowing is whether a
       // message actually arrives, so run that immediately.
-      onCheck({ ok: false, message: 'перевіряю…' });
+      onCheck({ ok: false, message: '', pending: true });
       onCheck(await runCheck('telegram'));
     }
   }
 
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-2 items-center">
-        <input
-          type="password" value={token} onChange={(e) => setToken(e.target.value)}
-          placeholder={status.readiness === 'missing' ? 'Bot token від @BotFather' : 'новий bot token (порожньо = лишити)'}
-          autoComplete="new-password" className="flex-1 min-w-[16rem] font-mono text-sm"
-        />
-        <button type="button" className="btn-ghost text-xs" disabled={busy !== null || !token.trim()} onClick={() => void saveToken()}>
-          {busy === 'token' ? '…' : 'Зберегти токен'}
-        </button>
-        <button type="button" className="btn-primary text-xs" disabled={busy !== null} onClick={() => void find()}>
-          {busy === 'find' ? '…' : 'Знайти chat id'}
-        </button>
-        <CheckButton kind="telegram" label="Надіслати тест" onResult={onCheck} disabled={busy !== null} />
-      </div>
-
-      <p className="text-xs text-ink-mute">
-        Перед пошуком <strong>надішли боту будь-яке повідомлення</strong> в Telegram — інакше
-        <code className="mx-1">getUpdates</code> не має що показати.
-      </p>
-
-      {msg && (
-        <div className={`rounded-md border px-3 py-2 text-sm ${
-          msg.ok ? 'border-dot-go/40 bg-dot-go/10 text-dot-go' : 'border-dot-wait/40 bg-dot-wait/10 text-dot-wait'
-        }`}
-        >
-          {msg.text}
+    <div className="space-y-3">
+      <label className="block">
+        <span className="label">Токен бота</span>
+        <div className="flex flex-wrap gap-2 items-center">
+          <input
+            type="password" value={token} onChange={(e) => setToken(e.target.value)}
+            placeholder={status.readiness === 'missing' ? 'токен від @BotFather' : 'новий токен (порожньо = лишити поточний)'}
+            autoComplete="new-password" className="flex-1 min-w-[16rem] font-mono text-sm"
+          />
+          <button
+            type="button" className="btn-outline btn-sm"
+            disabled={busy !== null || !token.trim()} onClick={() => void saveToken()}
+          >
+            {busy === 'token' ? 'Зберігаю…' : 'Зберегти'}
+          </button>
         </div>
-      )}
+      </label>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm text-ink-soft">
+          Chat ID: {chatId ? <code className="text-ink">{chatId}</code> : <span className="text-ink-mute">не заданий</span>}
+        </span>
+        <button
+          type="button" className="btn-outline btn-sm"
+          disabled={busy !== null || !hasToken}
+          title={hasToken ? undefined : 'Спершу збережи токен бота'}
+          onClick={() => void find()}
+        >
+          {busy === 'find' ? 'Шукаю…' : 'Знайти'}
+        </button>
+        {hasToken && hasChat && (
+          <RefreshButton kind="telegram" onResult={onCheck} label="Надіслати тест" />
+        )}
+      </div>
 
       {chats && chats.length > 0 && (
         <div className="space-y-1">
@@ -350,12 +516,21 @@ function TelegramFlow({ status, onCheck }: { status: AccountStatus; onCheck: (o:
             <button
               key={c.id} type="button" disabled={busy !== null}
               onClick={() => void pick(c.id)}
-              className="w-full text-left rounded-md border border-line bg-paper-card hover:border-ink-500 px-3 py-2 text-sm flex items-center justify-between gap-2"
+              className="w-full text-left rounded-lg border border-line bg-paper-sunk hover:border-line-strong px-3 py-2 text-sm flex items-center justify-between gap-2"
             >
-              <span className="truncate">{c.title}</span>
-              <span className="text-xs text-ink-mute shrink-0">{c.type} · {c.id}</span>
+              <span className="truncate text-ink">{c.title}</span>
+              <span className="text-sm text-ink-mute shrink-0">{c.type} · {c.id}</span>
             </button>
           ))}
+        </div>
+      )}
+
+      {msg && (
+        <div className={`rounded-lg border px-3 py-2 text-sm ${
+          msg.ok ? 'border-dot-go/30 bg-dot-go/8 text-dot-go' : 'border-dot-wait/30 bg-dot-wait/8 text-dot-wait'
+        }`}
+        >
+          {msg.text}
         </div>
       )}
     </div>
@@ -364,7 +539,33 @@ function TelegramFlow({ status, onCheck }: { status: AccountStatus; onCheck: (o:
 
 // ─── Gmail ───────────────────────────────────────────────────────────────────
 
-function GmailFlow({ onSmtp, onImap }: {
+/** «Оновити» for Gmail: both protocols, one click, because it is one account. */
+function GmailRefreshButton({ onSmtp, onImap }: {
+  onSmtp: (o: CheckOutcome) => void; onImap: (o: CheckOutcome) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button" className="btn-outline btn-sm" disabled={busy}
+      onClick={async () => {
+        setBusy(true);
+        onSmtp({ ok: false, message: '', pending: true });
+        onImap({ ok: false, message: '', pending: true });
+        // In parallel: two independent handshakes to the same host, and doing
+        // them one after the other doubles the wait for no reason.
+        const [smtp, imap] = await Promise.all([refreshCheck('smtp'), refreshCheck('imap')]);
+        onSmtp(smtp);
+        onImap(imap);
+        setBusy(false);
+      }}
+    >
+      {busy ? 'Перевіряю…' : 'Оновити'}
+    </button>
+  );
+}
+
+function GmailFlow({ connected, onSmtp, onImap }: {
+  connected: boolean;
   onSmtp: (o: CheckOutcome) => void; onImap: (o: CheckOutcome) => void;
 }) {
   const [addr, setAddr] = useState('');
@@ -380,199 +581,255 @@ function GmailFlow({ onSmtp, onImap }: {
     setBusy(false);
     if (r.ok) {
       // Both halves use the same app password, so both are worth proving at once.
-      onSmtp({ ok: false, message: 'перевіряю…' });
-      onImap({ ok: false, message: 'перевіряю…' });
+      onSmtp({ ok: false, message: '', pending: true });
+      onImap({ ok: false, message: '', pending: true });
       onSmtp(await runCheck('smtp'));
       onImap(await runCheck('imap'));
     }
   }
 
   return (
-    <div className="space-y-2">
-      <ol className="text-xs text-ink-mute list-decimal pl-5 space-y-0.5">
-        <li>Увімкни двофакторну автентифікацію (без неї app password недоступний).</li>
-        <li>
-          <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">
-            myaccount.google.com/apppasswords ↗
-          </a>{' '}— створи пароль «websites-factory» (16 символів).
-        </li>
-        <li>Gmail → Settings → Forwarding and POP/IMAP → <strong>Enable IMAP</strong>.</li>
-      </ol>
+    <div className="space-y-3">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="block">
+          <span className="label">Адреса Gmail</span>
+          <input
+            type="email" value={addr} onChange={(e) => setAddr(e.target.value)}
+            placeholder="you@gmail.com" autoComplete="off" className="w-full text-sm"
+          />
+        </label>
+        <label className="block">
+          <span className="label">App password (16 символів)</span>
+          <input
+            type="password" value={pass} onChange={(e) => setPass(e.target.value)}
+            placeholder="xxxx xxxx xxxx xxxx" autoComplete="new-password"
+            className="w-full font-mono text-sm"
+          />
+        </label>
+      </div>
 
       <div className="flex flex-wrap gap-2 items-center">
-        <input
-          type="email" value={addr} onChange={(e) => setAddr(e.target.value)}
-          placeholder="you@gmail.com" autoComplete="off" className="flex-1 min-w-[14rem] text-sm"
-        />
-        <input
-          type="password" value={pass} onChange={(e) => setPass(e.target.value)}
-          placeholder="app password (16 символів)" autoComplete="new-password"
-          className="flex-1 min-w-[14rem] font-mono text-sm"
-        />
-        <button type="button" className="btn-primary text-xs" disabled={busy} onClick={() => void save()}>
-          {busy ? '…' : 'Підключити'}
+        <button
+          type="button"
+          className={connected ? 'btn-outline btn-sm' : 'btn-primary btn-sm'}
+          disabled={busy} onClick={() => void save()}
+        >
+          {busy ? 'Зберігаю…' : connected ? 'Замінити пароль' : 'Підключити'}
         </button>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        <CheckButton kind="smtp" label="Перевірити SMTP" onResult={onSmtp} />
-        <CheckButton kind="imap" label="Перевірити IMAP" onResult={onImap} />
-      </div>
-
       {msg && (
-        <div className={`rounded-md border px-3 py-2 text-sm ${
-          msg.ok ? 'border-dot-go/40 bg-dot-go/10 text-dot-go' : 'border-dot-wait/40 bg-dot-wait/10 text-dot-wait'
+        <div className={`rounded-lg border px-3 py-2 text-sm ${
+          msg.ok ? 'border-dot-go/30 bg-dot-go/8 text-dot-go' : 'border-dot-wait/30 bg-dot-wait/8 text-dot-wait'
         }`}
         >
           {msg.text}
         </div>
       )}
-      <p className="text-xs text-ink-mute">
-        Пробіли в паролі можна лишати — вони прибираються автоматично. Заповнюються обидва
-        блоки (SMTP і IMAP) одним паролем, бо в Gmail це один і той самий app password.
-      </p>
     </div>
   );
 }
 
 // ─── Block ───────────────────────────────────────────────────────────────────
 
-export function ConnectedAccounts({ accounts }: { accounts: AccountsSnapshot }) {
-  const [checks, setChecks] = useState<Record<string, CheckOutcome>>({});
+export function ConnectedAccounts({ accounts, checks, checksError }: {
+  accounts: AccountsSnapshot;
+  /** Real, cached check results loaded on the server at render time. */
+  checks: ChecksByKind;
+  checksError: string | null;
+}) {
+  const [live, setLive] = useState<Partial<Record<CheckKind, CheckOutcome>>>({});
   const set = useCallback(
-    (kind: string) => (o: CheckOutcome) => setChecks((c) => ({ ...c, [kind]: o })),
+    (kind: CheckKind) => (o: CheckOutcome) => setLive((c) => ({ ...c, [kind]: o })),
     [],
   );
 
   const [disc, setDisc] = useState<string | null>(null);
-  async function doDisconnect(provider: string) {
+  async function doDisconnect(provider: CheckKind) {
     const r = await disconnectAccount(provider);
     setDisc(r.message);
-    if (r.ok) setChecks((c) => ({ ...c, [provider]: { ok: false, message: 'Відключено.' } }));
+    if (r.ok) setLive((c) => ({ ...c, [provider]: { ok: false, message: 'Відключено.' } }));
   }
+
+  const at = (kind: CheckKind) => (live[kind] ? null : checks[kind]?.at ?? null);
+  const v = (kind: CheckKind, status: AccountStatus | null) => verdictOf(status, checks[kind], live[kind]);
+
+  const claude = v('claude', accounts.claude);
+  const codex = v('codex', accounts.codex);
+  const telegram = v('telegram', accounts.telegram);
+  const waha = v('waha', accounts.whatsapp);
+  const flowkit = v('flowkit', accounts.flowkit);
+  const smtp = v('smtp', accounts.gmail);
+  const imap = v('imap', accounts.gmail);
+  const gmail = gmailVerdict(smtp, imap);
 
   // WAHA drives the QR: the check reports `needsQr` when the session is
   // unpaired, and the QR appears right there instead of on another port.
-  const wahaNeedsQr = Boolean(checks.waha?.needsQr);
+  const wahaNeedsQr = Boolean(live.waha?.needsQr ?? checks.waha?.needsQr);
 
   return (
-    <section className="card p-4 space-y-4">
+    <section className="card p-5 space-y-4">
       <div>
-        <h2 className="text-sm font-medium text-ink">Підключені акаунти</h2>
-        <p className="text-xs text-ink-mute mt-0.5">
-          Усе підключається звідси, з браузера — термінал не потрібен. Стан{' '}
-          <Badge tone="info">налаштовано</Badge> означає «дані збережені»;{' '}
-          <Badge tone="ok">✓ підключено</Badge> зʼявляється лише після справжньої перевірки.
+        <h2 className="h-section">Підключені акаунти</h2>
+        <p className="text-sm text-ink-mute mt-1 max-w-[70ch]">
+          Стан кожного рядка — результат справжньої перевірки, яка запускається при відкритті
+          сторінки і кешується на 10 хвилин. «Оновити» перепитує зараз.
         </p>
       </div>
 
+      {checksError && (
+        <div className="rounded-lg border border-dot-wait/30 bg-dot-wait/8 px-3 py-2 text-sm text-dot-wait">
+          {checksError}
+        </div>
+      )}
+
       {!accounts.masterKey && (
-        <div className="rounded-md border border-dot-stop/40 bg-dot-stop/10 px-3 py-2 text-sm text-dot-stop">
+        <div className="rounded-lg border border-dot-stop/30 bg-dot-stop/8 px-3 py-2 text-sm text-dot-stop">
           <code>SETTINGS_MASTER_KEY</code> не заданий — секрети неможливо зберегти.
           Підключення нижче не спрацюють, доки ключ не зʼявиться в <code>.env</code>.
         </div>
       )}
 
       <div className="grid gap-3">
-        <AccountRow
+        <CliAccountCard
+          provider="claude"
           title="Claude Code"
           blurb="Агентні етапи: brief, контент, збірка сайту, visual QA. По підписці Pro/Max."
-          status={accounts.claude}
-          check={checks.claude}
-        >
-          <CliFlow provider="claude" needsCode onDone={set('claude')} />
-          <div className="flex flex-wrap gap-2">
-            <CheckButton kind="claude" onResult={set('claude')} />
-            {accounts.claude.readiness === 'configured' && (
-              <button type="button" className="btn-ghost text-xs" onClick={() => void doDisconnect('claude')}>
-                Відключити
-              </button>
-            )}
-          </div>
-          <p className="text-xs text-ink-mute">
-            «Підключити» запускає <code>claude setup-token</code> у контейнері фабрики, показує
-            посилання і чекає на код звідти. Токен зберігається зашифрованим і діє наживо.
-          </p>
-        </AccountRow>
+          verdict={claude}
+          checkedAt={at('claude')}
+          needsCode
+          canDisconnect
+          onResult={set('claude')}
+          onDisconnect={() => void doDisconnect('claude')}
+          footnote="Токен зберігається зашифрованим і діє наживо, без перезапуску контейнерів."
+          how={(
+            <p>
+              «Підключити» запускає <code>claude setup-token</code> у контейнері фабрики, показує
+              посилання на сторінку входу і чекає на код звідти. Код вводиться тут — CLI стоїть на
+              запиті, доки не отримає його.
+            </p>
+          )}
+        />
 
-        <AccountRow
+        <CliAccountCard
+          provider="codex"
           title="Codex CLI"
           blurb="Генерація зображень (gen-image) по підписці ChatGPT."
-          status={accounts.codex}
-          check={checks.codex}
-        >
-          <CliFlow provider="codex" needsCode={false} onDone={set('codex')} />
-          <div className="flex flex-wrap gap-2">
-            <CheckButton kind="codex" onResult={set('codex')} />
-          </div>
-          <p className="text-xs text-ink-mute">
-            Код вводиться на сторінці OpenAI — сюди його повертати не треба, статус оновиться сам.
-            Логін лягає у volume <code>codexhome</code> і переживає ребілди образу.
-          </p>
-        </AccountRow>
+          verdict={codex}
+          checkedAt={at('codex')}
+          needsCode={false}
+          canDisconnect={false}
+          onResult={set('codex')}
+          footnote="Логін лягає у volume codexhome і переживає ребілди образу."
+          how={(
+            <p>
+              Код вводиться на сторінці OpenAI, а не тут: CLI сам опитує їхній сервер і сюди
+              повертати нічого не треба — статус оновиться самостійно.
+            </p>
+          )}
+        />
 
-        <AccountRow
+        {/* ── Telegram ── */}
+        <AccountCard
           title="Telegram"
           blurb="Тільки сповіщення з лінками в цей UI (рішення №9). Approve тут не робиться."
-          status={accounts.telegram}
-          check={checks.telegram}
+          verdict={telegram}
+          checkedAt={at('telegram')}
+          // The re-check for this card is «Надіслати тест» inside the flow
+          // below — it IS the check (the only way to prove a token and a chat id
+          // together is to send a message). A second «Оновити» here would be the
+          // same button twice under two names.
+          actions={telegram.connected ? (
+            <MoreMenu>
+              <button type="button" className="btn-danger btn-sm justify-start" onClick={() => void doDisconnect('telegram')}>
+                Відключити
+              </button>
+            </MoreMenu>
+          ) : null}
+          how={(
+            <p>
+              Перед пошуком chat id <strong>надішли боту будь-яке повідомлення</strong> — Telegram
+              віддає список чатів через <code>getUpdates</code>, а туди потрапляють лише ті, хто
+              боту вже писав.
+            </p>
+          )}
         >
-          <TelegramFlow status={accounts.telegram} onCheck={set('telegram')} />
-        </AccountRow>
+          <TelegramFlow
+            status={accounts.telegram}
+            chatId={accounts.telegramChatId}
+            onCheck={set('telegram')}
+          />
+          <Outcome outcome={live.telegram} />
+        </AccountCard>
 
-        <AccountRow
+        {/* ── WhatsApp ── */}
+        <AccountCard
           title="WhatsApp (WAHA)"
           blurb="Self-hosted WAHA, не Meta Cloud API (рішення №2). Головний канал outreach."
-          status={accounts.whatsapp}
-          check={checks.waha}
-        >
-          <div className="flex flex-wrap gap-2">
-            <CheckButton kind="waha" label="Перевірити / показати стан" onResult={set('waha')} />
-          </div>
-          <WahaQr autoShow={wahaNeedsQr} />
-          <p className="text-xs text-ink-mute">
-            Скануй <strong>виділеним</strong> номером, не особистим: протокол неофіційний і номер
-            можуть заблокувати. <code>WAHA_API_KEY</code> і HMAC key — у «Розширених» нижче
-            (той самий, що в <code>.env</code> контейнера WAHA).
-          </p>
-        </AccountRow>
+          verdict={waha}
+          checkedAt={at('waha')}
+          // Scanning is the whole card when the session is unpaired, so the QR
+          // leads and «Оновити» follows it. Once WhatsApp is connected there is
+          // nothing to scan and re-checking is the only action left.
+          actions={(
+            <>
+              <WahaQr autoShow={wahaNeedsQr} primary={wahaNeedsQr} />
+              <RefreshButton kind="waha" onResult={set('waha')} />
+            </>
+          )}
+          footnote="Скануй виділеним номером, не особистим: протокол неофіційний і номер можуть заблокувати."
+          how={(
+            <p>
+              <code>WAHA_API_KEY</code> і HMAC-ключ живуть у «Розширених» нижче — це той самий
+              ключ, що в <code>.env</code> контейнера WAHA.
+            </p>
+          )}
+        />
 
-        <AccountRow
+        {/* ── Gmail ── */}
+        <AccountCard
           title="Gmail"
           blurb="Резервний канал; месенджери мають пріоритет (рішення №8). IMAP ловить відповіді."
-          status={accounts.gmail}
-          check={checks.smtp ?? checks.imap}
-        >
-          <GmailFlow onSmtp={set('smtp')} onImap={set('imap')} />
-          {checks.imap && checks.imap.message !== 'перевіряю…' && (
-            <div className={`rounded-md border px-3 py-2 text-sm ${
-              checks.imap.ok
-                ? 'border-dot-go/40 bg-dot-go/10 text-dot-go'
-                : 'border-dot-stop/40 bg-dot-stop/10 text-dot-stop'
-            }`}
-            >
-              IMAP: {checks.imap.message}
-            </div>
+          verdict={gmail}
+          checkedAt={at('smtp')}
+          // ONE «Оновити», not one per protocol: Gmail is a single account with
+          // a single app password, and two buttons here would make Roman decide
+          // which half he cares about when the answer is always "both".
+          actions={(
+            <GmailRefreshButton onSmtp={set('smtp')} onImap={set('imap')} />
           )}
-        </AccountRow>
+          footnote="Пробіли в паролі можна лишати — вони прибираються автоматично. Один app password заповнює і SMTP, і IMAP."
+          how={(
+            <ol className="list-decimal pl-5 space-y-1">
+              <li>Увімкни двофакторну автентифікацію — без неї app password недоступний.</li>
+              <li>
+                На{' '}
+                <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">
+                  myaccount.google.com/apppasswords ↗
+                </a>{' '}
+                створи пароль «websites-factory» (16 символів).
+              </li>
+              <li>Gmail → Settings → Forwarding and POP/IMAP → <strong>Enable IMAP</strong>.</li>
+            </ol>
+          )}
+        >
+          <GmailFlow connected={gmail.connected} onSmtp={set('smtp')} onImap={set('imap')} />
+          <Outcome outcome={live.smtp} prefix="SMTP" />
+          <Outcome outcome={live.imap} prefix="IMAP" />
+        </AccountCard>
 
-        <AccountRow
+        {/* ── FlowKit ── */}
+        <AccountCard
           title="FlowKit"
           blurb="AI-відео для hero. Опційно: без нього — Ken Burns по реальних фото."
-          status={accounts.flowkit}
-          check={checks.flowkit}
-        >
-          <div className="flex flex-wrap gap-2">
-            <CheckButton kind="flowkit" onResult={set('flowkit')} />
-          </div>
-          <p className="text-xs text-ink-mute">
-            Підключення не автоматизується: FlowKit — це Python-агент на маку з Chrome-розширенням
-            (<code>docs/MEDIA.md</code>). Тут лише видно, доступний він чи ні.
-          </p>
-        </AccountRow>
+          verdict={flowkit}
+          checkedAt={at('flowkit')}
+          actions={<RefreshButton kind="flowkit" onResult={set('flowkit')} />}
+          footnote="Підключити звідси неможливо: FlowKit — це Python-агент на маку з Chrome-розширенням (docs/MEDIA.md). Тут видно лише, доступний він чи ні."
+        />
       </div>
 
-      {disc && <p className="text-sm text-ink-mute">{disc}</p>}
+      {disc && <p className="text-sm text-ink-soft">{disc}</p>}
     </section>
   );
 }

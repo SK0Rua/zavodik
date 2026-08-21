@@ -31,6 +31,7 @@ import type { RubricVerdict } from '../build/rubric.js';
 import { checkProvenance, type ProvenanceReport } from '../build/provenance.js';
 import { generateDecorativeBackground, planHeroMedia } from '../build/media.js';
 import { outputDir, prepareWorkspace, workspaceDir, SITES_ROOT } from '../build/workspace.js';
+import { buildLogPath, logStage } from '../build/buildLog.js';
 import { log } from '../lib/logger.js';
 import { resolveProject } from '../build/projectRef.js';
 
@@ -79,6 +80,18 @@ export async function buildSiteHandler(payload: JobPayload): Promise<void> {
 
   const dir = workspaceDir(businessId, projectId);
   const isFix = iteration > 0 && existsSync(path.join(dir, 'package.json'));
+
+  // The live trace Roman watches while this runs. Written into the workspace
+  // itself, so `factory` (which serves the API) reads it off the shared
+  // `sitesdata` volume without this process having to publish anything.
+  const logPath = buildLogPath(businessId, projectId);
+  await logStage(
+    logPath,
+    isFix
+      ? `Ітерація ${iteration}: агент виправляє зауваження QA`
+      : 'Збірка почалась: готую воркспейс',
+    'site-builder',
+  );
 
   await db.update(schema.siteProjects)
     .set({ state: 'building', dir })
@@ -144,6 +157,11 @@ last action, even if you think you are finished — the pipeline reads it as you
       snapshot, brief, design: designDoc.chosen, verdict, heroMedia,
       projectId, niche: campaign?.niche ?? 'beauty', fresh: true,
     });
+    await logStage(
+      logPath,
+      `Воркспейс готовий · напрямок «${designDoc.chosen.name}» · фото: ${snapshot.assets.length}`,
+      'site-builder',
+    );
 
     prompt = `Build the demo website described in \`BUILD-TASK.md\` in this workspace.
 
@@ -177,6 +195,13 @@ action. Everything else can be perfect and the run still reports badly without i
    * as an unresolved note. A build that is genuinely broken still fails, because
    * the independent build + provenance checks below are what actually gate.
    */
+  await logStage(
+    logPath,
+    `Агент почав працювати (ліміт ${isFix ? config.build.fixMaxTurns : config.build.maxTurns} кроків, `
+    + `${Math.round(config.build.timeoutMs / 60_000)} хв)`,
+    'site-builder',
+  );
+
   let result: BuildResult;
   try {
     result = await runCodeAgent(
@@ -188,6 +213,7 @@ action. Everything else can be perfect and the run still reports badly without i
         kind: 'builder',
         maxTurns: isFix ? config.build.fixMaxTurns : config.build.maxTurns,
         timeoutMs: config.build.timeoutMs,
+        buildLogPath: logPath,
         // The GSAP skills copied into <workspace>/.claude/skills/ are only offered
         // to the model when skills are explicitly enabled.
         skills: 'all',
@@ -198,6 +224,13 @@ action. Everything else can be perfect and the run still reports badly without i
     );
   } catch (err) {
     const builtAnyway = existsSync(path.join(dir, 'out', 'index.html'));
+    await logStage(
+      logPath,
+      builtAnyway
+        ? 'Агент завершився без звіту, але зібрана сторінка є — перевіряю її'
+        : `Агент впав: ${String((err as Error)?.message ?? err).slice(0, 200)}`,
+      'site-builder',
+    );
     if (!builtAnyway) throw err; // nothing to salvage
     log.warn('builder agent produced no valid result.json but did produce a build; continuing to verification', {
       businessId, projectId, iteration, err: String((err as Error)?.message ?? err).slice(0, 300),
@@ -218,6 +251,13 @@ action. Everything else can be perfect and the run still reports badly without i
     notes: result.notes.slice(0, 200),
   });
 
+  await logStage(
+    logPath,
+    `Агент закінчив за ${Math.round(agentSeconds / 60)} хв`
+    + (result.unresolved.length ? ` · невирішених питань: ${result.unresolved.length}` : ''),
+    'site-builder',
+  );
+
   if (!result.ok) {
     throw new Error(
       `builder agent reported failure: ${result.notes.slice(0, 400)}` +
@@ -226,8 +266,10 @@ action. Everything else can be perfect and the run still reports badly without i
   }
 
   // ── CODE verifies (the agent is not trusted) ──────────────────────────────
+  await logStage(logPath, 'Перевіряю збірку незалежно: pnpm build', 'site-builder');
   const verify = await run('pnpm', ['build'], dir, config.build.verifyTimeoutMs);
   if (verify.code !== 0) {
+    await logStage(logPath, `pnpm build впав (код ${verify.code})`, 'site-builder');
     throw new Error(
       `independent \`pnpm build\` failed after the agent reported success (exit ${verify.code}): ` +
       verify.output.slice(-1500),
@@ -253,6 +295,12 @@ action. Everything else can be perfect and the run still reports badly without i
   log.info('stage 10 complete', {
     businessId, projectId, iteration, totalSeconds: Math.round((Date.now() - startedAt) / 1000),
   });
+  await logStage(
+    logPath,
+    `Збірка зелена${provIssues.length ? `, але провенанс дав ${provIssues.length} зауваж.` : ''}`
+    + ' — передаю на візуальну перевірку',
+    'site-builder',
+  );
 
   await enqueue('visual-qa', {
     businessId, projectId, campaignId: payload.campaignId, iteration,

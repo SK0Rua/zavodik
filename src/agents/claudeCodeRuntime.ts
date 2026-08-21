@@ -27,6 +27,7 @@ import type { ZodType } from 'zod';
 import { config } from '../config.js';
 import { log } from '../lib/logger.js';
 import { zodToJsonSchema, extractJson, jsonOnlyInstruction } from './schema.js';
+import { appendBuildLog, summarizeSdkMessage } from '../build/buildLog.js';
 import { withAgentSlot } from './semaphore.js';
 import { codeAgentEnv, buildPreToolUseGuard } from './sandbox.js';
 import {
@@ -108,8 +109,20 @@ interface CollectedRun {
 /**
  * Drive a query() to completion, collecting everything we need for both
  * result extraction and rate-limit detection. Aborts on timeout.
+ *
+ * `trace` is the live-build log: when a path is given, every message that says
+ * something a person would want to see is summarised into it as it arrives.
+ * This is the ONLY place the SDK stream is observed, so it is the only place
+ * such a trace can be produced — and it is strictly fire-and-forget: an
+ * unwritable log must never disturb a running build (see `appendBuildLog`).
  */
-async function collectRun(options: Options, prompt: string, timeoutMs: number, label: string): Promise<CollectedRun> {
+async function collectRun(
+  options: Options,
+  prompt: string,
+  timeoutMs: number,
+  label: string,
+  trace?: { logPath?: string; agent?: string },
+): Promise<CollectedRun> {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), timeoutMs);
   const out: CollectedRun = {
@@ -121,6 +134,13 @@ async function collectRun(options: Options, prompt: string, timeoutMs: number, l
     const q = query({ prompt, options: { ...options, abortController: abort } });
     for await (const msg of q as AsyncIterable<SDKMessage>) {
       const m = msg as SDKMessage & Record<string, any>;
+
+      if (trace?.logPath) {
+        const event = summarizeSdkMessage(m, trace.agent);
+        // Not awaited: the agent stream must not be paced by a disk write, and
+        // ordering is preserved anyway because appendFile queues per handle.
+        if (event) void appendBuildLog(trace.logPath, event);
+      }
 
       if (m.type === 'rate_limit_event') {
         const info = m.rate_limit_info as CollectedRun['rateLimit'];
@@ -262,7 +282,9 @@ export const claudeCodeRuntime: AgentRuntime = {
 
           const prompt = `${userContent}${imageBlock}${jsonOnlyInstruction(schema)}`;
           const startedAt = Date.now();
-          const run = await collectRun(options, prompt, timeoutMs, `structured:${name}`);
+          const run = await collectRun(options, prompt, timeoutMs, `structured:${name}`, {
+            logPath: opts.buildLogPath, agent: name,
+          });
           reportUsage(opts.onUsage, run, modelFor(opts.heavy), startedAt);
 
           if (!run.success && run.structuredOutput === undefined && !run.resultText) {
@@ -358,7 +380,9 @@ export const claudeCodeRuntime: AgentRuntime = {
         `matching this JSON Schema, then stop:\n${JSON.stringify(zodToJsonSchema(resultSchema), null, 2)}`;
 
       const startedAt = Date.now();
-      const run = await collectRun(options, prompt, timeoutMs, `code:${opts.name}`);
+      const run = await collectRun(options, prompt, timeoutMs, `code:${opts.name}`, {
+        logPath: opts.buildLogPath, agent: opts.name,
+      });
       reportUsage(opts.onUsage, run, modelFor(opts.heavy), startedAt);
 
       // A session can end on error_max_turns having ALREADY written a valid

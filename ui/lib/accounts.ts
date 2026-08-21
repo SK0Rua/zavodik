@@ -1,15 +1,18 @@
 /**
  * "Підключені акаунти" — what is configured, as seen at page render time.
  *
- * This is deliberately the CHEAP half of the answer. It reports whether the
- * credentials exist and are well-formed, which is what makes the page render
- * instantly; whether they actually *work* is the "Перевірити" button on each
- * row, which runs the real check in the factory (a Claude ping, an SMTP
- * handshake, a live Telegram message).
+ * This is deliberately the CHEAP half of the answer: whether the credentials
+ * exist and are well-formed. Whether they actually WORK comes from
+ * `lib/checks.ts`, which reads the factory's cached real checks (a Claude ping,
+ * an SMTP handshake, a live WAHA session query) — that is what the card's
+ * status chip shows.
  *
- * The distinction is honest rather than pedantic, and the UI states it: a row
- * says "налаштовано" from this file and only says "підключено" after a check
- * has come back green in the same session.
+ * So this file no longer decides any status word. It answers exactly one
+ * question the checks cannot: "is there anything saved here at all?", which is
+ * the difference between «не підключено» (nothing to check) and «помилка»
+ * (something is saved and the dependency refused it). Roman's complaint on
+ * 2026-08-21 was precisely that this file's cheap guess was being displayed as
+ * if it were the verdict.
  */
 import { effectiveValue } from './settings';
 
@@ -30,6 +33,14 @@ export interface AccountsSnapshot {
   whatsapp: AccountStatus;
   gmail: AccountStatus;
   flowkit: AccountStatus;
+  /**
+   * The Telegram chat id in plain sight.
+   *
+   * Not a secret (it is a number identifying Roman's own chat with his own bot)
+   * and the card shows it as its own labelled row, so "which chat does this
+   * send to" is answerable without opening «Розширені».
+   */
+  telegramChatId: string | null;
   /** Secrets cannot be stored at all without it — the block says so up top. */
   masterKey: boolean;
 }
@@ -115,5 +126,9 @@ export async function loadAccounts(): Promise<AccountsSnapshot> {
 
   const { masterKeyConfigured } = await import('./settings');
 
-  return { claude, codex, telegram, whatsapp, gmail, flowkit, masterKey: masterKeyConfigured() };
+  return {
+    claude, codex, telegram, whatsapp, gmail, flowkit,
+    telegramChatId: tgChat || null,
+    masterKey: masterKeyConfigured(),
+  };
 }
