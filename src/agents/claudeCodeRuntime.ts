@@ -325,7 +325,10 @@ export const claudeCodeRuntime: AgentRuntime = {
         model: modelFor(opts.heavy),
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
-        allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
+        // Default: the builder's tool set. A caller may substitute its own —
+        // the social finder swaps Bash for WebSearch, since it searches rather
+        // than builds. The PreToolUse guard below applies either way.
+        allowedTools: opts.allowedTools ?? ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
         maxTurns: opts.maxTurns ?? 80,
         // Workspace boundary enforcement. MUST be a PreToolUse hook: canUseTool
         // is not consulted under bypassPermissions (SDK emits

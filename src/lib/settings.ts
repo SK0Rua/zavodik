@@ -196,6 +196,14 @@ export const SETTINGS: SettingDef[] = [
   { key: 'SOCIAL_DISCOVERY', label: 'Шукати соцмережі', group: 'system', kind: 'boolean', default: 'true' },
   { key: 'SOCIAL_DISCOVERY_MAX_CANDIDATES', label: 'Профілів на бізнес', group: 'system', kind: 'number', default: '6', validate: num(1, 30) },
   { key: 'SOCIAL_DISCOVERY_DELAY_MS', label: 'Пауза між запитами (мс)', group: 'system', kind: 'number', default: '2500', validate: num(0, 60000) },
+  {
+    key: 'SOCIAL_FINDER', label: 'Хто шукає профілі', group: 'system', kind: 'select',
+    options: ['both', 'engines', 'agent'], default: 'both',
+    hint: 'engines = пошуковики з нашого IP (безкоштовно, але на сервері їх блокують). '
+      + 'agent = Claude WebSearch з інфраструктури Anthropic (обходить блок, витрачає підписку). '
+      + 'both = спершу пошуковики, агент лише коли вони дали <2 кандидатів.',
+  },
+  { key: 'SOCIAL_FINDER_MAX_CANDIDATES', label: 'Кандидатів від агента', group: 'system', kind: 'number', default: '8', validate: num(1, 12) },
   { key: 'GOSOM_DEPTH', label: 'gosom: глибина скролу', group: 'system', kind: 'number', default: '10', validate: num(1, 100) },
   { key: 'GOSOM_ZOOM', label: 'gosom: zoom', group: 'system', kind: 'number', default: '15', validate: num(1, 21) },
   { key: 'GOSOM_RADIUS', label: 'gosom: радіус (м)', group: 'system', kind: 'number', default: '10000', validate: num(100, 200000) },

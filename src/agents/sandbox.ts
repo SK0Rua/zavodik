@@ -202,6 +202,22 @@ export function evaluateToolCall(cwd: string, toolName: string, input: unknown):
     return { allow: true };
   }
 
+  // ── network tools ─────────────────────────────────────────────────────────
+  //
+  // WebSearch is allowed: it is executed by Anthropic's infrastructure, so it
+  // reads nothing of ours and is the one search path a blocked server IP still
+  // has (see socialFinderAgent.ts).
+  //
+  // WebFetch is DENIED even when a caller lists it. Measured 2026-08-21: it
+  // fetches from THIS host's egress — it reported our own public IP and was
+  // served a DuckDuckGo CAPTCHA — so it is both useless for bypassing engine
+  // blocks and a way for a prompt-injected page to make our server fetch an
+  // arbitrary URL. Anything that must be fetched goes through `capture.ts`,
+  // which stores the response as evidence.
+  if (toolName === 'WebFetch') {
+    return { allow: false, reason: 'WebFetch runs from the factory\'s own egress; use WebSearch or capture.ts' };
+  }
+
   return { allow: true };
 }
 

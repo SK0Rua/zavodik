@@ -84,6 +84,19 @@ export interface CodeAgentOptions {
    */
   onUsage?: (usage: AgentUsage) => void;
   /**
+   * Replaces the default workspace tool set
+   * (`Bash`,`Read`,`Write`,`Edit`,`Glob`,`Grep`) for calls that need a different
+   * one. The social finder passes `['ToolSearch','WebSearch','Read','Write']`:
+   * it must reach the network through Anthropic's own search (our server IP is
+   * blocked by the engines) but must never run Bash.
+   *
+   * `ToolSearch` belongs in the list whenever a deferred tool like `WebSearch`
+   * is used — the SDK does not hand the agent that schema until it looks it up.
+   *
+   * The workspace-boundary hook still runs over whatever is listed here.
+   */
+  allowedTools?: string[];
+  /**
    * Skills the workspace session may use, by directory/SKILL.md name, or 'all'.
    * The site builder copies the official GSAP skills into
    * `<workspace>/.claude/skills/` and passes 'all' so the agent can consult them.

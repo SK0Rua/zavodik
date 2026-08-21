@@ -35,6 +35,7 @@ import { config } from '../config.js';
 import { captureScreenshot, launchBrowser, newCapturePage } from './capture.js';
 import { detectContacts, cleanProfileUrl } from './messengers.js';
 import { scoreProfileMatch, type MatchVerdict, type SocialPlatform } from './socialMatch.js';
+import { isRateLimitedError } from '../agents/types.js';
 
 export interface SocialTargetBusiness {
   id: string;
@@ -540,7 +541,11 @@ export async function discoverSocials(
     // dropped for the rest of the run: retrying a rate-limited host on every
     // query wastes minutes and hardens the block.
     const deadEngines = new Set<string>();
-    outer: for (const q of queries) {
+    const finderMode = config.socialDiscovery.finder;
+    if (finderMode === 'agent') {
+      result.notes.push('SOCIAL_FINDER=agent — search engines skipped');
+    }
+    outer: for (const q of finderMode === 'agent' ? [] : queries) {
       for (const engine of ENGINES) {
         if (deadEngines.has(engine.name)) continue;
         const serpUrl = engine.url(q);
@@ -630,14 +635,52 @@ export async function discoverSocials(
       }
     }
 
+    // ── 3b: the agent finder ────────────────────────────────────────────────
+    //
+    // The engines above run from OUR IP. On the server they are largely blocked
+    // (Brave 429, DuckDuckGo 403), which is what produced a run of businesses
+    // with zero candidates and a `socials_unresolved` gap that a single manual
+    // Google search could have closed. The agent searches through Anthropic's
+    // infrastructure instead, so it is unaffected by that block.
+    //
+    // In `both` — the default — it is a FALLBACK, not a second opinion: the
+    // engines are free and the agent spends the subscription window, so it only
+    // runs when they came back nearly empty. `engineCandidates` is counted
+    // before the merge so the threshold means what it says.
+    const engineCandidates = byUrl.size;
+    const engineFailedEntirely = result.serpsCaptured === 0 && result.serpsFailed > 0;
+    const wantAgent = finderMode === 'agent'
+      || (finderMode === 'both' && (engineCandidates < 2 || engineFailedEntirely));
+
+    if (wantAgent) {
+      const { findSocialCandidates } = await import('./socialFinderAgent.js');
+      const outcome = await findSocialCandidates(biz, {
+        knownProfiles: [...byUrl.values()].map((c) => c.url),
+      });
+      let added = 0;
+      for (const cand of outcome.candidates) {
+        if (skip.has(cand.platform)) continue;
+        // Same dedupe map as the engines: a profile both paths found keeps ONE
+        // candidate row carrying both provenances in `foundVia`.
+        if (addCandidate(byUrl, cand, cand.foundVia[0] ?? 'agent')) added++;
+      }
+      result.notes.push(
+        `agent finder: ${outcome.candidates.length} lead(s), ${added} new`
+        + ` (engines had ${engineCandidates})`,
+      );
+      for (const n of outcome.notes.slice(0, 6)) result.notes.push(`agent: ${n}`);
+    } else if (finderMode === 'both') {
+      result.notes.push(`agent finder not needed — engines found ${engineCandidates} candidates`);
+    }
+
     result.candidates = [...byUrl.values()];
 
     if (result.candidates.length === 0) {
       result.gap = 'socials_unresolved';
       result.notes.push(
-        result.serpsCaptured === 0
+        result.serpsCaptured === 0 && !wantAgent
           ? 'no search engine was reachable'
-          : 'no candidate profiles in any SERP',
+          : 'no candidate profiles found by any source',
       );
       return result;
     }
@@ -647,10 +690,19 @@ export async function discoverSocials(
     // Ordering matters when the cap bites: a candidate whose handle already
     // resembles the business name is far likelier to be the right profile, so
     // the cheap pre-filter spends the budget where it pays.
+    // An AGENT lead is ordered ahead of an engine one at equal footing, and that
+    // is not a claim that the agent is right. `nameSimilarity` compares the
+    // handle to the business name and nothing else, so it is blind to the two
+    // signals the agent actually searched on — the phone and the street address.
+    // A salon whose Instagram is the owner's personal name scores near zero here
+    // and would be cut in favour of engine noise that merely shares the word
+    // "beauty". The agent also only ran BECAUSE the engines came back nearly
+    // empty, so its leads are usually the only real ones present.
     const { nameSimilarity } = await import('./socialMatch.js');
+    const fromAgent = (c: SocialCandidate) => c.foundVia.some((v) => v.startsWith('agent'));
     const ordered = result.candidates
       .map((c) => ({ c, pre: nameSimilarity(biz.name, c.handle, c.handle) }))
-      .sort((a, b) => b.pre - a.pre)
+      .sort((a, b) => (Number(fromAgent(b.c)) - Number(fromAgent(a.c))) || (b.pre - a.pre))
       .slice(0, cfg.maxCandidates)
       .map((x) => x.c);
 
@@ -736,6 +788,12 @@ export async function discoverSocials(
     }
     return result;
   } catch (err) {
+    // One exception to "a failure is a gap": an exhausted subscription window is
+    // not a fact about the business, it is a fact about the clock. The queue
+    // knows how to park and requeue it (SPEC §2.3б); recording
+    // `socials_unresolved` instead would permanently mark a findable business as
+    // unfindable because the agent happened to be rate-limited that minute.
+    if (isRateLimitedError(err)) throw err;
     // A hard failure is still a gap, never a thrown enrichment job.
     log.warn('social discovery failed', { businessId: biz.id, err: String(err).slice(0, 300) });
     result.gap = 'socials_unresolved';

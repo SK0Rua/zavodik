@@ -39,6 +39,11 @@ export async function getBoss(): Promise<PgBoss> {
  */
 const AGENT_JOBS: ReadonlySet<JobName> = new Set<JobName>([
   'enrich', 'score-and-qa', 'content-and-design', 'build-site', 'visual-qa', 'request-approval',
+  // Since the agent-led social finder (SOCIAL_FINDER), this job can spend the
+  // subscription window too: the engines are blocked on the server, so the
+  // fallback fires routinely rather than rarely. Running it wide would park the
+  // extra workers on the agent semaphore while their 30-minute expiry ran down.
+  'enrich-socials',
 ]);
 
 const RETRY: Partial<Record<JobName, { limit: number; delay: number }>> = {

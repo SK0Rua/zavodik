@@ -16,8 +16,13 @@
  *   - no fact deletion. `enrich` clears `business_facts` before rebuilding
  *     them; this must never do that, because the demo currently being built may
  *     be reading them.
- *   - no agent call. Search + capture + deterministic scoring, so it does not
- *     consume the subscription window and is not in AGENT_JOBS.
+ *   - no status transition, no fact deletion (above). It MAY now make one agent
+ *     call: when the search engines are blocked — which on the server is the
+ *     normal case — `SOCIAL_FINDER` lets a Claude WebSearch agent propose
+ *     candidate profile URLs (`socialFinderAgent.ts`). That agent only ever
+ *     produces LEADS; the capture and the deterministic scoring below are
+ *     unchanged, and still decide alone. Because of that call the job is in
+ *     AGENT_JOBS and shares the subscription window.
  *
  * It is Playwright-bound, which is why it lives in the `enrich` group: those
  * containers already have the browser and already do page captures.

@@ -197,6 +197,18 @@ export const config = {
     /** Politeness pause between SERP/profile requests; too fast gets 429s. */
     get delayMs(): number { return getSettingNumber('SOCIAL_DISCOVERY_DELAY_MS', 2500); },
     get timeoutMs(): number { return Number(process.env.SOCIAL_DISCOVERY_TIMEOUT_SECONDS ?? 30) * 1000; },
+    /**
+     * Who produces candidate profile URLs. `engines` is the Playwright SERP path
+     * (free, but the engines answer 403/429 to our server's IP); `agent` is
+     * Claude WebSearch, executed by Anthropic and therefore unaffected by that
+     * block; `both` runs the engines first and only pays for the agent when they
+     * came back nearly empty.
+     */
+    get finder(): 'both' | 'engines' | 'agent' {
+      return getSettingEnum('SOCIAL_FINDER', ['both', 'engines', 'agent'] as const, 'both');
+    },
+    /** Leads the agent may return per business; each one costs a page capture. */
+    get finderMaxCandidates(): number { return getSettingNumber('SOCIAL_FINDER_MAX_CANDIDATES', 8); },
   },
   telegram: {
     get botToken(): string { return getSetting('TELEGRAM_BOT_TOKEN'); },

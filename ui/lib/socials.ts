@@ -63,6 +63,8 @@ export function socialsButtonState(input: {
   const missing = (['instagram', 'facebook'] as const).filter((p) => !verified.has(p));
   return {
     enabled: true,
-    hint: `Шукає профілі (${missing.join(', ')}) у пошуковиках і зберігає сторінки як evidence. ~1-3 хв.`,
+    hint: `Шукає профілі (${missing.join(', ')}) у пошуковиках, а якщо їх заблокували — агентом `
+      + `через Claude WebSearch. Кожен профіль потім відкривається і звіряється кодом; сторінки `
+      + `зберігаються як evidence. ~1-3 хв.`,
   };
 }
