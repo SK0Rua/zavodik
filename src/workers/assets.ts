@@ -16,7 +16,24 @@ import type { JobPayload } from '../orchestrator/queue.js';
 import { log } from '../lib/logger.js';
 import { config } from '../config.js';
 import { extractBrandIdentity } from '../enrichment/brandIdentity.js';
+import { createHash } from 'node:crypto';
 import { safeFetchImage } from '../lib/safeFetch.js';
+
+/**
+ * Decode a `data:image/...;base64,...` URI into the same shape safeFetchImage
+ * returns. Sites that inline their real photos (base64 in the HTML) are
+ * otherwise invisible to the asset collector — the bytes are local, no SSRF
+ * surface, but the type allowlist and the 10MB cap still apply.
+ */
+function decodeDataUri(uri: string): { buffer: Buffer; contentType: string } | { blocked: string } {
+  const m = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/is.exec(uri);
+  if (!m) return { blocked: 'data URI is not a base64 image' };
+  const contentType = m[1].toLowerCase();
+  if (contentType.includes('svg')) return { blocked: 'inline svg data URI (script-capable), skipped' };
+  const buffer = Buffer.from(m[2], 'base64');
+  if (buffer.length > 10 * 1024 * 1024) return { blocked: 'inline image over 10MB cap' };
+  return { buffer, contentType };
+}
 import { logoCandidatesFromHtml, rankLogoCandidates, type LogoCandidate } from '../enrichment/logoHunt.js';
 import { photoCandidatesFromHtml } from '../enrichment/photoHunt.js';
 
@@ -242,8 +259,10 @@ export async function collectAssetsHandler(payload: JobPayload): Promise<void> {
   const seenUrls = new Set<string>();
   const queue: ImageRef[] = [];
   for (const img of [...mined.logos, ...demoted, ...mined.photos]) {
-    if (!img?.url || !/^https?:\/\//i.test(img.url)) continue;
-    const url = upsizeGoogleImage(img.url);
+    if (!img?.url) continue;
+    const isInline = img.url.startsWith('data:image/');
+    if (!isInline && !/^https?:\/\//i.test(img.url)) continue;
+    const url = isInline ? img.url : upsizeGoogleImage(img.url);
     if (seenUrls.has(url)) continue;
     seenUrls.add(url);
     queue.push({ ...img, url });
@@ -269,10 +288,14 @@ export async function collectAssetsHandler(payload: JobPayload): Promise<void> {
       // guard as the brand avatars: http/https only, DNS checked against the
       // private/loopback/link-local ranges, redirects revalidated per hop, and
       // the body capped by size and content-type.
-      const fetched = await safeFetchImage(img.url, {
-        maxBytes: 10 * 1024 * 1024,
-        timeoutMs: 20_000,
-      });
+      // Inline base64 images need no network at all: the bytes are already in
+      // the captured HTML. Decode locally — same size/dimension gates apply.
+      const fetched = img.url.startsWith('data:')
+        ? decodeDataUri(img.url)
+        : await safeFetchImage(img.url, {
+            maxBytes: 10 * 1024 * 1024,
+            timeoutMs: 20_000,
+          });
       if ('blocked' in fetched) {
         // A refusal is logged distinctly from a network failure: "we would not
         // fetch this" and "we could not fetch this" are different facts, and
@@ -315,7 +338,11 @@ export async function collectAssetsHandler(payload: JobPayload): Promise<void> {
       await putAsset(objectKey, buf, contentType);
       await db.insert(schema.assets).values({
         businessId, objectKey, hash,
-        sourceUrl: img.url,
+        // A data URI is megabytes of base64 — persist a short content-hash
+        // pointer instead; the bytes themselves are the stored asset.
+        sourceUrl: img.url.startsWith('data:')
+          ? `inline-data-uri:sha256-${createHash('sha256').update(img.url).digest('hex').slice(0, 16)}`
+          : img.url,
         // `origin` is where the file was FOUND, which is what the source type
         // has always meant here. The mined assets know it exactly; the payload
         // offers still fall back to the old gosom/website split.

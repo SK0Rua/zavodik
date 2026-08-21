@@ -168,13 +168,20 @@ const READABLE_JS = `(() => {
     meta('og:description') ? 'META og:description: ' + meta('og:description') : ''
   ].filter(Boolean).join('\\n');
   const links = Array.prototype.slice.call(doc.querySelectorAll('a[href]'))
-    .map(function (a) { return a.getAttribute('href') || ''; })
+    .map(function (a) { return (a.getAttribute('href') || '').slice(0, 300); })
     .filter(function (h) { return /wa\\.me|whatsapp|viber|instagram\\.com|facebook\\.com|tiktok\\.com|mailto:|tel:/i.test(h); })
     .slice(0, 40);
   const imgs = Array.prototype.slice.call(document.images)
     .filter(function (i) { return i.naturalWidth >= 200; })
     .slice(0, 40)
-    .map(function (i) { return 'IMG ' + (i.currentSrc || i.src) + ' (' + i.naturalWidth + 'x' + i.naturalHeight + ') alt="' + i.alt + '"'; });
+    .map(function (i) {
+      var src = i.currentSrc || i.src || '';
+      // Inline data: URIs are megabytes of base64 — the URL itself is not
+      // evidence, only the fact that an image exists. Never inline them.
+      if (src.indexOf('data:') === 0) src = '[inline data URI]';
+      if (src.length > 300) src = src.slice(0, 300) + '…';
+      return 'IMG ' + src + ' (' + i.naturalWidth + 'x' + i.naturalHeight + ') alt="' + String(i.alt).slice(0, 120) + '"';
+    });
   return [
     head,
     body.replace(/\\n{3,}/g, '\\n\\n').slice(0, 18000),
@@ -185,6 +192,36 @@ const READABLE_JS = `(() => {
 
 async function extractReadable(page: Page): Promise<string> {
   return page.evaluate(READABLE_JS) as Promise<string>;
+}
+
+/**
+ * A viewport PNG of the page currently loaded, stored as raw evidence.
+ *
+ * WHY A SCREENSHOT AND NOT JUST THE HTML. The brand agent (`brandAgent.ts`)
+ * judges an identity by LOOKING at it, and an Instagram profile's visual
+ * identity — the grid's colour grading, the highlight covers, the typography of
+ * the bio card — lives in rendered pixels, not in the markup. The stored HTML is
+ * post-hydration and complete, but no model reads a brand off a React tree.
+ *
+ * Viewport rather than full page: a profile grid is thousands of pixels tall and
+ * the identity is settled in the first screen. `deviceScaleFactor` is whatever
+ * the capture context set; 1280-wide at 1x is enough for colour and layout.
+ *
+ * Returns null on any failure — a missing screenshot narrows what the agent can
+ * see, it never fails a capture.
+ */
+export async function captureScreenshot(
+  businessId: string,
+  page: Page,
+  prefix: string,
+): Promise<string | null> {
+  try {
+    const buf = await page.screenshot({ fullPage: false });
+    return await putRaw(`enrichment/${businessId}/${prefix}`, buf, 'image/png');
+  } catch (err) {
+    log.warn('screenshot capture failed', { businessId, prefix, err: String(err).slice(0, 200) });
+    return null;
+  }
 }
 
 /**
@@ -200,7 +237,11 @@ const PAGE_IMAGES_JS = `(() => {
   for (let i = 0; i < imgs.length; i++) {
     const img = imgs[i];
     const src = img.currentSrc || img.src;
-    if (!src || src.indexOf('data:') === 0) continue;
+    if (!src) continue;
+    // Inline base64 images ARE collectable evidence (some sites embed their
+    // real photos): pass the data URI through — the asset worker decodes it
+    // locally instead of fetching. Tiny data URIs are icons; skip by size too.
+    if (src.indexOf('data:') === 0 && src.length < 5000) continue;
     if (img.naturalWidth < 200 || img.naturalHeight < 150) continue;
     const hay = (src + ' ' + img.alt + ' ' + img.className).toLowerCase();
     const kind = /logo|brand/.test(hay)

@@ -48,6 +48,11 @@ export async function refreshBrandHandler(payload: JobPayload): Promise<void> {
   // only then. A business whose assets were all already present still needs the
   // palette recomputed — the logo may have been RE-RANKED without a new file
   // being downloaded, and that changes which asset the palette is read from.
+  //
+  // The DESIGNER agent runs here (no `skipAgent`), which is the point of the
+  // button: re-ranking a logo or landing a profile screenshot is exactly the
+  // change that alters a designer's reading. `skipVoice` still holds — the
+  // separate voice call reads bios, and no bio changed.
   const brand = await extractBrandIdentity(businessId, { skipVoice: true, preserveVoice: true });
 
   const after = await db.select().from(schema.assets).where(eq(schema.assets.businessId, businessId));
@@ -63,6 +68,12 @@ export async function refreshBrandHandler(payload: JobPayload): Promise<void> {
     paletteSource: brand.paletteSource,
     primary: brand.primary?.hex ?? null,
     accent: brand.accent?.hex ?? null,
+    background: brand.background?.hex ?? null,
+    mood: brand.agent?.mood ?? null,
+    typography: brand.agent?.typography
+      ? [brand.agent.typography.family, brand.agent.typography.weight].filter(Boolean).join(' ')
+      : null,
+    agentConfidence: brand.agent?.confidence ?? null,
     gap: brand.gap,
   });
   if (brand.notes.length) log.warn('refresh-brand notes', { businessId, notes: brand.notes.slice(0, 6) });

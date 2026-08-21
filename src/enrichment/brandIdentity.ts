@@ -46,9 +46,10 @@ import { runAgent, z } from '../agents/agent.js';
 import { log } from '../lib/logger.js';
 import { safeFetchImage } from '../lib/safeFetch.js';
 import {
-  contrastCorrect, contrastRatio, decodeImage, fromHex, newDecodePage, paletteFromImage,
+  contrastCorrect, contrastRatio, decodeImage, fromHex, luminance, newDecodePage, paletteFromImage,
   pickAccent, pickNeutrals, rgbToHsl, toHex, type PaletteEntry,
 } from './colorExtract.js';
+import { runBrandAgent, type GroundedRole } from './brandAgent.js';
 
 // ── the fact shape written to business_facts ────────────────────────────────
 
@@ -71,11 +72,37 @@ export interface BrandVoice {
   reasoning: string;
 }
 
+/**
+ * The designer's reading of the material, when the agent produced one that
+ * survived grounding. Colours here are ALSO written as `primary`/`accent`, so
+ * every consumer that predates the agent keeps working unchanged; this section
+ * carries what only an agent can say.
+ */
+export interface BrandAgentReading {
+  /** serif/sans/…, weight, case — with the captures the reading came from. */
+  typography: {
+    family: string | null; weight: string | null; case: string | null;
+    notes: string; sourceIds: number[];
+  } | null;
+  /** Two to five words for the register the material projects. */
+  mood: string[];
+  photographyStyle: { text: string; sourceIds: number[] } | null;
+  /** The agent's own confidence. Low is a correct answer for generic material. */
+  confidence: number;
+  /** The workspace files it looked at. */
+  files: string[];
+}
+
 export interface BrandIdentity {
   businessId: string;
   /** The palette the design must start from, and which evidence produced it. */
   primary: { hex: string; sourceId: number; from: string } | null;
   accent: { hex: string; sourceId: number; from: string } | null;
+  /** The page ground the identity implies, when the agent named a grounded one. */
+  background: { hex: string; sourceId: number; from: string } | null;
+  onDark: { hex: string; sourceId: number; from: string } | null;
+  /** Non-colour readings from the agent, or null when it did not lead. */
+  agent: BrandAgentReading | null;
   /** Contrast-corrected accent for use on the proposed background. */
   accentOnLight: string | null;
   accentOnDark: string | null;
@@ -85,8 +112,13 @@ export interface BrandIdentity {
   photoColors: { colors: PaletteEntry[]; sourceId: number; from: string } | null;
   fontsSeen: { fonts: string[]; sourceId: number } | null;
   voice: (BrandVoice & { sourceId: number }) | null;
-  /** Rank of the evidence the palette rests on. */
-  paletteSource: 'logo' | 'avatar' | 'site' | 'photos' | 'none';
+  /**
+   * Rank of the evidence the palette rests on. `agent` means a designer agent
+   * read it off the material and code re-derived every hex from the file it
+   * cited; the other values are the deterministic measurement, which is both
+   * the cross-check and the fallback.
+   */
+  paletteSource: 'agent' | 'logo' | 'avatar' | 'site' | 'photos' | 'none';
   notes: string[];
   /** Set when nothing usable could be measured. */
   gap: string | null;
@@ -502,6 +534,15 @@ export interface BrandIdentityOptions {
   browser?: Browser;
   /** Skip the single agent call; the deterministic half still runs. */
   skipVoice?: boolean;
+  /**
+   * Skip the agent-led read and use the deterministic measurement only.
+   *
+   * For tests and for any caller that must not spend a subscription call. It is
+   * NOT how a colours-only refresh works: `refresh-brand` deliberately re-runs
+   * the agent, because re-ranking a logo is exactly the case where a designer's
+   * reading changes.
+   */
+  skipAgent?: boolean;
   /** Compute without writing facts — used by the verification script. */
   dryRun?: boolean;
   /** Cap on photographs sampled for the fallback palette. */
@@ -530,7 +571,9 @@ export async function extractBrandIdentity(
 ): Promise<BrandIdentity> {
   const out: BrandIdentity = {
     businessId,
-    primary: null, accent: null, accentOnLight: null, accentOnDark: null,
+    primary: null, accent: null, background: null, onDark: null,
+    accentOnLight: null, accentOnDark: null,
+    agent: null,
     logoColors: null, avatarColors: null, siteColors: null, photoColors: null,
     fontsSeen: null, voice: null,
     paletteSource: 'none',
@@ -691,9 +734,78 @@ export async function extractBrandIdentity(
 
     // ── 5. Choose the palette the design must start from ────────────────────
     //
+    // AGENT FIRST (Roman, 2026-08-21: "Айдентику і кольори має формувати
+    // агент... Агент зробить це краще"). A designer agent looks at the same
+    // material the steps above measured — the logo file, the profile
+    // screenshot, the site as rendered, the photographs — and names the roles.
+    // Every hex it names is re-derived from the file it cited before anything
+    // is written (`brandAgent.ts`), so the difference from the deterministic
+    // path is WHICH real colour becomes the accent, never whether the colour
+    // is real.
+    //
+    // The measurement below is not deleted by this: `logoColors`,
+    // `avatarColors`, `siteColors` and `photoColors` are still written, so the
+    // design contract keeps its full scales and a person can see what the
+    // agent chose FROM. When the agent fails or every hex it named is
+    // ungrounded, the deterministic ranking runs exactly as it always did.
+    if (!opts.skipAgent) {
+      const outcome = await runBrandAgent(businessId, biz.name, {
+        browser: browser ?? undefined,
+        maxPhotos: opts.maxPhotos,
+      });
+      if (outcome) {
+        const role = (name: GroundedRole['role']) => outcome.roles.find((r) => r.role === name) ?? null;
+        const asFact = (r: GroundedRole | null) =>
+          (r ? { hex: r.hex, sourceId: r.sourceId, from: `${r.why} (read from ${r.file})` } : null);
+        const primary = role('primary') ?? role('accent');
+        if (primary) {
+          out.paletteSource = 'agent';
+          out.primary = asFact(primary);
+          out.accent = asFact(role('accent') ?? primary);
+          out.background = asFact(role('background'));
+          out.onDark = asFact(role('onDark'));
+          if (out.accent) {
+            const rgb = fromHex(out.accent.hex)!;
+            // `accentOnLight` / `accentOnDark` are named for the GROUND, and
+            // every consumer reads them that way. So a ground the agent named
+            // is used only for the side it actually is: an agent that calls a
+            // near-black its `background` supplies the dark correction, not the
+            // light one, and the other side keeps the standard ground. Sorting
+            // by luminance rather than by field name is what keeps the two
+            // labels honest.
+            const named = [out.background, out.onDark]
+              .map((r) => (r ? fromHex(r.hex) : null))
+              .filter((c): c is NonNullable<typeof c> => c !== null);
+            const lightGround = named.filter((c) => luminance(c) >= 0.4)
+              .sort((a, b) => luminance(b) - luminance(a))[0] ?? { r: 250, g: 249, b: 246 };
+            const darkGround = named.filter((c) => luminance(c) < 0.4)
+              .sort((a, b) => luminance(a) - luminance(b))[0] ?? { r: 18, g: 18, b: 20 };
+            out.accentOnLight = toHex(contrastCorrect(rgb, lightGround, 4.5));
+            out.accentOnDark = toHex(contrastCorrect(rgb, darkGround, 4.5));
+          }
+          out.agent = {
+            typography: outcome.typography
+              ? {
+                  family: outcome.typography.family, weight: outcome.typography.weight,
+                  case: outcome.typography.case, notes: outcome.typography.notes,
+                  sourceIds: outcome.typography.sourceIds,
+                }
+              : null,
+            mood: outcome.mood,
+            photographyStyle: outcome.photographyStyle,
+            confidence: outcome.confidence,
+            files: outcome.inputs.map((i) => i.file),
+          };
+          out.notes.push(...outcome.notes);
+        } else {
+          out.notes.push('brand agent named no primary colour that survived grounding');
+        }
+      }
+    }
+
     // Authority order, not quality order: a logo is a decision somebody made,
     // a photograph is a room somebody stood in. Both are real; only one is
-    // an identity.
+    // an identity. This runs only when the agent did not produce a palette.
     const ranked: Array<[BrandIdentity['paletteSource'], BrandIdentity['logoColors']]> = [
       ['logo', out.logoColors],
       ['avatar', out.avatarColors],
@@ -707,7 +819,7 @@ export async function extractBrandIdentity(
     // one, because "the brand colour is #32373c" gives the art director nothing
     // to build with and silently reintroduces the sameness this fixes.
     const withAccent = ranked.filter(([, hit]) => hit && pickAccent(hit.colors));
-    const order = withAccent.length ? withAccent : ranked;
+    const order = out.primary ? [] : (withAccent.length ? withAccent : ranked);
     for (const [kind, hit] of order) {
       if (!hit) continue;
       const accent = pickAccent(hit.colors);
@@ -860,10 +972,15 @@ export async function persistBrandFacts(brand: BrandIdentity): Promise<number> {
     });
   };
 
+  // `agent_grounded` is a third extraction method next to `deterministic` and
+  // `llm_structured`, and it means something narrower than either: a model
+  // named the value, and CODE re-derived it from the cited evidence before it
+  // was written. A reader can tell at a glance which path produced a palette.
+  const method = brand.paletteSource === 'agent' ? 'agent_grounded' : 'deterministic';
   if (brand.primary) {
     add('brand.palette_primary', {
       hex: brand.primary.hex, from: brand.primary.from, paletteSource: brand.paletteSource,
-    }, brand.primary.sourceId, 1);
+    }, brand.primary.sourceId, 1, method);
   }
   if (brand.accent) {
     add('brand.palette_accent', {
@@ -871,8 +988,41 @@ export async function persistBrandFacts(brand: BrandIdentity): Promise<number> {
       onLight: brand.accentOnLight, onDark: brand.accentOnDark,
       contrastOnLight: brand.accentOnLight
         ? Number(contrastRatio(fromHex(brand.accentOnLight)!, { r: 250, g: 249, b: 246 }).toFixed(2)) : null,
-    }, brand.accent.sourceId, 1);
+    }, brand.accent.sourceId, 1, method);
   }
+  // The agent-led additions. Each carries the source_id of the capture behind
+  // the file its reading came from, exactly like every measured colour above,
+  // and `extractionMethod` says which of the two paths produced it.
+  if (brand.background) {
+    add('brand.palette_background', { hex: brand.background.hex, from: brand.background.from },
+      brand.background.sourceId, 1, 'agent_grounded');
+  }
+  if (brand.onDark) {
+    add('brand.palette_on_dark', { hex: brand.onDark.hex, from: brand.onDark.from },
+      brand.onDark.sourceId, 1, 'agent_grounded');
+  }
+  if (brand.agent?.typography && brand.agent.typography.sourceIds[0]) {
+    const t = brand.agent.typography;
+    add('brand.typography', {
+      family: t.family, weight: t.weight, case: t.case, notes: t.notes,
+    }, t.sourceIds[0], brand.agent.confidence, 'agent_grounded');
+  }
+  if (brand.agent?.mood.length) {
+    // Mood is a reading of ALL the material, so it cites the first capture the
+    // agent was shown rather than pretending one file produced it; `files`
+    // records the full set.
+    const sourceId = brand.primary?.sourceId ?? brand.accent?.sourceId ?? null;
+    if (sourceId) {
+      add('brand.mood', { mood: brand.agent.mood, files: brand.agent.files },
+        sourceId, brand.agent.confidence, 'agent_grounded');
+    }
+  }
+  if (brand.agent?.photographyStyle && brand.agent.photographyStyle.sourceIds[0]) {
+    add('brand.photography_style', {
+      style: brand.agent.photographyStyle.text, files: brand.agent.files,
+    }, brand.agent.photographyStyle.sourceIds[0], brand.agent.confidence, 'agent_grounded');
+  }
+
   if (brand.logoColors) add('brand.logo_colors', { from: brand.logoColors.from, colors: brand.logoColors.colors }, brand.logoColors.sourceId, 1);
   if (brand.avatarColors) add('brand.avatar_colors', { from: brand.avatarColors.from, colors: brand.avatarColors.colors }, brand.avatarColors.sourceId, 1);
   if (brand.siteColors) add('brand.site_colors', { from: brand.siteColors.from, colors: brand.siteColors.colors }, brand.siteColors.sourceId, 0.9);

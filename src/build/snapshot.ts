@@ -59,8 +59,12 @@ export interface SnapshotAsset {
  * hole to fill with the reference pack's taste.
  */
 export interface SnapshotBrand {
-  /** Which evidence the palette rests on. `none` = nothing measurable. */
-  paletteSource: 'logo' | 'avatar' | 'site' | 'photos' | 'none';
+  /**
+   * Which evidence the palette rests on. `none` = nothing measurable.
+   * `agent` = a designer agent read it off the material and code re-derived
+   * every hex from the file it cited (`src/enrichment/brandAgent.ts`).
+   */
+  paletteSource: 'agent' | 'logo' | 'avatar' | 'site' | 'photos' | 'none';
   /** The business's dominant identity colour. */
   primary: { hex: string; from: string; sourceIds: number[] } | null;
   /**
@@ -73,6 +77,25 @@ export interface SnapshotBrand {
     hex: string; from: string; sourceIds: number[];
     onLight: string | null; onDark: string | null;
   } | null;
+  /**
+   * The page ground the identity implies, when the agent named one that
+   * grounded. Null means nobody measured a ground and the direction chooses it.
+   */
+  background: { hex: string; from: string; sourceIds: number[] } | null;
+  /** The dark-mode ground, same rule. */
+  onDark: { hex: string; from: string; sourceIds: number[] } | null;
+  /**
+   * What the material's OWN lettering is doing — a reading no median cut can
+   * produce, so it exists only when the agent led.
+   */
+  typography: {
+    family: string | null; weight: string | null; case: string | null;
+    notes: string; sourceIds: number[];
+  } | null;
+  /** Two to five words for the register the material projects. */
+  mood: { words: string[]; files: string[]; sourceIds: number[] } | null;
+  /** How the business's own photographs look — grade, crop, lighting. */
+  photographyStyle: { style: string; files: string[]; sourceIds: number[] } | null;
   /** Full measured palettes, so a direction can build a scale rather than pick two swatches. */
   logoColors: BrandPalette | null;
   avatarColors: BrandPalette | null;
@@ -483,7 +506,8 @@ export function brandFromFacts(
 ): SnapshotBrand {
   const brand: SnapshotBrand = {
     paletteSource: 'none',
-    primary: null, accent: null,
+    primary: null, accent: null, background: null, onDark: null,
+    typography: null, mood: null, photographyStyle: null,
     logoColors: null, avatarColors: null, siteColors: null, photoColors: null,
     logo: null,
     fontsSeen: null, voice: null,
@@ -520,7 +544,51 @@ export function brandFromFacts(
   if (primary && typeof primary.hex === 'string') {
     brand.primary = { hex: primary.hex, from: String(primary.from ?? ''), sourceIds: ids(primaryFact) };
     const src = primary.paletteSource;
-    if (src === 'logo' || src === 'avatar' || src === 'site' || src === 'photos') brand.paletteSource = src;
+    if (src === 'agent' || src === 'logo' || src === 'avatar' || src === 'site' || src === 'photos') {
+      brand.paletteSource = src;
+    }
+  }
+
+  // Grounds. Same shape as `primary`; present only when the agent named one.
+  for (const [key, field] of [
+    ['brand.palette_background', 'background'],
+    ['brand.palette_on_dark', 'onDark'],
+  ] as const) {
+    const f = get(key);
+    const v = obj(f);
+    if (v && typeof v.hex === 'string') {
+      brand[field] = { hex: v.hex, from: String(v.from ?? ''), sourceIds: ids(f) };
+    }
+  }
+
+  const typoFact = get('brand.typography');
+  const typo = obj(typoFact);
+  if (typo) {
+    const str = (x: unknown) => (typeof x === 'string' && x.trim() ? x : null);
+    brand.typography = {
+      family: str(typo.family), weight: str(typo.weight), case: str(typo.case),
+      notes: String(typo.notes ?? ''), sourceIds: ids(typoFact),
+    };
+  }
+
+  const moodFact = get('brand.mood');
+  const mood = obj(moodFact);
+  if (mood && Array.isArray(mood.mood) && mood.mood.length) {
+    brand.mood = {
+      words: mood.mood.map(String),
+      files: Array.isArray(mood.files) ? mood.files.map(String) : [],
+      sourceIds: ids(moodFact),
+    };
+  }
+
+  const photoStyleFact = get('brand.photography_style');
+  const photoStyle = obj(photoStyleFact);
+  if (photoStyle && typeof photoStyle.style === 'string') {
+    brand.photographyStyle = {
+      style: photoStyle.style,
+      files: Array.isArray(photoStyle.files) ? photoStyle.files.map(String) : [],
+      sourceIds: ids(photoStyleFact),
+    };
   }
 
   const accentFact = get('brand.palette_accent');

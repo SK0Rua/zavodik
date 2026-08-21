@@ -26,6 +26,7 @@ interface Swatch {
 
 /** Human labels for the evidence a palette rests on. */
 const PALETTE_SOURCE_LABEL: Record<string, string> = {
+  agent: 'агент-дизайнер (лого, інста, сайт, фото)',
   logo: 'логотип',
   avatar: 'аватар у соцмережі',
   site: 'їхній сайт',
@@ -84,6 +85,13 @@ export function BrandSwatches({ facts, sources }: { facts: FactRow[]; sources: S
   const accent = asObject(byKey.get('brand.palette_accent')?.value);
   const voice = asObject(byKey.get('brand.voice')?.value);
   const fonts = asObject(byKey.get('brand.fonts_seen')?.value);
+  const background = asObject(byKey.get('brand.palette_background')?.value);
+  const typography = asObject(byKey.get('brand.typography')?.value);
+  const mood = asObject(byKey.get('brand.mood')?.value);
+  const photoStyle = asObject(byKey.get('brand.photography_style')?.value);
+  const typoLine = typography
+    ? [typography.family, typography.weight, typography.case].filter((x) => typeof x === 'string' && x).join(', ')
+    : '';
 
   const paletteSource = typeof primary?.paletteSource === 'string' ? primary.paletteSource : null;
 
@@ -124,6 +132,12 @@ export function BrandSwatches({ facts, sources }: { facts: FactRow[]; sources: S
               </div>
             </div>
           )}
+          {typeof background?.hex === 'string' && (
+            <div>
+              <div className="text-sm text-ink-mute mb-1">Фон</div>
+              <Chip hex={background.hex} title={String(background.from ?? background.hex)} />
+            </div>
+          )}
         </div>
       )}
 
@@ -149,8 +163,33 @@ export function BrandSwatches({ facts, sources }: { facts: FactRow[]; sources: S
         })}
       </div>
 
-      {(voice || fonts) && (
+      {(voice || fonts || typoLine || mood || photoStyle) && (
         <div className="mt-4 pt-3 border-t border-line space-y-1.5">
+          {/* What the agent read off the material — the half no median cut can
+              produce, and the half that decides whether a demo feels like this
+              business rather than like a template with their colours in it. */}
+          {(typoLine || mood) && (
+            <p className="text-sm">
+              {mood && Array.isArray(mood.mood) && mood.mood.length > 0 && (
+                <>
+                  <span className="text-ink-mute">Настрій: </span>
+                  {mood.mood.map(String).join(', ')}
+                </>
+              )}
+              {typoLine && (
+                <>
+                  <span className="text-ink-mute">{mood ? ' · Леттеринг: ' : 'Леттеринг: '}</span>
+                  {typoLine}
+                </>
+              )}
+            </p>
+          )}
+          {photoStyle && typeof photoStyle.style === 'string' && (
+            <p className="text-sm">
+              <span className="text-ink-mute">Їхня зйомка: </span>
+              {photoStyle.style}
+            </p>
+          )}
           {voice && (
             <p className="text-sm">
               <span className="text-ink-mute">Тон: </span>

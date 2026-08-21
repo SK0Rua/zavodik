@@ -94,6 +94,11 @@ export function brandPaletteHexes(snapshot: BuildSnapshot): string[] {
   push(brand.accent?.hex);
   push(brand.accent?.onLight);
   push(brand.accent?.onDark);
+  // The agent-named grounds are measured colours too — grounded against the
+  // file that was cited for them — so a direction that keys on the brand's own
+  // off-white is echoing the brand, not ignoring it.
+  push(brand.background?.hex);
+  push(brand.onDark?.hex);
   for (const pal of [brand.logoColors, brand.avatarColors, brand.siteColors, brand.photoColors]) {
     for (const c of pal?.colors ?? []) push(c.hex);
   }

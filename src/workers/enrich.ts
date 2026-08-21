@@ -308,9 +308,27 @@ export async function enrichHandler(payload: JobPayload): Promise<void> {
   const gosomBlock = gosom
     ? renderRecordForPrompt(gosom.rec, { maxReviews: config.pipeline.maxReviewsInPrompt })
     : '';
+  // Hard prompt budget. One pathological page (inline base64 images, a JS
+  // bundle leaking into innerText) once produced a 1.6M-token prompt and the
+  // whole business parked in needs_human. Evidence text is clamped BEFORE both
+  // the prompt AND the grounding check, so they keep seeing identical bytes.
+  const PER_SOURCE_CHARS = 20_000;
+  const TOTAL_EVIDENCE_CHARS = 120_000;
+  let budget = TOTAL_EVIDENCE_CHARS;
+  for (const c of captured) {
+    const clamped = c.text.slice(0, Math.max(0, Math.min(PER_SOURCE_CHARS, budget)));
+    if (clamped.length < c.text.length) {
+      log.warn('evidence clamped for prompt budget', {
+        businessId, ref: c.ref, from: c.text.length, to: clamped.length,
+      });
+      c.text = `${clamped}\n[… джерело обрізано до бюджету промпта; повний текст у raw evidence]`;
+    }
+    budget -= c.text.length;
+  }
+
   const blocks: string[] = [];
   if (gosom) {
-    blocks.push(`=== SOURCE S0 (Google Maps listing evidence, captured by the discovery crawler) ===\n${gosomBlock}`);
+    blocks.push(`=== SOURCE S0 (Google Maps listing evidence, captured by the discovery crawler) ===\n${gosomBlock.slice(0, 40_000)}`);
   }
   for (const c of captured) {
     blocks.push(`=== SOURCE ${c.ref} (${c.sourceType}, url=${c.finalUrl}, captured ${c.capturedAt.toISOString()}) ===\n${c.text}`);

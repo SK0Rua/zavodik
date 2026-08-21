@@ -32,7 +32,7 @@ import { db, schema } from '../db/client.js';
 import { putRaw } from '../lib/storage.js';
 import { log } from '../lib/logger.js';
 import { config } from '../config.js';
-import { launchBrowser, newCapturePage } from './capture.js';
+import { captureScreenshot, launchBrowser, newCapturePage } from './capture.js';
 import { detectContacts, cleanProfileUrl } from './messengers.js';
 import { scoreProfileMatch, type MatchVerdict, type SocialPlatform } from './socialMatch.js';
 
@@ -68,6 +68,12 @@ export interface VerifiedProfile extends SocialCandidate {
   /** business_sources.id of the captured profile page. */
   sourceId: number;
   rawObjectKey: string;
+  /**
+   * Raw-bucket key of a PNG of the profile page as rendered, or null when the
+   * screenshot failed. Cited by `brand.social_screenshot` and handed to the
+   * brand agent, which cannot read an identity off HTML.
+   */
+  screenshotKey: string | null;
   title: string;
   bio: string;
   /** Messenger markers detected in the profile bio, with their source. */
@@ -685,10 +691,18 @@ export async function discoverSocials(
       // a later "why did you miss X?" answerable.
       let sourceId = -1;
       let rawObjectKey = '';
+      let screenshotKey: string | null = null;
       if (!opts.dryRun) {
         const stored = await storeEvidence(biz.id, cand.platform, read.finalUrl, read.html, `social/${cand.platform}`);
         sourceId = stored.sourceId;
         rawObjectKey = stored.rawObjectKey;
+        // Taken now, while `page` still holds THIS profile: the loop navigates
+        // away on the next iteration and the pixels are gone. Only for a
+        // candidate that is plausibly the business — screenshotting every
+        // rejected customer account costs storage for material no one reads.
+        if (verdict.strength !== 'weak') {
+          screenshotKey = await captureScreenshot(biz.id, page, `social/${cand.platform}-shot`);
+        }
       }
 
       // Messenger markers inside the bio (a wa.me link in an Instagram bio is a
@@ -704,6 +718,7 @@ export async function discoverSocials(
         verdict,
         sourceId,
         rawObjectKey,
+        screenshotKey,
         title: read.title.slice(0, 300),
         bio: read.bio.slice(0, 600),
         messengers: messengers.map((m) => ({ channel: m.channel, value: m.value, evidence: m.evidence })),
@@ -790,6 +805,26 @@ async function persistProfiles(
       confidence: p.verdict.strength === 'strong' ? 1 : 0.5,
       verified: p.verdict.strength === 'strong',
     });
+
+    // The rendered profile, as a pointer the brand agent can resolve. It is a
+    // fact rather than a column on `business_sources` because the row there
+    // already owns one immutable object (the HTML); this is a SECOND reading of
+    // the same capture, and it cites that capture's id.
+    //
+    // The key namespace is `social_screenshot.`, NOT `brand.`: every `brand.*`
+    // row is owned and rewritten wholesale by `persistBrandFacts`, so filing the
+    // screenshot there would delete the agent's own input on the next refresh.
+    if (p.screenshotKey) {
+      await db.insert(schema.businessFacts).values({
+        businessId,
+        key: `social_screenshot.${p.platform}`,
+        value: { objectKey: p.screenshotKey, url: value, handle: p.handle },
+        sourceId: p.sourceId,
+        extractionMethod: 'deterministic',
+        confidence: 1,
+        verified: p.verdict.strength === 'strong',
+      });
+    }
 
     // Messenger markers found in the bio, each citing the profile capture.
     for (const m of p.messengers) {

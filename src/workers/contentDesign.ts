@@ -104,7 +104,7 @@ async function motionContext(business: { category?: string | null; name?: string
  */
 function brandBlock(snapshot: BuildSnapshot): string {
   const b = snapshot.brand;
-  if (b.paletteSource === 'none' && !b.voice && !b.fontsSeen) {
+  if (b.paletteSource === 'none' && !b.voice && !b.fontsSeen && !b.mood && !b.typography) {
     return [
       'NO MEASURABLE BRAND IDENTITY.',
       'This business publishes no logo, no site colours, no usable profile picture and no bio we could',
@@ -115,7 +115,18 @@ function brandBlock(snapshot: BuildSnapshot): string {
     ].join('\n');
   }
 
-  const lines: string[] = [`Measured from: ${b.paletteSource} (authority order: logo > avatar > site > photos).`];
+  const lines: string[] = [
+    b.paletteSource === 'agent'
+      // The provenance line matters to how the art director should treat these
+      // hexes. A measured palette is "the three biggest colours in the logo",
+      // and a designer may reasonably re-rank them. An agent-led one already IS
+      // a designer's reading of the whole material, so walking away from it
+      // needs a real reason rather than a preference.
+      ? 'Read by a designer who looked at this business\'s logo, its profile page, its site and its\n'
+        + 'photographs, then re-derived in code from the exact file each colour was cited against.\n'
+        + 'These are not "the dominant colours" — they are role assignments somebody made on purpose.'
+      : `Measured from: ${b.paletteSource} (authority order: logo > avatar > site > photos).`,
+  ];
   if (b.primary) lines.push(`PRIMARY  ${b.primary.hex}  — ${b.primary.from}`);
   if (b.accent) {
     lines.push(`ACCENT   ${b.accent.hex}  — ${b.accent.from}`);
@@ -123,6 +134,8 @@ function brandBlock(snapshot: BuildSnapshot): string {
     lines.push('  Use the corrected variant for text and buttons; the raw accent is the brand colour, not an');
     lines.push('  accessible one, and a demo that fails contrast in front of a business owner is a defect.');
   }
+  if (b.background) lines.push(`GROUND   ${b.background.hex}  — ${b.background.from}`);
+  if (b.onDark) lines.push(`GROUND (dark)  ${b.onDark.hex}  — ${b.onDark.from}`);
   const pal = (label: string, p: typeof b.logoColors) => {
     if (!p) return;
     lines.push(`${label}: ${p.colors.map((c) => `${c.hex} (${Math.round(c.share * 100)}%)`).join('  ')}`);
@@ -132,6 +145,26 @@ function brandBlock(snapshot: BuildSnapshot): string {
   pal('AVATAR ', b.avatarColors);
   pal('SITE   ', b.siteColors);
   pal('PHOTOS ', b.photoColors);
+  // The three readings only a designer looking at the material can produce.
+  // They are the reason the agent leads: a hex says which colour, and these say
+  // what kind of thing this business is trying to be.
+  if (b.typography) {
+    const t = [b.typography.family, b.typography.weight, b.typography.case].filter(Boolean).join(', ');
+    lines.push(`LETTERING IN THEIR OWN MATERIAL: ${t || 'no legible lettering'}`);
+    if (b.typography.notes) lines.push(`  ${b.typography.notes}`);
+    lines.push('  Match the CLASS, not the exact face: their wordmark being a high-contrast serif means');
+    lines.push('  your display face should be one, in a family that ships the Greek subset via next/font.');
+  }
+  if (b.mood) {
+    lines.push(`MOOD OF THEIR MATERIAL: ${b.mood.words.join(', ')}`);
+    lines.push('  This is what their published material already projects. A direction that contradicts it');
+    lines.push('  is redesigning the brand rather than presenting it, which is not what this demo is for.');
+  }
+  if (b.photographyStyle) {
+    lines.push(`THEIR PHOTOGRAPHY: ${b.photographyStyle.style}`);
+    lines.push('  The grade you specify has to survive THESE photographs — one treatment over all of them,');
+    lines.push('  chosen for what they already look like, not for what you wish they looked like.');
+  }
   if (b.fontsSeen) {
     lines.push(`TYPEFACES THE BUSINESS ITSELF USES: ${b.fontsSeen.fonts.join(', ')}`);
     lines.push('  A signal of register, NOT a list to copy — most are unavailable or fail the Greek subset.');
