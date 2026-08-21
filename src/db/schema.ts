@@ -318,6 +318,9 @@ export const workflowJobs = pgTable('workflow_jobs', {
   businessId: text('business_id'),
   campaignId: text('campaign_id'),
   idempotencyKey: text('idempotency_key'),
+  /** Full job payload as enqueued — so a UI retry re-runs the job VERBATIM
+   * (projectId/iteration/issues survive), instead of a lossy reconstruction. */
+  payload: jsonb('payload'),
   // spec §6: queued | running | succeeded | retry_wait | failed | needs_human | cancelled
   status: text('status').notNull().default('queued'),
   attempts: integer('attempts').notNull().default(0),

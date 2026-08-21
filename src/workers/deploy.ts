@@ -23,6 +23,7 @@ import type { JobPayload } from '../orchestrator/queue.js';
 import { collectWorkspaceGarbage, outputDir } from '../build/workspace.js';
 import { ensureDemoServer } from '../lib/serveDir.js';
 import { log } from '../lib/logger.js';
+import { resolveProject } from '../build/projectRef.js';
 
 /**
  * 24 chars from a 36-symbol alphabet ≈ 124 bits. Well past the "unguessable URL"
@@ -109,10 +110,9 @@ async function healthCheck(url: string, businessName: string): Promise<{ ok: boo
 
 export async function deployHandler(payload: JobPayload): Promise<void> {
   const businessId = payload.businessId!;
-  const projectId = payload.projectId as number;
-  const [project] = await db.select().from(schema.siteProjects)
-    .where(eq(schema.siteProjects.id, projectId));
-  if (!project) throw new Error(`site project not found: ${projectId}`);
+  const project = await resolveProject('deploy', payload);
+  const projectId = project.id;
+
   if (project.state !== 'ready' && project.state !== 'deployed') {
     throw new Error(`project not ready for deploy: state=${project.state}`);
   }

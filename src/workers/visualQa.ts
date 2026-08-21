@@ -38,6 +38,7 @@ import {
 import { collectWorkspaceGarbage, outputDir, writeQaIssues } from '../build/workspace.js';
 import { notifyTelegram, uiLinks } from '../telegram/notify.js';
 import { log } from '../lib/logger.js';
+import { resolveProject } from '../build/projectRef.js';
 
 const VIEWPORTS = [
   { name: 'desktop', width: 1440, height: 900 },
@@ -828,12 +829,11 @@ async function loadReferenceSlug(designContractKey: string | null): Promise<stri
 export async function visualQaHandler(payload: JobPayload): Promise<void> {
   const startedAt = Date.now();
   const businessId = payload.businessId!;
-  const projectId = payload.projectId as number;
+  const project = await resolveProject('visualQa', payload);
+  const projectId = project.id;
   const iteration = (payload.iteration as number | undefined) ?? 0;
 
-  const [project] = await db.select().from(schema.siteProjects)
-    .where(eq(schema.siteProjects.id, projectId));
-  if (!project) throw new Error(`site project not found: ${projectId}`);
+
 
   // Judge the site against the snapshot it was BUILT from, not a newer one.
   const snapshot: BuildSnapshot = project.snapshotKey

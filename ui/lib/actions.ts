@@ -276,11 +276,18 @@ async function retryWorkflowJob(jobId: number): Promise<boolean | null> {
   const [row] = await db.select().from(schema.workflowJobs).where(eq(schema.workflowJobs.id, jobId));
   if (!row) return null;
 
+  // Re-run the job VERBATIM: the stored payload carries the fields the mirror
+  // columns don't (projectId, iteration, issues…). Reconstructing the payload
+  // from columns alone is what used to crash retried build jobs with
+  // "site project not found: undefined".
+  const stored = (row.payload ?? {}) as Record<string, unknown>;
+  const { businessId: _b, campaignId: _c, idempotencyKey: _k, ...rest } = stored;
   const enqueued = await enqueueJob({
     name: row.jobType as JobName,
     businessId: row.businessId,
     campaignId: row.campaignId,
     idempotencyKey: row.idempotencyKey ?? `${row.jobType}:${row.businessId ?? 'global'}:retry:${Date.now()}`,
+    data: rest,
   });
 
   // The attempt Roman retried is over either way: either its successor is now

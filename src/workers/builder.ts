@@ -32,6 +32,7 @@ import { checkProvenance, type ProvenanceReport } from '../build/provenance.js';
 import { generateDecorativeBackground, planHeroMedia } from '../build/media.js';
 import { outputDir, prepareWorkspace, workspaceDir, SITES_ROOT } from '../build/workspace.js';
 import { log } from '../lib/logger.js';
+import { resolveProject } from '../build/projectRef.js';
 
 export { SITES_ROOT };
 
@@ -69,13 +70,12 @@ function provenanceIssues(report: ProvenanceReport): string[] {
 export async function buildSiteHandler(payload: JobPayload): Promise<void> {
   const startedAt = Date.now();
   const businessId = payload.businessId!;
-  const projectId = payload.projectId as number;
+  const project = await resolveProject('builder', payload);
+  const projectId = project.id;
   const iteration = (payload.iteration as number | undefined) ?? 0;
   const issues = (payload.issues as string[] | undefined) ?? [];
 
-  const [project] = await db.select().from(schema.siteProjects)
-    .where(eq(schema.siteProjects.id, projectId));
-  if (!project) throw new Error(`site project not found: ${projectId}`);
+
 
   const dir = workspaceDir(businessId, projectId);
   const isFix = iteration > 0 && existsSync(path.join(dir, 'package.json'));

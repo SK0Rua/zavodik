@@ -111,6 +111,12 @@ export async function enqueueJob(input: EnqueueInput): Promise<string | null> {
     businessId: input.businessId ?? null,
     campaignId: input.campaignId ?? null,
     idempotencyKey: input.idempotencyKey,
+    payload: {
+      businessId: input.businessId ?? undefined,
+      campaignId: input.campaignId ?? undefined,
+      idempotencyKey: input.idempotencyKey,
+      ...(input.data ?? {}),
+    },
     status: 'queued',
   });
 

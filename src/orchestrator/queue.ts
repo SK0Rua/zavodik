@@ -80,6 +80,7 @@ export async function enqueue(
   await db.insert(schema.workflowJobs).values({
     bossJobId: jobId, jobType: name,
     businessId: payload.businessId ?? null, campaignId: payload.campaignId ?? null,
+    payload: payload as Record<string, unknown>,
     idempotencyKey: singletonKey, status: 'queued',
   });
   log.info('job enqueued', { name, jobId, ...payload });
