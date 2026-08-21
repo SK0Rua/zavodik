@@ -169,6 +169,20 @@ export const config = {
     get generateImages(): boolean { return getSettingBool('MEDIA_GEN_IMAGES', true); },
   },
   /**
+   * landing.gallery — additional layout references for stage 9 (`src/lib/landingGallery.ts`).
+   *
+   * A public, no-auth MCP endpoint we call as an ordinary HTTP client during
+   * stage-9 prep. Off = exactly the previous behaviour: the art director sees the
+   * motion pack and nothing else. Never fatal either way.
+   */
+  landingGallery: {
+    get enabled(): boolean { return getSettingBool('LANDING_GALLERY', true); },
+    /** Previews downloaded into the workspace per build. Their cap per call is 4. */
+    get maxRefs(): number { return getSettingNumber('LANDING_GALLERY_MAX_REFS', 6); },
+    /** Short on purpose: an inspiration source must never hold up a build. */
+    get timeoutMs(): number { return getSettingNumber('LANDING_GALLERY_TIMEOUT_MS', 5000); },
+  },
+  /**
    * Social discovery (SPEC §4 stage 4): keyless web search for a business's
    * Instagram/Facebook/TikTok profile when the listing did not publish one.
    * Roman's observation on the real Patras run: "exte hair design" has both a

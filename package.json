@@ -19,6 +19,7 @@
     "test:settings": "tsx scripts/test-settings.ts",
     "test:accounts": "tsx scripts/test-accounts-parse.ts",
     "test:brand-agent": "tsx scripts/test-brand-agent.ts",
+    "test:landing-gallery": "tsx scripts/test-landing-gallery.ts",
     "verify:media-parsers": "tsx scripts/verify-media-parsers.ts",
     "telegram:setup": "tsx src/telegram/bot.ts",
     "ui:dev": "pnpm --dir ui dev",

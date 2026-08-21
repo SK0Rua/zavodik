@@ -37,6 +37,10 @@ import {
   loadCondensedNotes, loadMotionIndex, renderMotionIndexForPrompt, renderWowGate, renderWowRubric,
   shortlistReferences, type MotionRefIndexEntry,
 } from '../build/motionRefs.js';
+import {
+  buildQueries, downloadRefs, renderGalleryBlock, searchInspiration, type DownloadedRef,
+} from '../lib/landingGallery.js';
+import { config } from '../config.js';
 import { log } from '../lib/logger.js';
 
 /**
@@ -91,6 +95,48 @@ async function motionContext(business: { category?: string | null; name?: string
     if (condensed) notes.push({ slug: entry.slug, notes: condensed });
   }
   return { index, indexText: renderMotionIndexForPrompt(index), notes };
+}
+
+/**
+ * Additional layout references from landing.gallery (`src/lib/landingGallery.ts`).
+ *
+ * Fetched HERE, in stage 9, rather than in the builder, for two reasons. The art
+ * director is the consumer — it is the call that decides layout and mood, and the
+ * builder only implements what it decided. And the builder workspace has no
+ * internet by design; downloading during stage-9 prep keeps that property intact,
+ * since what reaches the workspace is ordinary files on disk.
+ *
+ * They land in `sites/<businessId>/gallery/`, which `prepareWorkspace` copies into
+ * the build. That staging path is keyed by business rather than by project because
+ * stage 9 runs before the project row (and therefore the project id) exists.
+ *
+ * Returns [] when the feature is off, when the endpoint is unreachable, or when
+ * this business's queries match nothing — all three are ordinary outcomes, and
+ * the design prompt simply loses one optional block.
+ */
+export function galleryStagingDir(businessId: string): string {
+  return path.join(path.resolve('sites'), businessId, 'gallery');
+}
+
+async function galleryContext(snapshot: BuildSnapshot): Promise<DownloadedRef[]> {
+  if (!config.landingGallery.enabled) return [];
+
+  const queries = buildQueries({
+    category: snapshot.category,
+    moodWords: snapshot.brand.mood?.words ?? null,
+  });
+  const entries = await searchInspiration(queries, { limit: config.landingGallery.maxRefs });
+  if (entries.length === 0) {
+    log.info('landing.gallery returned nothing for this business', {
+      businessId: snapshot.businessId, queries,
+    });
+    return [];
+  }
+  const refs = await downloadRefs(galleryStagingDir(snapshot.businessId), entries);
+  log.info('landing.gallery references fetched', {
+    businessId: snapshot.businessId, queries, found: entries.length, downloaded: refs.length,
+  });
+  return refs;
 }
 
 /**
@@ -313,6 +359,7 @@ Rules:
   // ── 2. Three structurally different art directions ────────────────────────
   const { references, components, referenceNames } = await designContext(niche);
   const motion = await motionContext({ category: snapshot.category, name: snapshot.name });
+  const galleryRefs = await galleryContext(snapshot);
   const siblings = await siblingDesigns(biz.campaignId, businessId);
   const brandText = brandBlock(snapshot);
   log.info('brand context for design', {
@@ -437,6 +484,8 @@ no three.js. Every animation must have a reduced-motion branch that leaves the p
 ### Motion reference index (pick ONE slug)
 
 ${motion.indexText || '(motion pack unavailable — fall back to the niche reference pack below)'}
+
+${renderGalleryBlock(galleryRefs)}
 - \`poolComponents\`: at most 4, by their exact names from the component catalogue. Fewer is better —
   a page stacking Aurora + Lamp + Beams + Marquee looks like a component demo, not a business.
 - \`heroTreatment.assetFile\` must be a file that exists in the asset inventory, or null. A

@@ -106,6 +106,30 @@ async function copySkills(target: string): Promise<string[]> {
 }
 
 /**
+ * Move the landing.gallery previews stage 9 staged for this business into the
+ * workspace at `references/gallery/`.
+ *
+ * They were downloaded during stage-9 prep (see `galleryContext` in
+ * `src/workers/contentDesign.ts`) because that is where the network is; the
+ * builder workspace has none. Copying rather than re-fetching is what keeps that
+ * property true. Absent staging is the normal case whenever the feature is off
+ * or the endpoint had nothing for this niche, and it is silent.
+ */
+async function copyGalleryReferences(target: string, businessId: string): Promise<string[]> {
+  const src = path.join(SITES_ROOT, businessId, 'gallery');
+  if (!existsSync(src)) return [];
+  const dest = path.join(target, 'references', 'gallery');
+  await mkdir(dest, { recursive: true });
+  const copied: string[] = [];
+  for (const entry of await readdir(src, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    await copyFile(path.join(src, entry.name), path.join(dest, entry.name));
+    copied.push(`references/gallery/${entry.name}`);
+  }
+  return copied;
+}
+
+/**
  * Copy the ONE chosen motion reference into `<workspace>/references/<slug>/`.
  *
  * Only `notes.md`, `hero.jpg` and `full.jpg` — never the `.webm`. The builder
@@ -207,8 +231,10 @@ function buildTaskDoc(plan: {
   niche: string;
   /** Workspace-relative files copied from the chosen motion reference. */
   referenceFiles: string[];
+  /** Workspace-relative landing.gallery previews, empty when the feature is off. */
+  galleryFiles: string[];
 }): string {
-  const { snapshot, brief, design, verdict, heroMedia, skills, niche, referenceFiles } = plan;
+  const { snapshot, brief, design, verdict, heroMedia, skills, niche, referenceFiles, galleryFiles } = plan;
   const isGreek = snapshot.language.toLowerCase().startsWith('el');
   const contactLines = snapshot.contacts.length
     ? snapshot.contacts.map((c) => `  - ${c.channel}: ${c.value}${c.verified ? ' (verified)' : ' (unverified — usable, but the verified ones come first)'}`).join('\n')
@@ -336,7 +362,20 @@ ${referenceFiles.map((f) => `- \`${f}\`${f.endsWith('notes.md') ? ' — mechanic
 The same \`hero.jpg\` and \`full.jpg\` are shown to the QA critic next to screenshots of YOUR
 page, with the question "how close does this get to this?". Look at them.`
   : `(The reference files are not in this workspace — build from the mechanics below.)`}
+${galleryFiles.filter((f) => !f.endsWith('index.md')).length
+  ? `
+### Additional layout references — \`references/gallery/\`
 
+Screenshots of current landing pages, fetched automatically while the direction was chosen
+(\`references/gallery/index.md\` says what each one is and why it was fetched)${design.galleryRefs?.length
+  ? `. The art director cited: ${design.galleryRefs.map((u) => `\`${u}\``).join(', ')}` : '.'}
+
+They are SECONDARY and OPTIONAL: look at them for layout composition and mood if it helps.
+**Nothing about the page's behaviour comes from here** — the motion mechanics are the ones
+listed below, from \`${design.referenceSlug}\`. **Never take a colour, a photograph or a line of
+copy from them.** The palette is this business's, and it is already decided above.
+`
+  : ''}
 ### The 3-4 mechanics to implement (no more)
 
 ${design.mechanics.map((m, i) => `${i + 1}. **${m.name}** — use \`${m.component}\`, in ${m.where}`).join('\n')}
@@ -466,6 +505,7 @@ export async function prepareWorkspace(opts: {
     });
   }
   const referenceFiles = await copyMotionReference(dir, design.referenceSlug);
+  const galleryFiles = await copyGalleryReferences(dir, snapshot.businessId);
 
   const { assetFiles, generatedFiles } = await materializeAssets(snapshot, dir);
 
@@ -478,7 +518,7 @@ export async function prepareWorkspace(opts: {
   await writeFile(path.join(dir, 'MEDIA-MANIFEST.json'), mediaManifest(snapshot, heroMedia));
   await writeFile(
     path.join(dir, 'BUILD-TASK.md'),
-    buildTaskDoc({ snapshot, brief, design, verdict, heroMedia, skills, niche, referenceFiles }),
+    buildTaskDoc({ snapshot, brief, design, verdict, heroMedia, skills, niche, referenceFiles, galleryFiles }),
   );
 
   // A stale result.json from a previous iteration would be read as this run's output.

@@ -167,6 +167,18 @@ export const SETTINGS: SettingDef[] = [
     hint: 'auto = live коли Chrome-міст живий, інакше локальний Ken Burns.',
   },
   { key: 'MEDIA_GEN_IMAGES', label: 'Генерувати фонові зображення', group: 'media', kind: 'boolean', default: 'true', hint: 'Помічаються як ai_generated; вимкнення робить білди швидшими й офлайновими.' },
+  {
+    key: 'LANDING_GALLERY', label: 'Референси з landing.gallery', group: 'media', kind: 'boolean', default: 'true',
+    hint: 'Публічні скриншоти лендінгів як ДОДАТКОВІ референси для арт-директора (етап 9). Механіка руху далі тільки з motion-паку, палітра — тільки з айдентики бізнесу. Вимкнено = поведінка як раніше.',
+  },
+  {
+    key: 'LANDING_GALLERY_MAX_REFS', label: 'Скільки референсів завантажувати', group: 'media', kind: 'number',
+    default: '6', validate: num(1, 12), hint: 'Їхній API віддає максимум 4 за виклик, тож 6 = два запити.',
+  },
+  {
+    key: 'LANDING_GALLERY_TIMEOUT_MS', label: 'Таймаут landing.gallery (мс)', group: 'media', kind: 'number',
+    default: '5000', validate: num(1000, 30000), hint: 'Навмисно короткий: джерело натхнення ніколи не має гальмувати білд.',
+  },
 
   // ── Outreach ──────────────────────────────────────────────────────────────
   {

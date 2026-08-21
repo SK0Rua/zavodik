@@ -209,6 +209,16 @@ export const ArtDirectionSchema = z.object({
   typeAsDesign: z.string().min(1),
   /** Named photo-grade class applied to every photo, or null when there are none. */
   photoGrade: z.string().nullable(),
+
+  /**
+   * URLs of any landing.gallery references that actually shaped this direction
+   * (`src/lib/landingGallery.ts`). Optional and unverified by code: these are a
+   * SECONDARY inspiration source, so a citation is a provenance note for a human
+   * reading the design contract months later, not a contract the rubric scores.
+   * Unlike `referenceSlug` — which the motion pack must contain — an empty list
+   * here is the normal, honest answer.
+   */
+  galleryRefs: z.array(z.string()).max(8).optional(),
 });
 export type ArtDirection = z.infer<typeof ArtDirectionSchema>;
 
