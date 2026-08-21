@@ -501,7 +501,7 @@ function TelegramFlow({ status, chatId, onCheck }: {
           {busy === 'find' ? 'Шукаю…' : 'Знайти'}
         </button>
         {hasToken && hasChat && (
-          <RefreshButton kind="telegram" onResult={onCheck} label="Надіслати тест" />
+          <RefreshButton kind="telegram-send" onResult={onCheck} label="Надіслати тест" />
         )}
       </div>
 

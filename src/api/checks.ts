@@ -25,7 +25,7 @@ import { claudeCodeRuntime } from '../agents/claudeCodeRuntime.js';
 import { z } from 'zod';
 
 export type CheckKind =
-  | 'claude' | 'codex' | 'telegram' | 'smtp' | 'imap' | 'waha' | 'flowkit';
+  | 'claude' | 'codex' | 'telegram' | 'telegram-send' | 'smtp' | 'imap' | 'waha' | 'flowkit';
 
 export interface CheckResult {
   ok: boolean;
@@ -126,7 +126,42 @@ async function checkCodex(): Promise<CheckResult> {
 // ─── Telegram ────────────────────────────────────────────────────────────────
 
 /** Sends a real test message: the only way to prove token + chat_id together. */
+/**
+ * SILENT verification: getMe proves the token, getChat proves the bot can see
+ * the chat — neither sends anything. This is what the auto-check on /settings
+ * page load runs; a background check that MESSAGES Roman every cache-cold
+ * page open is how this started. Actually sending stays behind the explicit
+ * «Надіслати тест» button (`checkTelegramSend`).
+ */
 async function checkTelegram(): Promise<CheckResult> {
+  const token = config.telegram.botToken;
+  const chatId = config.telegram.chatId;
+  if (!token) return { ok: false, message: 'Bot token не заданий.' };
+  if (!chatId) return { ok: false, message: 'Chat ID не заданий.' };
+  try {
+    const me = await fetch(`https://api.telegram.org/bot${token}/getMe`, {
+      signal: AbortSignal.timeout(15_000),
+    }).then((r) => r.json()).catch(() => null) as any;
+    if (!me?.ok) {
+      return { ok: false, message: `Telegram відмовив боту: ${me?.description ?? 'невалідний токен'}`, detail: { errorCode: me?.error_code ?? null } };
+    }
+    const chat = await fetch(`https://api.telegram.org/bot${token}/getChat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId }),
+      signal: AbortSignal.timeout(15_000),
+    }).then((r) => r.json()).catch(() => null) as any;
+    if (!chat?.ok) {
+      return { ok: false, message: `Бот @${me.result?.username} живий, але чат недоступний: ${chat?.description ?? 'chat not found'}`, detail: { errorCode: chat?.error_code ?? null } };
+    }
+    return { ok: true, message: `Бот @${me.result?.username} підключений до чату — без надсилань.`, detail: { bot: me.result?.username ?? null } };
+  } catch (err) {
+    return { ok: false, message: `Не достукались до Telegram: ${short(err)}` };
+  }
+}
+
+/** The REAL send — only for the explicit «Надіслати тест» button. */
+async function checkTelegramSend(): Promise<CheckResult> {
   const token = config.telegram.botToken;
   const chatId = config.telegram.chatId;
   if (!token) return { ok: false, message: 'Bot token не заданий.' };
@@ -315,6 +350,7 @@ const CHECKS: Record<CheckKind, () => Promise<CheckResult>> = {
   claude: checkClaude,
   codex: checkCodex,
   telegram: checkTelegram,
+  'telegram-send': checkTelegramSend,
   smtp: checkSmtp,
   imap: checkImap,
   waha: checkWaha,
