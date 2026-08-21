@@ -13,8 +13,11 @@
  * explicit warning when nothing has happened for a while, because silence is
  * the signal a person actually needs and it is the one thing a spinner hides.
  *
- * Strictly read-only. There is no control here and no endpoint behind it that
- * could start or stop anything.
+ * The list itself is strictly read-only: no control here starts or stops
+ * anything. What it now also carries is a link to the build's REAL terminal —
+ * Roman asked for «можливість підключення до термінальної сесії», because a
+ * summary is not the same as watching the agent work. That link is read-only
+ * too unless BUILD_TERMINAL_WRITABLE is on, which the panel says out loud.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -28,6 +31,18 @@ export interface BuildLogLine {
   agent?: string;
 }
 
+/**
+ * A live terminal session for this build, when the tmux runtime is in use.
+ * `url` is null when nothing is published to attach to — in that case the
+ * session name is still shown, because it is what an SSH attach needs.
+ */
+interface TerminalInfo {
+  session: string;
+  url: string | null;
+  writable: boolean;
+  startedAt: string;
+}
+
 interface Poll {
   ok: boolean;
   lines?: BuildLogLine[];
@@ -38,6 +53,7 @@ interface Poll {
   jobType?: string | null;
   runningForSec?: number | null;
   projectState?: string | null;
+  terminal?: TerminalInfo | null;
   message?: string;
 }
 
@@ -153,6 +169,9 @@ export function LiveBuildPanel({ projectId, projectState }: {
   // The iteration number, read off the stage markers rather than passed in:
   // the log is the thing that knows, and a prop would go stale between polls.
   const iterationLine = [...stages].reverse().find((s) => /Ітерац/i.test(s.summary));
+  // Only while the job is actually running: the marker can outlive the session
+  // by a heartbeat, and a dead attach link reads as a broken feature.
+  const terminal = poll?.active ? poll.terminal ?? null : null;
 
   return (
     <section className="card p-5 sm:p-6">
@@ -180,6 +199,43 @@ export function LiveBuildPanel({ projectId, projectState }: {
 
       {error && (
         <p className="mt-3 text-sm text-dot-wait">{error}</p>
+      )}
+
+      {/* The real terminal. Everything else in this panel is a summary of what
+          the agent did; this is the agent's actual session, scrollback and all.
+          Shown only while it exists — a link to a finished session is a 404. */}
+      {terminal && (
+        <div className="mt-4 rounded-lg border border-line bg-paper-sunk/50 px-3 py-2.5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <p className="text-sm text-ink-soft">
+              Агент працює в живій термінальній сесії{' '}
+              <span className="font-mono text-ink">{terminal.session}</span>.
+            </p>
+            {terminal.url && (
+              <a
+                className="btn-quiet btn-sm"
+                href={terminal.url}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                Відкрити термінал збірки ↗
+              </a>
+            )}
+          </div>
+          {!terminal.url && (
+            <p className="mt-1.5 text-sm text-ink-mute">
+              Веб-термінал не налаштований. Підключитись можна по SSH:{' '}
+              <span className="font-mono">tmux attach -r -t {terminal.session}</span>{' '}
+              у контейнері <span className="font-mono">factory-build</span>.
+            </p>
+          )}
+          {terminal.writable && (
+            <p className="mt-1.5 text-sm text-dot-wait">
+              Термінал у режимі втручання: те, що ви наберете, піде живому агенту
+              і змінить демо без approval і без сліду в історії.
+            </p>
+          )}
+        </div>
       )}
 
       {stages.length > 0 && (
@@ -236,7 +292,12 @@ export function LiveBuildPanel({ projectId, projectState }: {
       )}
 
       <p className="mt-3 text-sm text-ink-mute">
-        Тільки перегляд — звідси нічого не запускається і не зупиняється.
+        {/* This used to say «тільки перегляд» unconditionally. With a writable
+            terminal that is simply untrue, and a false reassurance about what
+            can change a client's site is worse than none. */}
+        {terminal?.writable
+          ? 'Цей список — тільки перегляд. Термінал вище відкритий на запис.'
+          : 'Тільки перегляд — звідси нічого не запускається і не зупиняється.'}
         {projectState && ` Стан проєкту: ${projectState}.`}
       </p>
     </section>

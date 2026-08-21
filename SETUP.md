@@ -21,7 +21,7 @@ package** (кожен факт має source → immutable raw-обʼєкт) →
 | `minio` | 9000 / 9001 | object storage: raw evidence, скриншоти, QA-звіти |
 | `gosom` | 8085 | google-maps-scraper, REST API — **єдине** джерело discovery |
 | `factory` | 8787, 8788 | воркери `core,enrich` + JSON API/вебхуки (8787) + сервер демо (8788) |
-| `factory-build` | — | воркери `build` (brief → збірка → visual QA), окремий семафор |
+| `factory-build` | 7681 | воркери `build` (brief → збірка → visual QA), окремий семафор; на 7681 — **живий термінал збірки**, до якого можна підключитись |
 | `ui` | 3000 | **контрольний інтерфейс**: approve-черга, воронка, кампанії, jobs, розмови |
 | `waha` | 3001 | self-hosted WhatsApp HTTP API (НЕ Meta Cloud API) |
 | `greenmail` | 3025/3143/8081 | лише dev (`--profile dev-mail`): локальні SMTP+IMAP для тестів |
@@ -109,9 +109,45 @@ CMD обох factory-сервісів, ідемпотентно).
 **Всі порти привʼязані до `127.0.0.1`** — навмисно. Назовні виставляй **лише**
 через Tailscale або reverse-proxy з автентифікацією і TLS. Що категорично не
 можна відкривати в інтернет: `waha` (сесія WhatsApp = креденшел, відкритий WAHA
-= захоплення акаунта), `minio`, `postgres`. Якщо UI стає публічним — постав
+= захоплення акаунта), `minio`, `postgres`, **`7681` (термінал збірки — це жива
+сесія агента в контейнері)**. Якщо UI стає публічним — постав
 `UI_BASE_URL` (у `/settings` → **Система**) на публічний URL: Telegram-лінки
 беруться саме звідти.
+
+### Термінал збірки — щоб кнопка «Відкрити термінал» працювала
+
+Збірки за замовчуванням ідуть у tmux, щоб до них можна було підключитись і
+бачити справжній термінал агента, а не лише переказ подій. Образ уже містить
+`tmux` і `ttyd`; на сервері лишається **одне** — сказати UI, за якою адресою той
+термінал доступний ТВОЄМУ браузеру:
+
+```bash
+# у .env, або одразу в /settings → Агенти → «Адреса термінала збірки»
+BUILD_TERMINAL_BASE_URL=http://<host-або-tailscale-імʼя>:7681
+```
+
+Порт `7681` опублікований на `127.0.0.1` контейнера `factory-build`, тому
+«з браузера» означає: через Tailscale, SSH-тунель (`ssh -L 7681:localhost:7681
+<host>`) або той самий authenticated reverse-proxy, що й UI. Пароль — basic auth,
+логін `roman`, пароль **похідний** від `INTERNAL_API_KEY`; побачити його можна
+так:
+
+```bash
+docker compose exec factory-build node -e "console.log(require('crypto').createHash('sha256').update('build-terminal:'+process.env.INTERNAL_API_KEY).digest('hex').slice(0,24))"
+```
+
+Якщо `BUILD_TERMINAL_BASE_URL` порожній — нічого не ламається: у картці бізнесу
+замість кнопки зʼявиться підказка, як підключитись по SSH
+(`docker compose exec factory-build tmux attach -r -t build-<projectId>`).
+
+Термін «підключитись» тут означає **дивитись**. Щоб мати змогу друкувати живому
+агенту, треба свідомо ввімкнути `BUILD_TERMINAL_WRITABLE` (у `/settings` →
+Агенти, розділ «показати всі параметри»). Типово вимкнено, і це не перестраховка:
+натиснута в терміналі клавіша змінює демо клієнта без approval і без сліду в
+історії, тоді як кожна інша зміна у фабриці має і те, і те.
+
+Якщо на хості раптом немає tmux — збірки не падають: рантайм сам переходить на
+безголову SDK-сесію і пише про це у лог. Термінала в такому разі просто немає.
 
 ---
 
@@ -439,6 +475,25 @@ WAHA — живі проби; **heartbeat воркерів** (кожен про�
 чистить до ~9 МБ (`WORKSPACE_GC=false` вимикає). Референси є **лише для ніші
 beauty** — нова ніша потребує своєї теки `references/<niche>/`.
 
+**Термінал збірки (`BUILDER_MODE=tmux`).** Що перевірено і що ні:
+
+- Перевірено офлайн (`pnpm test:tmux-agent`, 35 перевірок): гард CLI-хука
+  збігається з SDK-гардом на всіх кейсах (вихід за workspace, `~/.ssh`, `.env`,
+  `curl` назовні vs loopback, `WebFetch`), хук fail-closed на битому payload,
+  ttyd-argv справді read-only і з basic auth, маркер живої сесії протухає.
+- **Не перевірено живим прогоном**: справжня сесія `claude` у tmux
+  (`pnpm test:tmux-agent --live`) і сам `ttyd`. На маку Романа немає ні tmux, ні
+  ttyd, а ставити їх на його машину я не став. **Перший крок на сервері:**
+  `docker compose exec factory-build pnpm test:tmux-agent --live` — це підніме
+  одну коротку справжню сесію і перевірить весь ланцюг (сесія → промпт-файл →
+  `result.json` → скролбек → прибирання). Поки цього не зроблено, тримай
+  `BUILDER_MODE=sdk`, якщо не хочеш ризикувати першою реальною збіркою.
+- Одна сесія на процес: `factory-build` і так тримає одного агента, тому
+  паралельні збірки з окремими терміналами не передбачені.
+- Якщо `claude` у tmux завершиться, не написавши `result.json`, збірка впаде з
+  причиною (`idle` / `gone` / `timeout`) і хвостом pane у тексті помилки; повний
+  скролбек лишиться у `sites/<biz>/<projectId>/terminal.log`.
+
 **Медіа.** Без FlowKit hero-кліп = Ken Burns через ffmpeg (в образі), не Veo.
 Міст до FlowKit неофіційний і може ламатись при змінах на боці Google.
 
@@ -483,6 +538,22 @@ pnpm tsx scripts/purge-orphan-jobs.ts --apply   # видалити
 **gosom вічно в `working`.** Тег `v1.14.0` непридатний (тягне драйвер Playwright
 з мертвого URL). Закріплено `v1.17.3`.
 
+**Кнопки «Відкрити термінал збірки» немає, хоча збірка йде.** По черзі:
+
+1. `BUILD_TERMINAL_BASE_URL` порожній → кнопки не буде за задумом (у картці
+   натомість підказка про SSH). Заповни в `/settings` → Агенти.
+2. `BUILDER_MODE=sdk` → термінала немає взагалі, це безголова сесія.
+3. tmux не знайшовся на хості → в логах `factory-build` буде
+   `tmux is not installed; falling back to the headless SDK runtime`.
+4. ttyd не піднявся → `build terminal not served: …`. Дві типові причини:
+   не виставлений `INTERNAL_API_KEY` (без нього пароля немає, а термінал без
+   автентифікації — це шел на хості для будь-кого, тому він свідомо не
+   стартує), або порт `7681` уже зайнятий.
+
+**Термінал відкривається, але порожній / «session not found».** Сесія вже
+завершилась: ttyd живе рівно стільки, скільки збірка. Те, що встигло
+надрукуватись, лежить у `sites/<biz>/<projectId>/terminal.log`.
+
 **Демо відкривається без стилів.** Клас багів з абсолютними шляхами Next-export
 під токенізованим URL; вирішено в `serveDir.ts`, health check окремо тягне
 stylesheet і вимагає ≥500 байт.
@@ -498,6 +569,8 @@ pnpm tsx scripts/test-settings.ts            # шифрування секрет
 pnpm tsx scripts/test-accounts-parse.ts     # парсинг PTY-виводу claude setup-token / codex login
 pnpm tsx scripts/test-agent-parsing.ts       # парсинг/схеми/rate-limit/семафор
 pnpm tsx scripts/test-agent-sandbox.ts       # env-allowlist агента
+pnpm test:tmux-agent                         # гард CLI-хука == SDK-гард, ttyd argv, маркери сесії
+pnpm test:tmux-agent --live                  # ⚠ одна СПРАВЖНЯ сесія claude у tmux (потрібен tmux)
 pnpm tsx scripts/test-discovery-failpaths.ts # 0 результатів = failure, не тиша
 pnpm tsx scripts/test-build-policy.ts        # кому і в якому порядку будуємо демо
 pnpm tsx scripts/test-router-build-gate.ts   # той самий гейт через реальну БД

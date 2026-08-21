@@ -149,6 +149,30 @@ export const SETTINGS: SettingDef[] = [
     kind: 'number', default: '', validate: num(1, 8), advanced: true,
     hint: 'Окремий ліміт для процесу factory. Порожньо = як у полі вище.',
   },
+  {
+    key: 'BUILDER_MODE', label: 'Як запускати агента збірки', group: 'agents',
+    kind: 'select', options: ['tmux', 'sdk'], default: 'tmux',
+    hint: 'tmux — до збірки можна підключитись і бачити живий термінал агента. sdk — фонова сесія без термінала. Якщо на сервері немає tmux, збірка сама переходить на sdk.',
+  },
+  {
+    key: 'BUILD_TERMINAL_WEB', label: 'Відкривати термінал збірки в браузері', group: 'agents',
+    kind: 'boolean', default: 'true',
+    hint: 'Піднімає ttyd на час збірки, щоб кнопка «Відкрити термінал» працювала. Вимкнено — сесія лишається в tmux, підключитись можна тільки по SSH.',
+  },
+  {
+    key: 'BUILD_TERMINAL_BASE_URL', label: 'Адреса термінала збірки', group: 'agents',
+    kind: 'text', validate: url, placeholder: 'http://localhost:7681',
+    hint: 'Куди веде кнопка «Відкрити термінал». Порожньо = кнопки немає, підключення тільки по SSH.',
+  },
+  {
+    key: 'BUILD_TERMINAL_PORT', label: 'Порт термінала збірки', group: 'agents',
+    kind: 'number', default: '7681', validate: num(1, 65535), advanced: true,
+  },
+  {
+    key: 'BUILD_TERMINAL_WRITABLE', label: 'Дозволити писати в термінал збірки', group: 'agents',
+    kind: 'boolean', default: 'false', advanced: true,
+    hint: 'Втручання в живу збірку з клавіатури. За замовчуванням вимкнено: така правка змінює демо клієнта без approval і без сліду в історії.',
+  },
 
   // ── Канали: усе, що лишилося поза «Підключеними акаунтами» ─────────────────
   // Токени й паролі тут теж є, бо ключ мусить існувати в реєстрі, щоб UI взагалі

@@ -19,6 +19,7 @@ import { db, schema } from '../db/client.js';
 import { ensureDemoServer, registerPreview, startDemoServer } from '../lib/serveDir.js';
 import { writeQaIssues } from '../build/workspace.js';
 import { buildLogPath, readBuildLog } from '../build/buildLog.js';
+import { liveTerminal } from '../agents/tmuxRuntime.js';
 import { config } from '../config.js';
 import { log } from '../lib/logger.js';
 import { handleWahaWebhook } from '../outreach/wahaInbound.js';
@@ -324,12 +325,29 @@ ${previous || '(попередніх автоматичних зауважень
 
     const tail = await readBuildLog(buildLogPath(project.businessId, projectId), after);
 
+    // Whether Roman can attach to the REAL terminal of this build right now.
+    // Read off the shared volume rather than from tmux, because tmux runs in
+    // `factory-build` and this endpoint answers from `factory` — see
+    // TERMINAL_MARKER in src/agents/tmuxRuntime.ts.
+    const marker = project.dir ? await liveTerminal(project.dir) : null;
+
     return c.json({
       ok: true,
       lines: tail.lines,
       nextOffset: tail.nextOffset,
       lastEventAgoSec: tail.lastEventAgoSec,
       size: tail.size,
+      terminal: marker
+        ? {
+            session: marker.session,
+            // A URL only when one is actually configured AND a server is up;
+            // otherwise the UI says how to attach over SSH instead of offering
+            // a link that would 404.
+            url: marker.served ? config.build.terminalBaseUrl || null : null,
+            writable: config.build.terminalWritable,
+            startedAt: marker.startedAt,
+          }
+        : null,
       active: job?.status === 'running' || job?.status === 'retry_wait',
       jobStatus: job?.status ?? null,
       jobType: job?.jobType ?? null,

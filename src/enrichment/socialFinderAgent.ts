@@ -255,6 +255,11 @@ export async function findSocialCandidates(
         // agent must look its schema up before it can call it. Without it the
         // agent silently has no way to search at all (verified empirically).
         allowedTools: ['ToolSearch', 'WebSearch', 'Read', 'Write'],
+        // Headless even when builds run in tmux: a few minutes of searching in a
+        // scratch dir is nothing anyone would attach to, and this runs in the
+        // `factory` process, which does not own the terminal port that
+        // `factory-build` serves.
+        terminal: false,
         onUsage: (u) => log.info('agent usage', { businessId: biz.id, call: 'social-finder', ...u }),
       }, SocialFinderResultSchema);
     } catch (err) {

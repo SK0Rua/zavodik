@@ -308,6 +308,41 @@ export const config = {
      * install` restores a rebuildable workspace.
      */
     get workspaceGc(): boolean { return getSettingBool('WORKSPACE_GC', true); },
+    /**
+     * How a workspace agent session is run (Roman's requirement 2026-08-22):
+     *   `tmux` — the interactive CLI in a tmux session he can ATTACH to, seeing
+     *            the real TUI and its scrollback. The default: watching a build
+     *            was the whole point of asking.
+     *   `sdk`  — the headless SDK session. Automatic fallback on a host with no
+     *            tmux, so this setting can never make builds impossible.
+     */
+    get mode(): 'sdk' | 'tmux' {
+      return getSettingEnum('BUILDER_MODE', ['tmux', 'sdk'] as const, 'tmux');
+    },
+    /**
+     * Serve the build terminal over HTTP (ttyd) so the console can attach.
+     * Off leaves builds running in tmux — attachable over SSH, just not from
+     * the browser.
+     */
+    get terminalWeb(): boolean { return getSettingBool('BUILD_TERMINAL_WEB', true); },
+    /** Port the per-build ttyd listens on inside the container. */
+    get terminalPort(): number { return getSettingNumber('BUILD_TERMINAL_PORT', 7681); },
+    /**
+     * Public base URL of that ttyd, used to build the link in the UI. Empty =
+     * the console shows the session name and how to reach it instead of a link,
+     * which is the honest answer on a host where nothing is published yet.
+     */
+    get terminalBaseUrl(): string { return getSetting('BUILD_TERMINAL_BASE_URL'); },
+    /**
+     * Let an attached terminal TYPE into the running agent (ttyd `--writable`).
+     *
+     * Default OFF and deliberately so: a keystroke into a live build changes a
+     * client's demo through a channel that leaves no approval, no evidence and
+     * no audit trail — every other mutation in this factory has all three. Read
+     * -only attach answers the question Roman actually asked ("what is it
+     * doing"); this answers a different, riskier one, so it is opt-in.
+     */
+    get terminalWritable(): boolean { return getSettingBool('BUILD_TERMINAL_WRITABLE', false); },
     /** Critic issues at or above this severity are fed back to the builder. */
     get qaFeedbackSeverity(): 'low' | 'medium' | 'high' {
       return (process.env.QA_FEEDBACK_SEVERITY ?? 'medium') as 'low' | 'medium' | 'high';

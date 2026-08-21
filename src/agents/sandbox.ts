@@ -71,6 +71,10 @@ export function codeAgentEnv(oauthToken: string): Record<string, string> {
   }
   // Never inherited from the parent; only the subscription token is injected.
   if (oauthToken) env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
+  // A UTF-8 locale must always exist: without one, tmux send-keys mangles
+  // multibyte input on its way into the agent TUI (measured), and tools inside
+  // the workspace read/write UTF-8 files. Containers often ship with no LANG.
+  if (!env.LANG) env.LANG = 'C.UTF-8';
   return env;
 }
 

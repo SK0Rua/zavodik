@@ -113,6 +113,16 @@ export interface CodeAgentOptions {
    */
   skills?: string[] | 'all';
   /**
+   * Run this session in a tmux terminal Roman can attach to, instead of the
+   * headless SDK. Defaults to `config.build.mode === 'tmux'`.
+   *
+   * Set `false` for agents nobody would ever watch (the social finder, the brand
+   * agent): they are short, they have no workspace worth attaching to, and a
+   * tmux session per call would be pure overhead. Ignored by the Codex adapter,
+   * and ignored on a host with no tmux — see `runCodeAgent()`.
+   */
+  terminal?: boolean;
+  /**
    * Absolute path of the project's `build-log.ndjson`. When set, the runtime
    * appends a one-line summary of every SDK message as it streams — which is
    * what makes an hour-long build visible in the console instead of a single

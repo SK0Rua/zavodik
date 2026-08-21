@@ -105,6 +105,12 @@ services:
       # connection. The isolation that default protects is provided instead by
       # the `ports:` mapping below, which publishes only to the host's 127.0.0.1.
       DEMO_HOST: 0.0.0.0
+      # Where the «Відкрити термінал збірки» button points. The terminal itself
+      # is served by `factory-build`; this process only reports the URL, so it
+      # must be an address ROMAN'S BROWSER can reach, not a compose-internal one.
+      # Empty is a valid answer: the console then explains the SSH attach instead
+      # of offering a link that would not resolve.
+      BUILD_TERMINAL_BASE_URL: ${BUILD_TERMINAL_BASE_URL:-http://localhost:7681}
     volumes:
       # Named volumes, NOT host bind mounts: a bind dir is created by the docker
       # daemon as root:root and the container runs as `node` (uid 1000), which
@@ -136,6 +142,10 @@ services:
       DATABASE_URL: postgres://factory:${POSTGRES_PASSWORD:-factory}@postgres:5432/factory
       S3_ENDPOINT: http://minio:9000
       WORKER_GROUPS: build
+      # The attachable build terminal (Roman's requirement 2026-08-22): the
+      # builder agent runs in tmux here, and ttyd serves that session on the
+      # port published below. Both values are only FALLBACKS — /settings wins.
+      BUILD_TERMINAL_PORT: ${BUILD_TERMINAL_PORT:-7681}
     volumes:
       # Named volumes, NOT host bind mounts: a bind dir is created by the docker
       # daemon as root:root and the container runs as `node` (uid 1000), which
@@ -146,6 +156,13 @@ services:
       - deploysdata:/app/deploys
       # Shared with `factory`: gen-image runs in the build group too.
       - codexhome:/home/node/.codex
+    # The build terminal. Bound to 127.0.0.1 like every other port here: ttyd
+    # serves a live agent session, so an exposed port is someone else watching
+    # (and, with BUILD_TERMINAL_WRITABLE, typing into) a client's build. Reach it
+    # the same way as the UI — a tunnel or an authenticated reverse proxy, never
+    # a raw public port. ttyd's own basic auth is a second layer, not the first.
+    ports:
+      - "127.0.0.1:${BUILD_TERMINAL_PORT:-7681}:${BUILD_TERMINAL_PORT:-7681}"
     # Workers only: the API and demo server belong to `factory` (one port owner).
     # `db:migrate` is idempotent and also runs in `factory`'s CMD; whichever
     # container starts first applies the schema, the other is a no-op.

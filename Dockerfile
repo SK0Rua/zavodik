@@ -31,7 +31,40 @@ RUN npx playwright install --with-deps chromium \
     && chmod -R a+rx /ms-playwright
 
 # ffmpeg: Ken Burns hero-clip mock/fallback (src/media/video.ts) — without it hero falls back to a static photo
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+# tmux:   the builder agent runs INSIDE a tmux session so Roman can attach to the
+#         real terminal of a running build (src/agents/tmuxRuntime.ts). Without
+#         it `BUILDER_MODE=tmux` degrades to the headless SDK path and the
+#         «Відкрити термінал» button never appears.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg tmux \
+    && rm -rf /var/lib/apt/lists/* \
+    && tmux -V
+
+# ttyd serves that tmux session over HTTP, so attaching happens in a browser
+# rather than over SSH (src/agents/terminalServer.ts).
+#
+# Installed as a pinned static binary rather than with apt, because ttyd is in
+# NO Debian stable suite — it exists only in sid, so `apt-get install ttyd` on
+# bookworm fails and takes the whole image build with it. The upstream release
+# is statically linked and needs no runtime deps.
+#
+# Both architectures are listed because the factory runs on x86 servers and on
+# Roman's Apple Silicon mac. The checksum is verified: this binary is handed a
+# terminal into a container, so a silently substituted download is not a risk
+# worth carrying for the sake of a shorter Dockerfile.
+ARG TTYD_VERSION=1.7.7
+ARG TTYD_SHA256_X86_64=8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55
+ARG TTYD_SHA256_AARCH64=b38acadd89d1d396a0f5649aa52c539edbad07f4bc7348b27b4f4b7219dd4165
+RUN set -eux; \
+    case "$(dpkg --print-architecture)" in \
+      amd64)  arch=x86_64;  sha="$TTYD_SHA256_X86_64" ;; \
+      arm64)  arch=aarch64; sha="$TTYD_SHA256_AARCH64" ;; \
+      *) echo "no ttyd build for $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /usr/local/bin/ttyd \
+      "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.${arch}"; \
+    echo "${sha}  /usr/local/bin/ttyd" | sha256sum -c -; \
+    chmod +x /usr/local/bin/ttyd; \
+    ttyd --version
 
 # The builder agent works inside a copy of site-template/ and reads references/
 # and .claude/skills/ (gen-image). All three must exist in the image — see

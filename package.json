@@ -22,6 +22,7 @@
     "test:build-log": "tsx scripts/test-build-log.ts",
     "test:check-cache": "tsx scripts/test-check-cache.ts",
     "test:landing-gallery": "tsx scripts/test-landing-gallery.ts",
+    "test:tmux-agent": "tsx scripts/test-tmux-agent.ts",
     "verify:media-parsers": "tsx scripts/verify-media-parsers.ts",
     "telegram:setup": "tsx src/telegram/bot.ts",
     "ui:dev": "pnpm --dir ui dev",

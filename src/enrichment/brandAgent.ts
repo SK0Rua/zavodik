@@ -526,6 +526,11 @@ export async function runBrandAgent(
           // One turn per file to Read, plus room to think and write result.json.
           maxTurns: present.length + 8,
           timeoutMs: opts.timeoutMs ?? 10 * 60_000,
+          // Headless even when builds run in tmux: this is a few minutes of
+          // looking at images in a scratch dir, with nothing worth attaching
+          // to, and it runs in the `factory` process — which does not own the
+          // terminal port that `factory-build` serves.
+          terminal: false,
           onUsage: (u) => log.info('agent usage', { businessId, call: 'brand-identity', ...u }),
         }, BrandAgentResultSchema);
       } catch (err) {

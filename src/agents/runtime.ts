@@ -11,6 +11,7 @@
  */
 import { z, type ZodType } from 'zod';
 import { config } from '../config.js';
+import { log } from '../lib/logger.js';
 import { claudeCodeRuntime } from './claudeCodeRuntime.js';
 import { codexRuntime } from './codexRuntime.js';
 import type { AgentKind, AgentRuntime, CodeAgentOptions, StructuredOptions } from './types.js';
@@ -37,12 +38,43 @@ export async function runAgent<T>(
 /**
  * Workspace agent with tools (Bash/Read/Write/Edit/Glob/Grep). The agent's only
  * channel back into the pipeline is `result.json`, validated against `resultSchema`.
+ *
+ * Two ways to run one, chosen by `config.build.mode` (SPEC §2.3, Roman's
+ * requirement 2026-08-22 — "можливість підключення до термінальної сесії"):
+ *
+ *   `tmux` (default) — the interactive CLI in a detached tmux session, which
+ *     `ttyd` serves so the console can attach to the REAL terminal, scrollback
+ *     and all. See `tmuxRuntime.ts`.
+ *   `sdk` — the headless SDK session. Unchanged, and still the fallback.
+ *
+ * The choice applies to Claude Code only: the Codex adapter drives its own CLI
+ * and has no tmux path. It is also **per call**, not global — a caller may pin
+ * `terminal: false` for an agent nobody would ever watch (the social finder),
+ * and the fallback below keeps a host without tmux building normally rather
+ * than failing every job.
  */
 export async function runCodeAgent<T>(
   opts: CodeAgentOptions,
   resultSchema: ZodType<T>,
 ): Promise<T> {
-  return getRuntime(opts.kind ?? 'builder').codeAgent(opts, resultSchema);
+  const runtime = getRuntime(opts.kind ?? 'builder');
+
+  const wantsTerminal = (opts.terminal ?? config.build.mode === 'tmux')
+    && runtime.id === 'claude-code';
+  if (wantsTerminal) {
+    const { runCodeAgentTmux, tmuxAvailable } = await import('./tmuxRuntime.js');
+    if (await tmuxAvailable()) {
+      return runCodeAgentTmux(opts, resultSchema);
+    }
+    // Not an error: a dev box without tmux should still build. Warned rather
+    // than silent, because "why can't I attach to the terminal" has exactly one
+    // answer and this is it.
+    log.warn('tmux is not installed; falling back to the headless SDK runtime', {
+      agent: opts.name,
+    });
+  }
+
+  return runtime.codeAgent(opts, resultSchema);
 }
 
 export { z };
