@@ -175,8 +175,14 @@ export function LiveBuildPanel({ projectId, projectState }: {
     return () => clearInterval(id);
   }, [tick]);
 
-  const stages = lines.filter((l) => l.type === 'stage');
-  const visible = showAll ? lines : lines.slice(-40);
+  // Milestones and failures go to the timeline; tools, agent text and results
+  // are the detail tail. DISJOINT on purpose: stage lines used to render in
+  // both blocks, so a build with no tool events yet — a kickoff failing and
+  // retrying, say — was the same list printed twice back to back (Roman,
+  // 2026-08-22: «для чого мені тут двічі один і той же текст?»).
+  const timeline = lines.filter((l) => l.type === 'stage' || l.type === 'error');
+  const detail = lines.filter((l) => l.type !== 'stage' && l.type !== 'error');
+  const visible = showAll ? detail : detail.slice(-40);
   const quietSec = poll?.lastEventAgoSec ?? null;
   const isQuiet = poll?.active === true && quietSec !== null && quietSec > QUIET_WARN_SEC;
 
@@ -192,7 +198,7 @@ export function LiveBuildPanel({ projectId, projectState }: {
 
   // The iteration number, read off the stage markers rather than passed in:
   // the log is the thing that knows, and a prop would go stale between polls.
-  const iterationLine = [...stages].reverse().find((s) => /Ітерац/i.test(s.summary));
+  const iterationLine = [...timeline].reverse().find((s) => /Ітерац/i.test(s.summary));
   // Only while the job is actually running: the marker can outlive the session
   // by a heartbeat, and a dead attach link reads as a broken feature.
   const terminal = poll?.active ? poll.terminal ?? null : null;
@@ -314,17 +320,17 @@ export function LiveBuildPanel({ projectId, projectState }: {
         </div>
       )}
 
-      {stages.length > 0 && (
+      {timeline.length > 0 && (
         <ol className="mt-4 space-y-1.5">
-          {stages.map((s, i) => {
-            const next = stages[i + 1];
+          {timeline.map((s, i) => {
+            const next = timeline[i + 1];
             const took = next
               ? (new Date(next.t).getTime() - new Date(s.t).getTime()) / 1000
               : null;
             return (
               <li key={`${s.t}-${i}`} className="flex gap-3 text-sm">
                 <span className="text-ink-mute tabular-nums shrink-0 w-12">{clockTime(s.t)}</span>
-                <span className="min-w-0 flex-1 text-ink">{s.summary}</span>
+                <span className={`min-w-0 flex-1 ${s.type === 'error' ? 'text-dot-stop' : 'text-ink'}`}>{s.summary}</span>
                 {took !== null && took >= 30 && (
                   <span className="text-ink-mute tabular-nums shrink-0">{humanDuration(took)}</span>
                 )}
@@ -354,9 +360,9 @@ export function LiveBuildPanel({ projectId, projectState }: {
         ) : (
           <>
             {feed}
-            {lines.length > visible.length && (
+            {detail.length > visible.length && (
               <button type="button" className="btn-quiet btn-sm mt-2" onClick={() => setShowAll(true)}>
-                показати всі {lines.length} подій
+                показати всі {detail.length} подій
               </button>
             )}
           </>
