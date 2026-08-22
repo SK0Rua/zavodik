@@ -16,9 +16,14 @@ import { useRef, useState, useTransition } from 'react';
 import { uploadHeroClip } from '@/lib/videoBriefActions';
 import { runWithToast } from '@/lib/toast';
 
-export function HeroVideoPanel({ businessId, prompt, heroPhoto, currentClip }: {
+export function HeroVideoPanel({ businessId, brief, heroPhoto, currentClip }: {
   businessId: string;
-  prompt: string;
+  /**
+   * The art-director-authored i2v prompt from the design contract, or null
+   * before the first build (the brief only exists once a direction is chosen —
+   * a generic pre-design prompt is exactly what Roman rejected).
+   */
+  brief: string | null;
   /** The start-frame photo: workspace file name + a downloadable URL. */
   heroPhoto: { file: string; url: string } | null;
   /** The newest hero_clip asset, if one exists. */
@@ -29,7 +34,8 @@ export function HeroVideoPanel({ businessId, prompt, heroPhoto, currentClip }: {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const copy = () => {
-    void navigator.clipboard.writeText(prompt).then(() => {
+    if (!brief) return;
+    void navigator.clipboard.writeText(brief).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
@@ -54,20 +60,29 @@ export function HeroVideoPanel({ businessId, prompt, heroPhoto, currentClip }: {
             : 'Кліпа ще немає — збірка зробить автоматичний Ken Burns. Хочеш wow-відео — згенеруй за брифом нижче і завантаж до збірки.'}
       </p>
 
-      <div className="mt-3 rounded-lg border border-line bg-paper-sunk/50 p-3">
-        <pre className="text-sm whitespace-pre-wrap font-mono text-ink-soft">{prompt}</pre>
-      </div>
+      {brief ? (
+        <>
+          <div className="mt-3 rounded-lg border border-line bg-paper-sunk/50 p-3">
+            <pre className="text-sm whitespace-pre-wrap font-mono text-ink-soft">{brief}</pre>
+          </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <button type="button" className="btn-outline btn-sm" onClick={copy}>
-          {copied ? 'Скопійовано' : 'Скопіювати промпт'}
-        </button>
-        {heroPhoto && (
-          <a className="btn-quiet btn-sm no-underline" href={heroPhoto.url} download>
-            Стартовий кадр: {heroPhoto.file} ↓
-          </a>
-        )}
-      </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button type="button" className="btn-outline btn-sm" onClick={copy}>
+              {copied ? 'Скопійовано' : 'Скопіювати промпт'}
+            </button>
+            {heroPhoto && (
+              <a className="btn-quiet btn-sm no-underline" href={heroPhoto.url} download>
+                Стартовий кадр: {heroPhoto.file} ↓
+              </a>
+            )}
+          </div>
+        </>
+      ) : (
+        <p className="mt-3 text-sm text-ink-mute max-w-[70ch]">
+          Промпт для генерації напише арт-директор під обраний дизайн — він з&apos;явиться тут
+          після першої збірки. Завантажити готовий mp4 можна вже зараз: збірка підхопить його.
+        </p>
+      )}
 
       <form action={upload} className="mt-4 flex flex-wrap items-center gap-2">
         <input

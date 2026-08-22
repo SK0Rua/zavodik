@@ -26,7 +26,7 @@ import { runCodeAgent } from '../agents/codeAgent.js';
 import { config } from '../config.js';
 import { enqueue, type JobPayload } from '../orchestrator/queue.js';
 import { buildSnapshot } from '../build/snapshot.js';
-import { BuildResultSchema, type ArtDirection, type BuildResult, type ContentBrief } from '../build/schemas.js';
+import { BuildResultSchema, DESIGN_CONTRACT_VERSION, type ArtDirection, type BuildResult, type ContentBrief } from '../build/schemas.js';
 import type { RubricVerdict } from '../build/rubric.js';
 import { checkProvenance, type ProvenanceReport } from '../build/provenance.js';
 import { generateDecorativeBackground, planHeroMedia } from '../build/media.js';
@@ -132,12 +132,36 @@ last action, even if you think you are finished — the pipeline reads it as you
     // Fresh build: rebuild the workspace from the frozen documents.
     const brief = JSON.parse((await getObject('raw', project.contentBriefKey!)).toString()) as ContentBrief;
     const designDoc = JSON.parse((await getObject('raw', project.designContractKey!)).toString()) as {
+      schemaVersion?: number;
       chosen: ArtDirection;
       rubric: {
         ranking: RubricVerdict['ranking']; rationale: string;
         chosenWow?: RubricVerdict['chosenWow'];
       };
     };
+
+    // Compatibility policy (Roman, 2026-08-22): no field-level fallbacks for
+    // old frozen contracts — a contract of an older schema regenerates the
+    // design from scratch under the current one. The stale project is closed
+    // honestly and a fresh content-and-design run creates its successor.
+    if ((designDoc.schemaVersion ?? 1) !== DESIGN_CONTRACT_VERSION) {
+      log.warn('design contract is an older schema; regenerating the design instead of building', {
+        businessId, projectId, contractVersion: designDoc.schemaVersion ?? 1, current: DESIGN_CONTRACT_VERSION,
+      });
+      await logStage(
+        buildLogPath(businessId, projectId),
+        'Дизайн-контракт застарілого формату — фабрика генерує дизайн заново (нова схема)',
+        'site-builder',
+      );
+      await db.update(schema.siteProjects)
+        .set({ state: 'failed' })
+        .where(eq(schema.siteProjects.id, projectId));
+      await enqueue('content-and-design', {
+        businessId, campaignId: payload.campaignId,
+        idempotencyKey: `content-and-design:${businessId}:regen-v${DESIGN_CONTRACT_VERSION}:${projectId}`,
+      });
+      return;
+    }
     if (project.snapshotKey) {
       // Use the FROZEN snapshot, not a fresh read: the design was chosen against it.
       snapshot = JSON.parse((await getObject('raw', project.snapshotKey)).toString());
@@ -218,7 +242,9 @@ action. Everything else can be perfect and the run still reports badly without i
         name: `site-builder:${businessId}:${iteration}`,
         cwd: dir,
         prompt,
-        heavy: true,
+        // Fresh builds always run the heavy model; fix iterations may drop to
+        // the light one (AGENT_FIX_LIGHT) — the edits are small and named.
+        heavy: !isFix || !config.agents.fixIterationsLight,
         kind: 'builder',
         maxTurns: isFix ? config.build.fixMaxTurns : config.build.maxTurns,
         timeoutMs: config.build.timeoutMs,

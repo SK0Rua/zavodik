@@ -354,7 +354,7 @@ ${contactLines}
 
 ${design.bigIdea}
 
-- **THE SIGNATURE — build this one with the most care:** ${design.signature ?? '(not named — pick the strongest single element of the direction and execute it as the signature)'}
+- **THE SIGNATURE — build this one with the most care:** ${design.signature}
   Spend the page's boldness here and keep everything around it quiet. If the finished page
   would lose nothing by deleting this element, the page has failed as a design.
 - **Reference:** ${design.reference.name} — borrow: ${design.reference.borrowedMechanics.join('; ')}
@@ -419,6 +419,24 @@ listed below, from \`${design.referenceSlug}\`. **Never take a colour, a photogr
 copy from them.** The palette is this business's, and it is already decided above.
 `
   : ''}
+### THE SCENE MAP — the page IS this sequence
+
+Motion system: ${design.sceneMap.system}
+
+${design.sceneMap.scenes.map((sc, i) =>
+  `${i + 1}. \`${sc.section}\` [${sc.trigger}] — ${sc.motion}\n   → handoff: ${sc.handoff}`).join('\n')}
+
+This is a CONTRACT, not inspiration: implement every scene with its stated trigger, keep the
+one motion system across all of them (same easing family, same duration scale), and treat the
+handoffs as seriously as the scenes — the transitions between sections are what separates a
+motion site from a page with entrance effects. Sections absent from the map are deliberately
+static; do not decorate them. The critic verdicts each scene by name from motion frames.
+
+Wire the triggers through \`@/lib/scenes\` (\`loadScene\` / \`enterScene\` / \`scrubScene\` /
+\`pinScene\`, tokens \`EASE\`/\`DUR\`): it carries the shared ScrollTrigger defaults and the
+reduced-motion guard, so scenes stay consistent and nothing re-invents global wiring. What
+happens INSIDE each timeline is yours; the wiring is not.
+
 ### The 3-4 mechanics to implement (no more)
 
 ${design.mechanics.map((m, i) => `${i + 1}. **${m.name}** — use \`${m.component}\`, in ${m.where}`).join('\n')}

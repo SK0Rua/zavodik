@@ -127,6 +127,13 @@ Failing it fails the page as "default AI template" regardless of what you set \`
 So score honestly and low where it is deserved — inflating a 1 to a 2 to be kind just ships a
 page Roman will reject.
 
+CONTRACT VERDICTS — when the payload carries \`motionContract\`, fill \`mechanicVerdicts\`:
+one entry per promised mechanic and per sceneMap scene (named "scene:<section>"), verdict
+implemented / partial / absent, with the FRAME that proves it as evidence. This is the check
+that separates a motion site from a page with entrance effects: a promised scrub or pin you
+cannot see across the scroll frames is absent, whatever the code claims. Code turns every
+\`absent\` into a high-severity issue automatically — do not also duplicate it in \`issues\`.
+
 REFERENCE COMPARISON — fill \`referenceComparison\`: \`closeness\` 0-10 for how near our page gets
 to the reference's level of craft, and \`gap\` naming the single most important thing the
 reference does that ours does not. Be specific ("the reference runs one grade over every photo;
@@ -211,6 +218,15 @@ export interface MotionEvidence {
   animationEngines: string[];
   /** Elements carrying a non-identity transform 1.6s after load. */
   transformedAtRest: number;
+  /**
+   * Per scroll depth (20..100%): fraction of viewport pixels that changed
+   * between the moment of arrival and 450ms later. Scroll CHOREOGRAPHY is
+   * things still moving as a section arrives; a page whose every depth lands
+   * already settled is a static site with entrance effects.
+   */
+  scrollArrivalDeltas: number[];
+  /** True when at least two depths show real arrival motion. */
+  scrollChoreographyDetected: boolean;
 }
 
 /**
@@ -355,13 +371,22 @@ export async function captureMotionEvidence(
     // are meant to show sections mid-arrival, not fully settled.
     const height = await page.evaluate(() => document.body.scrollHeight);
     const viewport = 900;
+    const scrollArrivalDeltas: number[] = [];
     for (const pct of [0, 20, 40, 60, 80, 100]) {
       const y = Math.max(0, Math.round(((height - viewport) * pct) / 100));
       await page.evaluate((to) => window.scrollTo({ top: to, behavior: 'instant' as ScrollBehavior }), y);
+      // Arrival choreography, measured: the same depth at 0ms vs 450ms. The
+      // depth-to-depth comparison would be meaningless (scrolling always moves
+      // pixels); WITHIN one depth, change means something is animating in.
+      const atArrival = pct === 0 ? null : await page.screenshot();
       await page.waitForTimeout(450);
+      const settled = await page.screenshot();
+      if (atArrival) {
+        scrollArrivalDeltas.push(Number((await framePixelDelta(page, atArrival, settled)).toFixed(4)));
+      }
       frames.push({
         name: `motion-scroll-${String(pct).padStart(3, '0')}pct`,
-        buf: await page.screenshot(),
+        buf: settled,
         caption: `viewport at ${pct}% scroll depth, 450ms after arriving`,
       });
     }
@@ -378,6 +403,8 @@ export async function captureMotionEvidence(
       heroSustainedMotion,
       animationEngines: dom.engines,
       transformedAtRest: dom.transformed,
+      scrollArrivalDeltas,
+      scrollChoreographyDetected: scrollArrivalDeltas.filter((d) => d >= 0.01).length >= 2,
     };
   } finally {
     await ctx.close();
@@ -717,6 +744,11 @@ export async function runVisualCritique(opts: {
   designDirection: string | null;
   /** Chosen motion reference slug; its `hero.jpg`/`full.jpg` become the bar. */
   referenceSlug: string | null;
+  /** The promised mechanics and scene map — the contract the verdicts run against. */
+  contract?: {
+    mechanics: Array<{ name: string; component: string; where: string }>;
+    sceneMap: { system: string; scenes: Array<{ section: string; trigger: string; motion: string; handoff: string }> } | null;
+  };
   screenshots: Array<{ name: string; buf: Buffer }>;
   motion: MotionEvidence | null;
   onUsage?: (usage: import('../agents/types.js').AgentUsage) => void;
@@ -772,6 +804,15 @@ export async function runVisualCritique(opts: {
         designDirection: opts.designDirection,
         referenceSlug: opts.referenceSlug ?? '(none — score referenceComparison.closeness 0 and say so in gap)',
         images: inventory,
+        motionContract: opts.contract && (opts.contract.mechanics.length || opts.contract.sceneMap)
+          ? {
+              mechanics: opts.contract.mechanics,
+              sceneMap: opts.contract.sceneMap,
+              note: 'Fill mechanicVerdicts with ONE entry per mechanic above and per sceneMap scene '
+                + '(name scenes as "scene:<section>"). Judge from the motion frames; an entry you '
+                + 'cannot point at a frame for is absent, not implemented.',
+            }
+          : null,
         deterministicMotionSignals: opts.motion
           ? {
               heroMotionDetected: opts.motion.heroMotionDetected,
@@ -780,6 +821,8 @@ export async function runVisualCritique(opts: {
               heroStillMovingAfterEntrance: opts.motion.heroSustainedMotion,
               animationEngines: opts.motion.animationEngines,
               transformedElementsAtRest: opts.motion.transformedAtRest,
+              scrollArrivalPixelDeltas_perDepth: opts.motion.scrollArrivalDeltas,
+              scrollChoreographyDetected: opts.motion.scrollChoreographyDetected,
               note: 'Measured by the browser, not by you. If heroMotionDetected is false, heroMotion cannot score above 0 — a hero that fades in once and then freezes counts as static.',
             }
           : null,
@@ -830,17 +873,31 @@ When done: \`pnpm build\` green, \`out/index.html\` present, then write \`result
  * motion pack or the object is gone — the critic is then told there is no bar
  * rather than being shown the wrong one.
  */
-async function loadReferenceSlug(designContractKey: string | null): Promise<string | null> {
-  if (!designContractKey) return null;
+interface ContractMotionInfo {
+  referenceSlug: string | null;
+  /** The promised mechanics, verbatim from the contract, for per-name verdicts. */
+  mechanics: Array<{ name: string; component: string; where: string }>;
+  /** The scene map (contracts v2+); older contracts never reach QA — the builder regenerates them. */
+  sceneMap: { system: string; scenes: Array<{ section: string; trigger: string; motion: string; handoff: string }> } | null;
+}
+
+async function loadDesignContractInfo(designContractKey: string | null): Promise<ContractMotionInfo> {
+  const empty: ContractMotionInfo = { referenceSlug: null, mechanics: [], sceneMap: null };
+  if (!designContractKey) return empty;
   try {
     const contract = JSON.parse((await getObject('raw', designContractKey)).toString());
-    const slug = contract?.chosen?.referenceSlug;
-    return typeof slug === 'string' && slug.length > 0 ? slug : null;
+    const chosen = contract?.chosen ?? {};
+    const slug = chosen.referenceSlug;
+    return {
+      referenceSlug: typeof slug === 'string' && slug.length > 0 ? slug : null,
+      mechanics: Array.isArray(chosen.mechanics) ? chosen.mechanics : [],
+      sceneMap: chosen.sceneMap && Array.isArray(chosen.sceneMap.scenes) ? chosen.sceneMap : null,
+    };
   } catch (err) {
-    log.warn('could not read design contract for the motion reference slug', {
+    log.warn('could not read design contract for QA', {
       designContractKey, err: String(err).slice(0, 200),
     });
-    return null;
+    return empty;
   }
 }
 
@@ -881,7 +938,8 @@ export async function visualQaHandler(payload: JobPayload): Promise<void> {
   // The art direction this build was supposed to implement, for the reference
   // stills and the wow comparison. A project built before the motion pack landed
   // simply has no slug, and the critic is told so rather than shown a wrong bar.
-  const referenceSlug = await loadReferenceSlug(project.designContractKey);
+  const contractInfo = await loadDesignContractInfo(project.designContractKey);
+  const referenceSlug = contractInfo.referenceSlug;
 
   const browser = await chromium.launch({ headless: true });
   let screenshots: Array<{ name: string; buf: Buffer }> = [];
@@ -910,6 +968,16 @@ export async function visualQaHandler(payload: JobPayload): Promise<void> {
       metrics.heroSustainedMotion = motion.heroSustainedMotion;
       metrics.animationEngines = motion.animationEngines;
       metrics.transformedAtRest = motion.transformedAtRest;
+      metrics.scrollArrivalDeltas = motion.scrollArrivalDeltas;
+      metrics.scrollChoreographyDetected = motion.scrollChoreographyDetected;
+      if (!motion.scrollChoreographyDetected) {
+        issues.push({
+          severity: 'medium', category: 'wow', viewport: 'desktop',
+          issue: `No scroll choreography measured: at every scroll depth the viewport was already settled on arrival `
+            + `(arrival deltas: ${motion.scrollArrivalDeltas.join(', ')}). This is a static page with entrance effects.`,
+          fix: 'Give at least two sections real arrival or scrub motion (ScrollTrigger scrub/pin, staged reveals) per the scene map — and verify in `pnpm shot --motion` frames.',
+        });
+      }
       if (!motion.heroMotionDetected) {
         // Two distinct failures with the same verdict, and the fix differs, so
         // the message says which one happened.
@@ -953,6 +1021,7 @@ export async function visualQaHandler(payload: JobPayload): Promise<void> {
         },
         designDirection: project.designDirection,
         referenceSlug,
+        contract: { mechanics: contractInfo.mechanics, sceneMap: contractInfo.sceneMap },
         screenshots,
         motion,
         onUsage: (u) => log.info('agent usage', { businessId, iteration, call: 'visual-critique', ...u }),
@@ -978,6 +1047,20 @@ export async function visualQaHandler(payload: JobPayload): Promise<void> {
             + `Against the reference "${critique.referenceComparison.slug || referenceSlug || 'n/a'}" the critic scored closeness `
             + `${critique.referenceComparison.closeness}/10: ${critique.referenceComparison.gap}`,
           fix: 'This reads as a default AI template, which is a rejection, not a nitpick. Raise the lowest axes first — implement the mechanics BUILD-TASK.md names, with the components it names. Do not add more sections; make the ones that exist move and be typeset like the reference.',
+        });
+      }
+
+      // The contract check (MOTION-PLAN phase 4): every promised mechanic or
+      // scene the critic could not SEE becomes a named, actionable issue.
+      for (const v of critique.mechanicVerdicts ?? []) {
+        if (v.verdict === 'implemented') continue;
+        issues.push({
+          severity: v.verdict === 'absent' ? 'high' : 'medium',
+          category: 'wow', viewport: 'all',
+          issue: `Contract ${v.verdict}: «${v.name}» — ${v.evidence}`,
+          fix: v.verdict === 'absent'
+            ? `Implement «${v.name}» exactly as the scene map / mechanics list in BUILD-TASK.md specifies, then verify it in \`pnpm shot --motion\` frames before handing in.`
+            : `Finish «${v.name}»: it reads as started but not delivered. Check it against the reference notes and your own motion frames.`,
         });
       }
 
@@ -1028,6 +1111,8 @@ export async function visualQaHandler(payload: JobPayload): Promise<void> {
           heroSustainedMotion: motion.heroSustainedMotion,
           animationEngines: motion.animationEngines,
           transformedAtRest: motion.transformedAtRest,
+          scrollArrivalDeltas: motion.scrollArrivalDeltas,
+          scrollChoreographyDetected: motion.scrollChoreographyDetected,
           frames: motion.frames.map((f) => f.name),
         }
       : null,
@@ -1088,16 +1173,21 @@ export async function visualQaHandler(payload: JobPayload): Promise<void> {
     return;
   }
 
-  if (iteration + 1 >= config.maxQaIterations) {
+  // Phase 5 (MOTION-PLAN): a page whose ONLY remaining blockers are motion/wow
+  // gets one extra round — those fixes are small, targeted and cheap compared
+  // to parking a finished layout on Roman's desk over choreography.
+  const motionOnly = blocking.every((i) => i.category === 'motion-appropriateness' || i.category === 'wow');
+  const iterationCap = config.maxQaIterations + (motionOnly ? 1 : 0);
+  if (iteration + 1 >= iterationCap) {
     await logStage(
       logPath,
-      `Ліміт ${config.maxQaIterations} ітерацій вичерпано, ${blocking.length} проблем лишилось — чекає на Романа`,
+      `Ліміт ${iterationCap} ітерацій вичерпано, ${blocking.length} проблем лишилось — чекає на Романа`,
       'visual-qa',
     );
     await db.update(schema.siteProjects).set({ state: 'needs_human_review' })
       .where(eq(schema.siteProjects.id, projectId));
     await transition(businessId, 'needs_review', 'visual-qa',
-      `QA limit (${config.maxQaIterations}) reached with ${blocking.length} open issues`);
+      `QA limit (${iterationCap}) reached with ${blocking.length} open issues`);
     // Decision #9: every Telegram push links into the control UI; Telegram has
     // no controls of its own.
     await notifyTelegram(

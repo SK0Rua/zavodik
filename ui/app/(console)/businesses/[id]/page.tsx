@@ -22,7 +22,7 @@ import { buildButtonState } from '@/lib/buildPolicy';
 import { cardActionBar } from '@/lib/cardActions';
 import { FindSocialsButton } from '@/components/FindSocialsButton';
 import { HeroVideoPanel } from '@/components/HeroVideoPanel';
-import { buildHeroVideoPrompt } from '@/lib/videoBrief';
+import { readRawJson } from '@/lib/objectStore';
 import { SocialsPanel, type SocialContactRow } from '@/components/SocialsPanel';
 import { isSocialChannel, socialsButtonState } from '@/lib/socials';
 import { BrandSwatches } from '@/components/BrandSwatches';
@@ -234,12 +234,20 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
   const heroPhotoAsset = heroPhotoRow
     ? { file: heroPhotoRow.objectKey.split('/').pop() ?? heroPhotoRow.objectKey, objectKey: heroPhotoRow.objectKey }
     : null;
-  const moodValue = facts.find((f) => f.key === 'brand.mood')?.value as { mood?: unknown } | null;
-  const moodWords = Array.isArray(moodValue?.mood) ? moodValue.mood.map(String) : [];
   const latestHeroClip = [...assetRows]
     .filter((a) => a.intendedUsage === 'hero_clip')
     .sort((a, b) => new Date(a.capturedAt).getTime() - new Date(b.capturedAt).getTime())
     .at(-1) ?? null;
+  // The wow-video brief is AUTHORED BY THE ART DIRECTOR inside the design
+  // contract (Roman, 2026-08-22: «Звідки воно знає, яке відео треба для
+  // дизайну?» — про generic-промпт, якого більше немає). No contract yet, or a
+  // pre-v2 contract → no brief; the panel says it arrives with the first build.
+  const contractDoc = project?.designContractKey
+    ? await readRawJson<{ schemaVersion?: number; chosen?: { heroVideoBrief?: string } }>(project.designContractKey)
+    : null;
+  const heroVideoBrief = (contractDoc?.schemaVersion ?? 1) >= 2 && contractDoc?.chosen?.heroVideoBrief
+    ? contractDoc.chosen.heroVideoBrief
+    : null;
   const demoTab = (
     <div className="space-y-4">
       {project && IN_FLIGHT_STATES.has(project.state) && (
@@ -387,14 +395,7 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
       {heroPhotoAsset && (
         <HeroVideoPanel
           businessId={biz.id}
-          prompt={buildHeroVideoPrompt({
-            name: biz.name,
-            category: biz.category,
-            // The row has no city column; the id is `<country>-<city>-<slug>`.
-            city: biz.id.split('-')[1] ?? null,
-            moodWords,
-            heroFile: heroPhotoAsset.file,
-          })}
+          brief={heroVideoBrief}
           heroPhoto={{
             file: heroPhotoAsset.file,
             url: `/api/object?bucket=assets&key=${encodeURIComponent(heroPhotoAsset.objectKey)}`,

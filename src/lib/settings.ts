@@ -135,6 +135,11 @@ export const SETTINGS: SettingDef[] = [
     default: 'claude-opus-5', hint: 'Найдорожчі етапи, де якість помітна в результаті.',
   },
   {
+    key: 'AGENT_FIX_LIGHT', label: 'Фікс-ітерації легкою моделлю', group: 'agents',
+    kind: 'boolean', default: 'true',
+    hint: 'Точкові правки після критика йдуть звичайною моделлю замість важкої — швидше і дешевше. Повна збірка завжди на важкій.',
+  },
+  {
     key: 'AGENT_CONCURRENCY', label: 'Скільки агентів працює одночасно', group: 'agents',
     kind: 'number', default: '1', validate: num(1, 8),
     hint: 'Ліміт підписки спільний на всіх. Більше за 2 — і етапи починають відбирати вікно один в одного.',

@@ -149,6 +149,11 @@ services:
       # builder agent runs in tmux here, and ttyd serves that session on the
       # port published below. Both values are only FALLBACKS — /settings wins.
       BUILD_TERMINAL_PORT: ${BUILD_TERMINAL_PORT:-7681}
+      # pnpm content-addressable store on the persistent sites volume: workspace
+      # installs become hardlink-only after the first build instead of pulling
+      # the registry on every container recreate (MOTION-PLAN phase 6). The
+      # NPM_CONFIG_ prefix passes the agent-env allowlist (sandbox.ts).
+      NPM_CONFIG_STORE_DIR: /app/sites/.pnpm-store
     volumes:
       # Named volumes, NOT host bind mounts: a bind dir is created by the docker
       # daemon as root:root and the container runs as `node` (uid 1000), which

@@ -27,7 +27,7 @@ import { transition } from '../orchestrator/statuses.js';
 import { enqueue, type JobPayload } from '../orchestrator/queue.js';
 import { buildSnapshot, primaryContact, realPhotos, type BuildSnapshot } from '../build/snapshot.js';
 import {
-  ArtDirectionsSchema, ContentBriefSchema, DirectionCritiqueSchema,
+  ArtDirectionsSchema, ContentBriefSchema, DESIGN_CONTRACT_VERSION, DirectionCritiqueSchema,
   GREEK_SAFE_BODY, GREEK_SAFE_DISPLAY, GREEK_UNSAFE_NOTE,
 } from '../build/schemas.js';
 import { chooseDirection } from '../build/rubric.js';
@@ -128,13 +128,24 @@ async function galleryContext(snapshot: BuildSnapshot, niche: string): Promise<D
     // The Latin word that survives a localized business — see NICHE_QUERY_WORDS.
     niche,
   });
-  const entries = await searchInspiration(queries, { limit: config.landingGallery.maxRefs });
-  if (entries.length === 0) {
+  // MOTION-PLAN D5: per-niche queries would hand every business in a campaign
+  // the SAME few references — one inspiration set for fifty sites. Fetch a
+  // wider pool and take a deterministic per-business rotation of it, so
+  // neighbours see different slices while a re-run of one business still sees
+  // its own slice (same input → same refs).
+  const pool = await searchInspiration(queries, { limit: config.landingGallery.maxRefs * 3 });
+  if (pool.length === 0) {
     log.info('landing.gallery returned nothing for this business', {
       businessId: snapshot.businessId, queries,
     });
     return [];
   }
+  const seed = [...snapshot.businessId].reduce((h, c) => ((h * 31) + c.charCodeAt(0)) >>> 0, 7);
+  const offset = seed % pool.length;
+  const entries = Array.from(
+    { length: Math.min(config.landingGallery.maxRefs, pool.length) },
+    (_, i) => pool[(offset + i) % pool.length]!,
+  );
   const refs = await downloadRefs(galleryStagingDir(snapshot.businessId), entries);
   log.info('landing.gallery references fetched', {
     businessId: snapshot.businessId, queries, found: entries.length, downloaded: refs.length,
@@ -252,7 +263,11 @@ async function siblingDesigns(campaignId: string, businessId: string): Promise<A
     .where(and(
       eq(schema.businesses.campaignId, campaignId),
       ne(schema.siteProjects.businessId, businessId),
-      inArray(schema.siteProjects.state, ['ready', 'deployed', 'qa', 'building']),
+      // Any state that HAS a chosen design counts as a neighbour: a demo parked
+      // in needs_human_review, or one whose build died, was still designed and
+      // may still ship — excluding them made the freshest designs invisible to
+      // the very next business (MOTION-PLAN D1, measured on BEAUTIFY).
+      inArray(schema.siteProjects.state, ['ready', 'deployed', 'qa', 'building', 'needs_human_review', 'failed']),
     ))
     .orderBy(desc(schema.siteProjects.id))
     .limit(6);
@@ -277,6 +292,54 @@ async function siblingDesigns(campaignId: string, businessId: string): Promise<A
     out.push({ business: r.name, direction: r.direction ?? '(unnamed)', referenceSlug, palette });
   }
   return out;
+}
+
+/**
+ * What the whole campaign has already used, from the mirror columns — the
+ * memory that outlives the 6-row siblings window (MOTION-PLAN D1/D2). Feeds
+ * BOTH the art-director prompt (information) and the rubric (a deterministic
+ * repeat penalty). Rows older than migration 0014 have NULL mirrors and simply
+ * do not count.
+ */
+export interface CampaignDesignUsage {
+  /** referenceSlug → how many campaign projects already use it. */
+  slugCounts: Record<string, number>;
+  /** Slugs of the most recent 3 designed projects — the strongest repeat signal. */
+  recentSlugs: string[];
+  /** Display fonts of the most recent 3 designed projects. */
+  recentDisplayFonts: string[];
+  /** Signatures already spent in this campaign — a signature reused is not a signature. */
+  signatures: string[];
+}
+
+async function campaignDesignUsage(campaignId: string, businessId: string): Promise<CampaignDesignUsage> {
+  const rows = await db.select({
+    slug: schema.siteProjects.referenceSlug,
+    font: schema.siteProjects.displayFont,
+    signature: schema.siteProjects.signature,
+  })
+    .from(schema.siteProjects)
+    .innerJoin(schema.businesses, eq(schema.businesses.id, schema.siteProjects.businessId))
+    .where(and(
+      eq(schema.businesses.campaignId, campaignId),
+      ne(schema.siteProjects.businessId, businessId),
+    ))
+    .orderBy(desc(schema.siteProjects.id))
+    .limit(100);
+
+  const slugCounts: Record<string, number> = {};
+  const recentSlugs: string[] = [];
+  const recentDisplayFonts: string[] = [];
+  const signatures: string[] = [];
+  for (const r of rows) {
+    if (r.slug) {
+      slugCounts[r.slug] = (slugCounts[r.slug] ?? 0) + 1;
+      if (recentSlugs.length < 3) recentSlugs.push(r.slug);
+    }
+    if (r.font && recentDisplayFonts.length < 3) recentDisplayFonts.push(r.font);
+    if (r.signature && signatures.length < 12) signatures.push(r.signature);
+  }
+  return { slugCounts, recentSlugs, recentDisplayFonts, signatures };
 }
 
 /** Compact catalogue of what the design may actually reference. */
@@ -311,6 +374,7 @@ export async function runStage9Calls(businessId: string, snapshot: BuildSnapshot
   directions: { directions: ArtDirection[] };
   critique: { scores: DirectionScore[] };
   siblings: Awaited<ReturnType<typeof siblingDesigns>>;
+  usage: CampaignDesignUsage;
   motionSlugs: string[];
 }> {
   const [biz] = await db.select().from(schema.businesses).where(eq(schema.businesses.id, businessId));
@@ -364,6 +428,7 @@ Rules:
   const motion = await motionContext({ category: snapshot.category, name: snapshot.name });
   const galleryRefs = await galleryContext(snapshot, niche);
   const siblings = await siblingDesigns(biz.campaignId, businessId);
+  const usage = await campaignDesignUsage(biz.campaignId, businessId);
   const brandText = brandBlock(snapshot);
   log.info('brand context for design', {
     businessId,
@@ -413,6 +478,23 @@ THE SIGNATURE. Each direction fills \`signature\`: the ONE element this page wil
 by — what it is, which section it lives in, and why it is native to THIS business's world (its
 materials, tools, rituals, place — not to web design). Spend the direction's boldness there and
 keep everything else quiet; scattered effects are how pages read as AI-generated.
+
+THE SCENE MAP. Each direction fills \`sceneMap\` — the page's choreography as a CONTRACT, not a
+vibe. \`system\` is one line naming the easing family, the duration scale and what unifies every
+motion. \`scenes\` has one entry per layout section that moves: its trigger (load / enter /
+scrub / pin), what transforms (one line), and how it hands off to the next section (one line).
+Build it FROM the chosen reference's notes — they describe real scenes; translate, don't
+invent. A real motion site is scroll NARRATIVE: at least one scrub or pin scene unless the
+direction argues otherwise. Sections you leave out are deliberately static — that is a valid
+choice, stated by omission. Keep every field to ONE line; this map is verified frame-by-frame
+by the critic, and every scene you promise will be judged.
+
+THE HERO VIDEO BRIEF. Each direction fills \`heroVideoBrief\`: the complete image-to-video
+prompt (in English) for the wow-clip a human will generate for THIS direction — 8s landscape,
+start frame = the real hero photo, camera movement / light / pace that serve this direction's
+mood, hero treatment and signature. Always include the standing rule: nothing in the frame may
+be added, removed or morphed. Write it as copy-paste-ready generator input, not as a
+description of one.
 
 Ground rules:
 - Each direction names EXACTLY ONE reference from the reference pack, by its exact name, and
@@ -527,6 +609,19 @@ Note what this is NOT: a ban on a colour family. If this business's real logo ha
 same green as its neighbour's, it still gets its green — the evidence outranks the variety
 pressure, and saying so in \`brandAlignment\` is the right answer.` : ''}
 
+${Object.keys(usage.slugCounts).length || usage.signatures.length ? `## What this campaign has ALREADY used (all designed demos, not just the recent ones)
+
+Motion references: ${Object.entries(usage.slugCounts).sort((a, b) => b[1] - a[1])
+  .map(([slug, n]) => `\`${slug}\`×${n}`).join(', ') || '(none yet)'}.
+Recent display fonts: ${usage.recentDisplayFonts.join(', ') || '(none)'}.
+Signatures already spent: ${usage.signatures.length ? usage.signatures.map((sg) => `«${sg.slice(0, 90)}»`).join('; ') : '(none)'}.
+
+The rubric applies a DETERMINISTIC repeat penalty for reusing a recent neighbour's motion
+reference or display pair — prefer slugs and pairs this campaign has not leaned on, unless this
+business's material genuinely calls for a used one (say so in the direction). A SIGNATURE that
+repeats one above is not a signature at all: fifty pages each remembered for the same element
+are remembered for nothing.` : ''}
+
 ANTI-SLOP BAN-LIST (these are QA failures): purple/violet-to-blue gradients, gradient text on
 headlines, a row of three identical cards, emoji as bullets or icons, centred-H1-plus-two-buttons
 heroes, every section a full-width band with a centred title, autoplaying carousels, bouncing
@@ -631,6 +726,7 @@ heroMotion — no exceptions, however good the justification.
 
   return {
     brief, directions, critique, siblings,
+    usage,
     motionSlugs: motion.index.map((e) => e.slug),
   };
 }
@@ -644,11 +740,11 @@ export async function contentDesignHandler(payload: JobPayload): Promise<void> {
   await transition(businessId, 'site_in_progress', 'content-design-worker');
 
   const snapshot = await buildSnapshot(businessId);
-  const { brief, directions, critique, motionSlugs } = await runStage9Calls(businessId, snapshot);
+  const { brief, directions, critique, usage, motionSlugs } = await runStage9Calls(businessId, snapshot);
 
   // ── Deterministic decision ────────────────────────────────────────────────
   const verdict = chooseDirection(
-    directions.directions, critique.scores, snapshot, motionSlugs,
+    directions.directions, critique.scores, snapshot, motionSlugs, usage,
   );
   log.info('design chosen by rubric', {
     businessId, chosen: verdict.chosen.name, score: verdict.chosenScore,
@@ -674,6 +770,7 @@ export async function contentDesignHandler(payload: JobPayload): Promise<void> {
   const designKey = await putRaw(
     `sites/${businessId}/design`,
     JSON.stringify({
+      schemaVersion: DESIGN_CONTRACT_VERSION,
       chosen: verdict.chosen,
       rubric: {
         ranking: verdict.ranking, rationale: verdict.rationale, scores: critique.scores,
@@ -691,6 +788,10 @@ export async function contentDesignHandler(payload: JobPayload): Promise<void> {
     contentBriefKey: briefKey,
     designContractKey: designKey,
     designDirection: verdict.chosen.name,
+    // Mirrors for campaign-wide diversity aggregates (MOTION-PLAN D1/D2).
+    referenceSlug: verdict.chosen.referenceSlug,
+    displayFont: verdict.chosen.typography.displayFont,
+    signature: verdict.chosen.signature,
     designScore: verdict.chosenScore,
     wowScores: {
       design: {

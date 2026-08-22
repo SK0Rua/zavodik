@@ -209,6 +209,12 @@ export const siteProjects = pgTable('site_projects', {
   contentBriefKey: text('content_brief_key'),
   designContractKey: text('design_contract_key'),
   designDirection: text('design_direction'),
+  // Mirrors of the frozen contract, written at freeze time (MOTION-PLAN D1/D2):
+  // campaign-wide diversity aggregates read these instead of opening N contract
+  // JSONs. NULL on rows older than migration 0014 — they just don't count.
+  referenceSlug: text('reference_slug'),
+  displayFont: text('display_font'),
+  signature: text('signature'),
   /** Score the deterministic rubric gave the chosen direction (src/build/rubric.ts). */
   designScore: real('design_score'),
   /**

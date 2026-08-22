@@ -120,6 +120,38 @@ export const ArtDirectionSchema = z.object({
   signature: z.string().min(1).describe(
     'The single element this page is remembered by: what it is, which section, why it is native to this business.',
   ),
+  /**
+   * The choreography CONTRACT (MOTION-PLAN phase 1). A motion site is one
+   * orchestrated sequence, not sprinkled effects — this map is what turns
+   * «3-4 mechanic labels» into something the builder can implement scene by
+   * scene and the critic can verdict scene by scene. Kept to one line per
+   * field on purpose: large structured outputs die on the runtime's turn cap.
+   */
+  sceneMap: z.object({
+    system: z.string().min(1).describe(
+      'ONE line: the easing family, the duration scale, and what unifies every motion on the page (e.g. "power2.out everywhere, 0.6/0.9/1.2s scale, everything enters from the reading direction").',
+    ),
+    scenes: z.array(z.object({
+      section: z.string().min(1).describe('sectionId from the layout skeleton'),
+      trigger: z.enum(['load', 'enter', 'scrub', 'pin']).describe(
+        'load = page-load timeline; enter = fires once when scrolled into view; scrub = tied to scroll progress; pin = section pins while its content plays',
+      ),
+      motion: z.string().min(1).describe('ONE line: which elements transform and how'),
+      handoff: z.string().min(1).describe('ONE line: how this section visually passes to the next'),
+    })).min(3).max(8).describe('One entry per layout section that moves. A section absent here is deliberately static.'),
+  }).describe('The page choreography as a verifiable contract; the critic verdicts every scene from motion frames.'),
+  /**
+   * The image-to-video prompt for the hero wow-clip, written BY THE ART
+   * DIRECTOR because only the direction knows what video it needs (Roman,
+   * 2026-08-22: «Звідки воно знає, яке відео треба для дизайну?» — про
+   * generic-бриф, який це поле замінює). Roman pastes it into a generator and
+   * uploads the mp4 from the business card.
+   */
+  heroVideoBrief: z.string().min(60).describe(
+    'The full i2v prompt for an external generator, in English: 8s landscape, start frame = the real hero photo, '
+    + 'camera/light/pace that SERVE this direction\'s mood and hero treatment, and the standing rule that nothing '
+    + 'in the frame may be added, removed or morphed.',
+  ),
   /** Ordered layout skeleton — section ids from the brief plus their composition. */
   layoutSkeleton: z.array(z.object({
     sectionId: z.string().min(1),
@@ -401,5 +433,25 @@ export const VisualCritiqueSchema = z.object({
   issues: z.array(QaIssueSchema),
   /** What the page genuinely does well — keeps fix iterations from destroying it. */
   strengths: z.array(z.string()),
+  /**
+   * The contract check (MOTION-PLAN phase 4): one verdict per promised mechanic
+   * / scene, judged from the motion frames. Code turns every `absent` into a
+   * high-severity wow issue — a promised mechanic nobody can SEE is the
+   * «default AI template» failure with a name attached.
+   */
+  mechanicVerdicts: z.array(z.object({
+    name: z.string().min(1).describe('the mechanic or scene, exactly as the contract names it'),
+    verdict: z.enum(['implemented', 'partial', 'absent']),
+    evidence: z.string().min(1).describe('which frame(s) show it, or why nothing does'),
+  })).describe('One entry per mechanic and per sceneMap scene supplied in the payload; empty only if none were supplied.'),
 });
 export type VisualCritique = z.infer<typeof VisualCritiqueSchema>;
+
+/**
+ * Version of the frozen design-contract document (`sites/<biz>/design`).
+ * Compatibility policy (Roman, 2026-08-22): NO field-level fallbacks for old
+ * contracts — a build that meets an older version regenerates the design from
+ * scratch under the current schema. Bump on every breaking contract change.
+ * v2: sceneMap + heroVideoBrief + signature became required.
+ */
+export const DESIGN_CONTRACT_VERSION = 2;

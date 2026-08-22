@@ -301,6 +301,50 @@ export function vetoesFor(
 }
 
 /**
+ * Deterministic repeat penalties (MOTION-PLAN D2): the campaign-level half of
+ * distinctiveness. The prompt already ASKS for variety; this is the part the
+ * model cannot talk its way around. Calibration against the existing scale:
+ * brand neglect costs 1.2 and a veto 3.0 — repetition is real but weaker than
+ * either, because a business whose material genuinely calls for a used slug
+ * must still be able to win by arguing it (the penalty is a bal, not a veto).
+ */
+export interface CampaignUsageForRubric {
+  recentSlugs: string[];
+  slugCounts: Record<string, number>;
+  recentDisplayFonts: string[];
+}
+
+const RECENT_SLUG_PENALTY = 0.6;
+const SLUG_SPREAD_PENALTY_STEP = 0.15; // per prior campaign use, on top of recency
+const SLUG_SPREAD_PENALTY_CAP = 0.6;
+const RECENT_FONT_PENALTY = 0.3;
+
+export function repeatPenalty(
+  direction: ArtDirection,
+  usage: CampaignUsageForRubric | undefined,
+): { total: number; reasons: string[] } {
+  if (!usage) return { total: 0, reasons: [] };
+  let total = 0;
+  const reasons: string[] = [];
+  if (usage.recentSlugs.includes(direction.referenceSlug)) {
+    total += RECENT_SLUG_PENALTY;
+    reasons.push(`motion reference \"${direction.referenceSlug}\" was used by a recent neighbour (-${RECENT_SLUG_PENALTY})`);
+  }
+  const priorUses = usage.slugCounts[direction.referenceSlug] ?? 0;
+  if (priorUses > 0) {
+    const spread = Math.min(priorUses * SLUG_SPREAD_PENALTY_STEP, SLUG_SPREAD_PENALTY_CAP);
+    total += spread;
+    reasons.push(`\"${direction.referenceSlug}\" already used ${priorUses}x in this campaign (-${spread.toFixed(2)})`);
+  }
+  const font = normFont(direction.typography.displayFont);
+  if (usage.recentDisplayFonts.some((f) => normFont(f) === font)) {
+    total += RECENT_FONT_PENALTY;
+    reasons.push(`display font \"${direction.typography.displayFont}\" matches a recent neighbour (-${RECENT_FONT_PENALTY})`);
+  }
+  return { total: Number(total.toFixed(3)), reasons };
+}
+
+/**
  * How much a direction loses for failing the wow gate. Sized to outweigh the
  * entire wow axis (2.2) plus a comfortable margin, so a direction that clears
  * the floor beats one that does not even when the critic liked the loser more
@@ -315,6 +359,8 @@ export function scoreDirection(
   vetoCount: number,
   /** True when `brandNeglect()` fired for this direction. */
   neglectsBrand = false,
+  /** Deterministic campaign repeat penalty, from `repeatPenalty()`. */
+  repeat = 0,
 ): { total: number; breakdown: Record<string, number> } {
   const breakdown: Record<string, number> = {};
   let total = 0;
@@ -353,7 +399,8 @@ export function scoreDirection(
   breakdown.vetoPenalty = -vetoPenalty;
   breakdown.wowGatePenalty = -wowGatePenalty;
   breakdown.brandNeglectPenalty = -brandPenalty;
-  const finalTotal = total - slopPenalty - buildPenalty - vetoPenalty - wowGatePenalty - brandPenalty;
+  breakdown.repeatPenalty = -repeat;
+  const finalTotal = total - slopPenalty - buildPenalty - vetoPenalty - wowGatePenalty - brandPenalty - repeat;
   return { total: Number(finalTotal.toFixed(3)), breakdown };
 }
 
@@ -367,6 +414,7 @@ export function chooseDirection(
   scores: DirectionScore[],
   snapshot: BuildSnapshot,
   knownReferenceSlugs: readonly string[] = [],
+  campaignUsage?: CampaignUsageForRubric,
 ): RubricVerdict {
   if (directions.length === 0) throw new Error('chooseDirection: no directions supplied');
 
@@ -376,8 +424,9 @@ export function chooseDirection(
     if (!score) throw new Error(`chooseDirection: no critique score for direction "${direction.name}"`);
     const vetoes = vetoesFor(direction, snapshot, knownReferenceSlugs);
     const neglect = brandNeglect(direction, snapshot);
-    const { total, breakdown } = scoreDirection(score, vetoes.length, neglect !== null);
-    return { direction, score, vetoes, neglect, total, breakdown, index };
+    const repeat = repeatPenalty(direction, campaignUsage);
+    const { total, breakdown } = scoreDirection(score, vetoes.length, neglect !== null, repeat.total);
+    return { direction, score, vetoes, neglect, repeat, total, breakdown, index };
   });
 
   const ranked = [...rows].sort((a, b) =>
@@ -402,6 +451,7 @@ export function chooseDirection(
       ? 'none available'
       : `${snapshot.brand.paletteSource}, primary ${snapshot.brand.primary?.hex ?? '—'}, accent ${snapshot.brand.accent?.hex ?? '—'}`}).`,
     winner.neglect ? `Brand neglect penalty applied: ${winner.neglect}.` : '',
+    winner.repeat.total > 0 ? `Campaign repeat penalty applied: ${winner.repeat.reasons.join('; ')}.` : '',
     winner.vetoes.length
       ? `Open vetoes carried into the build task: ${winner.vetoes.join('; ')}.`
       : 'No hard vetoes.',

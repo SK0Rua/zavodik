@@ -1,5 +1,7 @@
 # Component pool
 
+> **Scene wiring**: use `@/lib/scenes` (`loadScene`/`enterScene`/`scrubScene`/`pinScene`, tokens `EASE`/`DUR`) for every scene-map trigger — one motion system, shared ScrollTrigger defaults, reduced-motion safe. Components below provide the visuals; scenes.ts provides the choreography wiring.
+
 Two pools, deliberately separate:
 
 - **`components/ui/`** — 29 copy-paste components from **Aceternity UI** and **Magic UI**

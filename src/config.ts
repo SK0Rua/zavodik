@@ -86,6 +86,12 @@ export const config = {
      * per-process, so splitting groups across processes is what stops a 40-minute
      * site build and a large enrichment backlog from starving each other.
      */
+    /**
+     * Fix iterations run on the LIGHT model (MOTION-PLAN phase 6): a targeted
+     * «прибери магніт з номера» edit does not need Opus, and the switch roughly
+     * halves iteration wall-clock and subscription burn. Off = old behaviour.
+     */
+    get fixIterationsLight(): boolean { return getSettingBool('AGENT_FIX_LIGHT', true); },
     get concurrencyBuild(): number {
       return getSettingNumber('AGENT_CONCURRENCY_BUILD', getSettingNumber('AGENT_CONCURRENCY', 1));
     },
