@@ -286,9 +286,11 @@ export function LiveBuildPanel({ projectId, projectState }: {
                 // Basic-auth credentials go INTO the link (https://user:pass@host):
                 // ttyd greets with a native browser password prompt otherwise, and
                 // «Це шо за хуйня?» (Roman, 2026-08-22) is the correct review of a
-                // button that opens onto a login dialog. Top-level navigation with
-                // userinfo still works in every current browser; the plain-text
-                // pair below stays as the fallback for one that decides not to.
+                // button that opens onto a login dialog. Verified against a real
+                // ttyd 1.7.7 with -c in Chrome: userinfo in a top-level navigation
+                // authenticates page and websocket, no prompt. The pair below is
+                // for opening the terminal NOT through this button (another
+                // device, a pasted link) — not a fallback for this one.
                 href={terminal.user && terminal.password
                   ? terminal.url.replace(
                     '://',
@@ -309,7 +311,7 @@ export function LiveBuildPanel({ projectId, projectState }: {
               monospace, because it is going to be copied. */}
           {terminal.url && terminal.password && (
             <p className="mt-1.5 text-sm text-ink-mute">
-              Кнопка логіниться сама. Якщо браузер усе ж спитає пароль: логін{' '}
+              Кнопка логіниться сама. Для входу не через кнопку: логін{' '}
               <span className="font-mono text-ink select-all">{terminal.user ?? 'roman'}</span>
               {' · '}пароль{' '}
               <span className="font-mono text-ink select-all break-all">{terminal.password}</span>
