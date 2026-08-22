@@ -135,6 +135,7 @@ export function LiveBuildPanel({ projectId, projectState }: {
   const [poll, setPoll] = useState<Poll | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const [showPastRuns, setShowPastRuns] = useState(false);
   const offset = useRef(0);
   // Kept in a ref rather than in state: the interval closure reads it, and
   // putting it in state would re-create the interval on every tick.
@@ -175,13 +176,28 @@ export function LiveBuildPanel({ projectId, projectState }: {
     return () => clearInterval(id);
   }, [tick]);
 
+  // The log FILE spans every attempt of this project; the PANEL is «наживо»,
+  // so it opens on the current run — everything before the last «Збірка
+  // почалась» is history, not state. Without this the feed led with a kickoff
+  // failure from eight hours earlier while QA of the finished demo was running
+  // (Roman, 2026-08-22: «нічого не змінилось» — про панель, що показувала
+  // мертві спроби замість живої). The earlier attempts stay one click away.
+  const runStart = (() => {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const l = lines[i];
+      if (l.type === 'stage' && /Збірка почалась/.test(l.summary)) return i;
+    }
+    return 0;
+  })();
+  const current = showPastRuns ? lines : lines.slice(runStart);
+
   // Milestones and failures go to the timeline; tools, agent text and results
   // are the detail tail. DISJOINT on purpose: stage lines used to render in
   // both blocks, so a build with no tool events yet — a kickoff failing and
   // retrying, say — was the same list printed twice back to back (Roman,
   // 2026-08-22: «для чого мені тут двічі один і той же текст?»).
-  const timeline = lines.filter((l) => l.type === 'stage' || l.type === 'error');
-  const detail = lines.filter((l) => l.type !== 'stage' && l.type !== 'error');
+  const timeline = current.filter((l) => l.type === 'stage' || l.type === 'error');
+  const detail = current.filter((l) => l.type !== 'stage' && l.type !== 'error');
   const visible = showAll ? detail : detail.slice(-40);
   const quietSec = poll?.lastEventAgoSec ?? null;
   const isQuiet = poll?.active === true && quietSec !== null && quietSec > QUIET_WARN_SEC;
@@ -331,6 +347,17 @@ export function LiveBuildPanel({ projectId, projectState }: {
             </p>
           )}
         </div>
+      )}
+
+      {/* Dead attempts are evidence, not state — reachable, never leading. */}
+      {runStart > 0 && (
+        <button
+          type="button" className="btn-quiet btn-sm mt-3 -ml-2.5 -mb-1"
+          aria-expanded={showPastRuns}
+          onClick={() => setShowPastRuns((s) => !s)}
+        >
+          {showPastRuns ? 'сховати попередні спроби' : `показати попередні спроби (+${runStart})`}
+        </button>
       )}
 
       {timeline.length > 0 && (
