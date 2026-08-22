@@ -338,6 +338,17 @@ ${contactLines}
     changed goes into \`selfReview\` in result.json (required). If \`pnpm shot\` exits with its
     "браузер недоступний" message, do not fight the environment: say exactly that in
     \`selfReview\` and move on.
+13. **LOOK AT YOUR OWN MOTION.** Then run \`pnpm shot --motion\`: it captures the exact
+    frames the independent critic will judge — \`_shots/motion-load-t*.png\` (the first 3.6s
+    after load) and \`_shots/motion-scroll-*pct.png\` (six scroll depths, 450ms after
+    arriving). Read them and verify EVERY mechanic from «The 3-4 mechanics to implement»
+    against the frames, by name: t0.15 vs t1.60 — did the entrance happen; t2.40 vs t3.60 —
+    is the hero still alive after entrances; adjacent scroll frames — do sections actually
+    transform as the page scrolls, or does everything sit settled (that is a static site
+    with entrance effects, the exact «default AI template» rejection). A mechanic you cannot
+    SEE working in these frames is not implemented, whatever the code says. Per-mechanic
+    verdicts go into \`selfReview\`. The critic sees the same frames — anything you wave
+    through here comes back as an iteration.
 
 ## The chosen direction: "${design.name}"
 

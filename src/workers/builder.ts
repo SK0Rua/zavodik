@@ -119,6 +119,9 @@ When done run \`pnpm build\` until it is green and \`out/index.html\` exists.
 
 Then LOOK at what you changed: run \`pnpm shot\` and Read \`_shots/desktop.png\` and
 \`_shots/mobile.png\` — verify each fixed issue is actually fixed ON SCREEN, not just in code.
+If any issue you fixed is about MOTION, also run \`pnpm shot --motion\` and Read the
+\`_shots/motion-load-t*.png\` / \`_shots/motion-scroll-*pct.png\` frames — a motion fix you
+cannot SEE in the frames is not fixed.
 What you saw goes into \`selfReview\` in result.json. For \`referenceNotes\` in a fix iteration,
 list what you re-checked visually (your own _shots, any \`references/\` images still present —
 the folder may have been garbage-collected; if so, say that).

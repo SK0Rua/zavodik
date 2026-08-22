@@ -68,12 +68,14 @@ try {
 
 await mkdir(SHOTS, { recursive: true });
 
+const url = `http://127.0.0.1:${port}/`;
+
 for (const [name, viewport] of [
   ['desktop', { width: 1440, height: 900 }],
   ['mobile', { width: 390, height: 844 }],
 ]) {
   const page = await browser.newPage({ viewport });
-  await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
+  await page.goto(url, { waitUntil: 'networkidle' });
   // Walk the page so scroll-triggered reveals fire; then settle.
   await page.evaluate(async () => {
     const step = window.innerHeight * 0.8;
@@ -87,6 +89,42 @@ for (const [name, viewport] of [
   await page.screenshot({ path: path.join(SHOTS, `${name}.png`), fullPage: true });
   await page.close();
   console.log(`shot: _shots/${name}.png готовий`);
+}
+
+/**
+ * --motion: the frames the stage-11 critic judges choreography from, captured
+ * HERE so the builder sees its own motion before handing the page in.
+ *
+ * Two sequences, same names and timings as the critic's:
+ *  - motion-load-t{0.15,0.80,1.60,2.40,3.60}s: one viewport, N seconds after
+ *    load. t0.15 vs t1.60 answers "did anything happen at all"; t2.40 vs t3.60
+ *    answers "is the hero still alive once entrances are over".
+ *  - motion-scroll-{0..100}pct: the viewport at six scroll depths, 450ms after
+ *    arriving — whether sections have choreography or all sit settled.
+ */
+if (process.argv.includes('--motion')) {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  const t0 = Date.now();
+  for (const sec of [0.15, 0.8, 1.6, 2.4, 3.6]) {
+    const wait = t0 + sec * 1000 - Date.now();
+    if (wait > 0) await page.waitForTimeout(wait);
+    const label = sec.toFixed(2);
+    await page.screenshot({ path: path.join(SHOTS, `motion-load-t${label}s.png`) });
+    console.log(`shot: _shots/motion-load-t${label}s.png готовий`);
+  }
+
+  for (const pct of [0, 20, 40, 60, 80, 100]) {
+    await page.evaluate((p) => {
+      const max = document.body.scrollHeight - window.innerHeight;
+      window.scrollTo(0, Math.round((max * p) / 100));
+    }, pct);
+    await page.waitForTimeout(450);
+    const label = String(pct).padStart(3, '0');
+    await page.screenshot({ path: path.join(SHOTS, `motion-scroll-${label}pct.png`) });
+    console.log(`shot: _shots/motion-scroll-${label}pct.png готовий`);
+  }
+  await page.close();
 }
 
 await browser.close();
