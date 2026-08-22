@@ -306,6 +306,27 @@ export const BuildResultSchema = z.object({
   usedAssets: z.array(z.string()),
   /** Brief/design requirements the agent could NOT satisfy, said out loud. */
   unresolved: z.array(z.string()),
+  /**
+   * What the agent SAW in the reference images and took from them, per file.
+   * Required and non-trivial on purpose: the first shipped demo was built
+   * without a single reference image ever being opened (measured from the
+   * build log, 2026-08-22 — zero `references/` reads across the whole run),
+   * and the design read as a template. A field the agent must fill per image
+   * is the cheapest mechanism that makes it actually look.
+   */
+  referenceNotes: z.string().min(80).describe(
+    'Per reference image you opened (Read): file name + 1-2 sentences on what you took from it. '
+    + 'You must actually open them; do not summarise their notes.md instead.',
+  ),
+  /**
+   * The self-screenshot pass: what `_shots/desktop.png` / `_shots/mobile.png`
+   * showed and what was changed because of it. «пропустив цей крок» is a
+   * legitimate value ONLY when `pnpm shot` itself failed — say so and why.
+   */
+  selfReview: z.string().min(40).describe(
+    'What your own screenshots (_shots/*.png after `pnpm shot`) showed and what you changed '
+    + 'because of it. If `pnpm shot` itself failed, say so and why instead.',
+  ),
 });
 export type BuildResult = z.infer<typeof BuildResultSchema>;
 

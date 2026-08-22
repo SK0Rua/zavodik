@@ -117,6 +117,12 @@ reduced motion must render a complete page.
 
 When done run \`pnpm build\` until it is green and \`out/index.html\` exists.
 
+Then LOOK at what you changed: run \`pnpm shot\` and Read \`_shots/desktop.png\` and
+\`_shots/mobile.png\` — verify each fixed issue is actually fixed ON SCREEN, not just in code.
+What you saw goes into \`selfReview\` in result.json. For \`referenceNotes\` in a fix iteration,
+list what you re-checked visually (your own _shots, any \`references/\` images still present —
+the folder may have been garbage-collected; if so, say that).
+
 FINAL STEP, do not skip it: write \`result.json\` in the workspace root. Write it as the very
 last action, even if you think you are finished — the pipeline reads it as your report.`;
   } else {
@@ -241,6 +247,8 @@ action. Everything else can be perfect and the run still reports badly without i
       notes: 'result.json missing or invalid; reconstructed by the pipeline after finding a built out/.',
       usedAssets: [],
       unresolved: ['builder agent did not write a valid result.json'],
+      referenceNotes: '(звіту немає — невідомо, чи агент дивився референси)',
+      selfReview: '(звіту немає — самоперевірка не підтверджена)',
     };
   }
   const agentSeconds = Math.round((Date.now() - agentStarted) / 1000);

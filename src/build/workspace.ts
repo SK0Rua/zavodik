@@ -248,6 +248,24 @@ owner, who knows their business better than you do. Every invented fact is a cre
 Read in this order: this file → \`references/${design.referenceSlug}/notes.md\` (+ its \`hero.jpg\`
 and \`full.jpg\`) → \`DESIGN.md\` → \`components/README.md\` → \`references/${niche}/README.md\`.
 
+## STEP 0 — LOOK, before you write a line of code
+
+You are a multimodal model; use it. Open these IMAGES with the Read tool, in this order,
+and for each write 1-2 sentences (they go into \`referenceNotes\` in result.json — a required
+field, and the pipeline rejects a result without it):
+
+1. \`references/${design.referenceSlug}/hero.jpg\` and \`full.jpg\` — the award-winning bar this
+   direction was chosen against. Note the type scale, the crop language, how much air it uses.
+2. Every image in \`references/gallery/\` (if present) — current real-world layouts fetched for
+   THIS business. Note one compositional idea per image worth keeping or rejecting.
+3. The 3-5 strongest photos in \`public/assets/\` — the actual material you are designing WITH.
+   Note their light, tone and orientation: the page must be composed around what they really
+   look like, not around what the brief says about them.
+
+A build that starts coding without these Reads produces a template with the right words on it —
+that is the failure mode this step exists to kill (measured on the first shipped demo: zero
+reference images opened, design rejected).
+
 ## Inputs (the complete universe of facts)
 
 | File | What it is |
@@ -309,6 +327,14 @@ ${contactLines}
    components. Deviating turns a chosen design back into a generic template.
 11. **Finish with a green \`pnpm build\`** producing \`out/index.html\`. Run it yourself and fix
     your own errors. The pipeline re-runs the build independently and does not take your word.
+12. **LOOK AT YOUR OWN PAGE before handing it in.** After \`pnpm build\` is green, run
+    \`pnpm shot\` — it serves \`out/\` on loopback and writes \`_shots/desktop.png\` and
+    \`_shots/mobile.png\`. Read both PNGs. Judge them as a stranger would: awkward crops, a
+    band that reads as a template, broken spacing, anything moving that should not. Fix what
+    you see, rebuild, re-shot — at least one full look is mandatory, and what you saw and
+    changed goes into \`selfReview\` in result.json (required). If \`pnpm shot\` exits with its
+    "браузер недоступний" message, do not fight the environment: say exactly that in
+    \`selfReview\` and move on.
 
 ## The chosen direction: "${design.name}"
 
@@ -578,8 +604,8 @@ export async function collectWorkspaceGarbage(dir: string, reason: string): Prom
   if (!config.build.workspaceGc) return { removed, freedMb: 0 };
 
   const targets = reason === 'needs_human_review'
-    ? ['node_modules', '.next', 'references']
-    : ['node_modules', '.next', 'out', 'references'];
+    ? ['node_modules', '.next', 'references', '_shots']
+    : ['node_modules', '.next', 'out', 'references', '_shots'];
 
   for (const name of targets) {
     const target = path.join(dir, name);

@@ -38,6 +38,9 @@ const ENV_ALLOWLIST_EXACT = new Set([
   'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'CI',
   // agent runtime auth (subscription only)
   'CLAUDE_CODE_OAUTH_TOKEN', 'CODEX_HOME',
+  // self-screenshot (`pnpm shot` in the workspace): playwright-core resolves
+  // the shared browser install from this path; without it the agent codes blind.
+  'PLAYWRIGHT_BROWSERS_PATH',
   // egress via a corporate proxy, if the host uses one
   'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
 ]);
@@ -189,7 +192,9 @@ export function evaluateToolCall(cwd: string, toolName: string, input: unknown):
     }
 
     // Absolute paths that escape the workspace (ignore standard read-only system dirs).
-    const SYSTEM_OK = /^\/(usr|bin|sbin|lib|opt|private\/var\/folders|var\/folders|tmp|dev\/null|proc|System|Library|Applications|nix)\b/;
+    // /ms-playwright is the image's shared browser install (Dockerfile) — the
+    // workspace's own `pnpm shot` references it and must not be denied.
+    const SYSTEM_OK = /^\/(usr|bin|sbin|lib|opt|private\/var\/folders|var\/folders|tmp|dev\/null|proc|System|Library|Applications|nix|ms-playwright)\b/;
     for (const m of command.matchAll(/(?:^|[\s'"=(])(\/[^\s'"();|&]+)/g)) {
       const p = m[1];
       if (SYSTEM_OK.test(p)) continue;
