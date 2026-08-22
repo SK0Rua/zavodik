@@ -14,7 +14,33 @@ import { desc, eq, inArray, sql } from 'drizzle-orm';
 import { db, schema } from './db';
 import { loadApprovalQueue, type ApprovalItem } from './approvals';
 
-export type InboxKind = 'approval' | 'build_review' | 'job' | 'reply';
+export type InboxKind = 'approval' | 'build_review' | 'interrupted_build' | 'job' | 'reply';
+
+/**
+ * A build the server restart killed, waiting to be started again.
+ *
+ * Distinct from a `build_review` (the critic looked and refused) and from a
+ * `job` failure (a stage errored): nothing here went wrong and nothing was
+ * judged — a container recreate took the worker out mid-session, the reconciler
+ * failed the orphaned `site_projects` row on the next boot, and the only thing
+ * anyone can do about it is press the button again.
+ *
+ * It gets its own card rather than riding along as a job problem because the
+ * job row and the project row disagree by construction in this case: the job is
+ * `stale` (bookkeeping, deliberately not "failed") while the project is
+ * `failed`, so the job-problem loader never sees it and Roman was left with a
+ * card claiming «Фабрика будує демосайт» over a log that had stopped moving.
+ */
+export interface InterruptedBuildItem {
+  projectId: number;
+  businessId: string;
+  name: string;
+  /** When the build was last touched — how long ago it died. */
+  at: Date;
+  /** Whether restarting is possible right now, and why not when it is not. */
+  canRestart: boolean;
+  hint: string;
+}
 
 export interface BuildReviewItem {
   projectId: number;
@@ -59,6 +85,7 @@ export interface ReplyItem {
 export interface InboxData {
   approvals: ApprovalItem[];
   buildReviews: BuildReviewItem[];
+  interruptedBuilds: InterruptedBuildItem[];
   jobs: JobProblemItem[];
   replies: ReplyItem[];
   /** Shown in the empty state: proof the factory is working without him. */
@@ -110,6 +137,69 @@ async function loadBuildReviews(): Promise<BuildReviewItem[]> {
     });
   }
   return items;
+}
+
+/**
+ * Builds a restart killed, and whether they can be started again right now.
+ *
+ * The membership test is a pair of facts, not a guess: the project is `failed`,
+ * and its business is still in a status a build can start from. The second half
+ * is what keeps this list short — a business Roman has since rejected, or one
+ * whose next build already succeeded and moved it to `site_ready`, drops out on
+ * its own without anything having to remember to remove it.
+ *
+ * Only the NEWEST failed project per business, for the same reason
+ * `loadBuildReviews` does it: two cards for one business is the noise this page
+ * exists to remove.
+ *
+ * `canRestart` is computed from the same inputs `startDemoBuild` checks, so the
+ * card can never offer a button the action would refuse. It deliberately does
+ * NOT look at gaps: a build that was already running had passed the readiness
+ * gate before the restart, and re-asking is how a recovery becomes a puzzle.
+ */
+async function loadInterruptedBuilds(): Promise<InterruptedBuildItem[]> {
+  const rows = await db.execute(sql`
+    select distinct on (p.business_id)
+      p.id            as "projectId",
+      p.business_id   as "businessId",
+      b.name          as "name",
+      b.status        as "status",
+      p.created_at    as "at",
+      exists (
+        select 1 from workflow_jobs w
+        where w.business_id = p.business_id
+          and w.job_type in ('content-and-design', 'build-site', 'visual-qa', 'deploy-demo')
+          and w.status in ('queued', 'running', 'retry_wait')
+      ) as "busy",
+      exists (
+        select 1 from site_projects q
+        where q.business_id = p.business_id
+          and q.state in ('pending', 'brief', 'building', 'qa', 'ready', 'deployed')
+      ) as "superseded"
+    from site_projects p
+    join businesses b on b.id = p.business_id
+    where p.state = 'failed'
+      and b.status in ('production_ready', 'needs_review')
+    order by p.business_id, p.created_at desc
+  `);
+
+  return (rows.rows as Array<{
+    projectId: number; businessId: string; name: string; status: string;
+    at: Date | string; busy: boolean; superseded: boolean;
+  }>)
+    // A newer project that is building or already shipped means this failure is
+    // history, not a to-do — someone already pressed the button.
+    .filter((r) => !r.superseded)
+    .map((r) => ({
+      projectId: r.projectId,
+      businessId: r.businessId,
+      name: r.name,
+      at: r.at instanceof Date ? r.at : new Date(r.at),
+      canRestart: !r.busy,
+      hint: r.busy
+        ? 'Збірка вже стоїть у черзі — зачекай, поки вона візьметься.'
+        : 'Збірка почнеться з нуля; усе зібране про бізнес лишається на місці.',
+    }));
 }
 
 /**
@@ -280,9 +370,10 @@ async function loadCounts(): Promise<InboxData['counts']> {
 }
 
 export async function loadInbox(): Promise<InboxData> {
-  const [approvals, buildReviews, replies, counts] = await Promise.all([
+  const [approvals, buildReviews, interruptedBuilds, replies, counts] = await Promise.all([
     loadApprovalQueue(),
     loadBuildReviews(),
+    loadInterruptedBuilds(),
     loadReplies(),
     loadCounts(),
   ]);
@@ -296,12 +387,18 @@ export async function loadInbox(): Promise<InboxData> {
   // history and the decision is the card. Without this, Pagoulatos showed both
   // its approval card and the 2026-08-16 «Крок зупинився» card for the very
   // job that has since succeeded.
+  //
+  // Interrupted builds are covered for the same reason: the `content-and-design`
+  // or `build-site` job that died with the container is in the job table too,
+  // and rendering both would give one killed build two cards — one saying
+  // «Крок упав», one saying «Збірку перервано» — for a single event.
   const covered = new Set([
     ...buildReviews.map((b) => b.businessId),
     ...approvals.map((a) => a.businessId),
+    ...interruptedBuilds.map((b) => b.businessId),
   ]);
   const jobs = await loadJobProblems(covered);
-  return { approvals, buildReviews, jobs, replies, counts };
+  return { approvals, buildReviews, interruptedBuilds, jobs, replies, counts };
 }
 
 /** How many items are waiting overall — the number next to «Вхідні» in the nav. */
@@ -309,8 +406,9 @@ export async function inboxCount(): Promise<number> {
   try {
     // Counted the same way the page filters, or the badge promises work that
     // is not there — the fastest way to make Roman stop trusting the number.
-    const { approvals, buildReviews, jobs, replies } = await loadInbox();
-    return approvals.length + buildReviews.length + jobs.length + replies.length;
+    const { approvals, buildReviews, interruptedBuilds, jobs, replies } = await loadInbox();
+    return approvals.length + buildReviews.length + interruptedBuilds.length
+      + jobs.length + replies.length;
   } catch {
     return 0;
   }

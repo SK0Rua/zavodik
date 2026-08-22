@@ -67,6 +67,14 @@ export function ttydAvailable(): Promise<boolean> {
  * The ttyd argv for a session. Exported so the tests can assert the safety
  * properties (read-only, authenticated) without running a binary.
  */
+/**
+ * Path prefix ttyd serves under. Fixed at /terminal so the operator needs NO
+ * extra hostname: one Dokploy/Traefik domain entry on the SAME host
+ * (path /terminal → service factory-build, port 7681) is enough, and
+ * BUILD_TERMINAL_BASE_URL becomes https://<та сама адреса UI>/terminal.
+ */
+export const TERMINAL_BASE_PATH = '/terminal';
+
 export function ttydArgs(session: string, opts: {
   port: number;
   password: string;
@@ -74,6 +82,7 @@ export function ttydArgs(session: string, opts: {
 }): string[] {
   const args = [
     '-p', String(opts.port),
+    '-b', TERMINAL_BASE_PATH,
     '-c', `${TERMINAL_USER}:${opts.password}`,
     // NOT `-o/--once`, which sounds right and is wrong: it makes ttyd exit on
     // the first disconnect, so closing the tab once during a 90-minute build

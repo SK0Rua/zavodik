@@ -16,8 +16,11 @@
  * Per-group agent concurrency: `AGENT_CONCURRENCY_BUILD` / `AGENT_CONCURRENCY_ENRICH`
  * override `AGENT_CONCURRENCY` when the process runs exactly that group.
  */
+import { inArray } from 'drizzle-orm';
 import { register, getBoss, type JobName } from '../orchestrator/queue.js';
 import { reconcileOnStartup } from '../orchestrator/reconcile.js';
+import { db, schema } from '../db/client.js';
+import { notifyBuildInterrupted } from '../telegram/notify.js';
 import { ensureBuckets } from '../lib/storage.js';
 import { discoverHandler } from './discovery.js';
 import { normalizeHandler } from './normalize.js';
@@ -121,6 +124,44 @@ function concurrencyFor(groups: WorkerGroup[]): number {
   return config.agents.concurrency;
 }
 
+/**
+ * Tell Roman about builds the restart killed.
+ *
+ * Lives HERE and not in `reconcile.ts` on purpose, and that module's own block
+ * comment is the reason: it imports no notification code at all, so that a
+ * reconciliation pass can never re-fire days-old pushes in a burst. This is the
+ * one notification the pass genuinely warrants, so it is sent by the caller,
+ * once, for the projects the pass just failed.
+ *
+ * One message per build rather than a digest: each one needs a button to its
+ * own card, because the answer is always "open it and press Спробувати ще раз".
+ * A container recreate touches one or two builds — the build container runs a
+ * single agent session at a time — so this is not a burst risk.
+ *
+ * Never throws: a Telegram outage must not stop the workers from booting.
+ */
+async function notifyInterruptedBuilds(
+  interrupted: Array<{ businessId: string; projectId: number }>,
+): Promise<void> {
+  if (!interrupted.length) return;
+  try {
+    const ids = [...new Set(interrupted.map((b) => b.businessId))];
+    const rows = await db.select({ id: schema.businesses.id, name: schema.businesses.name })
+      .from(schema.businesses)
+      .where(inArray(schema.businesses.id, ids));
+    const nameById = new Map(rows.map((r) => [r.id, r.name]));
+
+    for (const item of interrupted) {
+      await notifyBuildInterrupted({
+        businessId: item.businessId,
+        name: nameById.get(item.businessId) ?? item.businessId,
+      });
+    }
+  } catch (err) {
+    log.warn('failed to notify about interrupted builds', { err: String(err).slice(0, 300) });
+  }
+}
+
 export async function startWorkers(explicit?: WorkerGroup[]): Promise<void> {
   await ensureBuckets();
 
@@ -137,7 +178,13 @@ export async function startWorkers(explicit?: WorkerGroup[]): Promise<void> {
    * idempotent anyway, but one writer keeps `status_history` free of duplicate
    * recovery rows.
    */
-  if (groups.includes(SCHEDULE_GROUP)) await reconcileOnStartup();
+  if (groups.includes(SCHEDULE_GROUP)) {
+    const report = await reconcileOnStartup();
+    // A killed build is the one thing the reconciler closes that a person has
+    // to act on: the card offers «Спробувати ще раз», but nothing would have
+    // told Roman to go and look.
+    await notifyInterruptedBuilds(report.interruptedBuilds);
+  }
 
   const concurrency = concurrencyFor(groups);
   setAgentConcurrency(concurrency);

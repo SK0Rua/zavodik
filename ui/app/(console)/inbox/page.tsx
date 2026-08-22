@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { loadInbox } from '@/lib/inbox';
 import { ApprovalCard } from '@/components/ApprovalCard';
 import { BuildReviewCard } from '@/components/BuildReviewCard';
-import { JobProblemCard, ReplyCard } from '@/components/InboxSmallCards';
+import { InterruptedBuildCard, JobProblemCard, ReplyCard } from '@/components/InboxSmallCards';
 import { Metric } from '@/components/Status';
 
 export const dynamic = 'force-dynamic';
@@ -20,21 +20,23 @@ export default async function InboxPage({
   searchParams,
 }: { searchParams: Promise<{ business?: string }> }) {
   const { business } = await searchParams;
-  const { approvals, buildReviews, jobs, replies, counts } = await loadInbox();
+  const { approvals, buildReviews, interruptedBuilds, jobs, replies, counts } = await loadInbox();
 
   // Telegram links carry ?business=<id> so a push lands on that one card.
   const focus = business
     ? {
         approvals: approvals.filter((a) => a.businessId === business),
         buildReviews: buildReviews.filter((b) => b.businessId === business),
+        interruptedBuilds: interruptedBuilds.filter((b) => b.businessId === business),
         jobs: jobs.filter((j) => j.businessId === business),
         replies: replies.filter((r) => r.businessId === business),
       }
-    : { approvals, buildReviews, jobs, replies };
+    : { approvals, buildReviews, interruptedBuilds, jobs, replies };
 
   const total = focus.approvals.length + focus.buildReviews.length
-    + focus.jobs.length + focus.replies.length;
-  const allTotal = approvals.length + buildReviews.length + jobs.length + replies.length;
+    + focus.interruptedBuilds.length + focus.jobs.length + focus.replies.length;
+  const allTotal = approvals.length + buildReviews.length + interruptedBuilds.length
+    + jobs.length + replies.length;
 
   return (
     <div>
@@ -64,6 +66,11 @@ export default async function InboxPage({
           ))}
           {focus.buildReviews.map((b) => (
             <BuildReviewCard key={`build-${b.projectId}`} item={b} />
+          ))}
+          {/* Above the broken steps: this one is a single button away from
+              being resolved, and it is the newest thing that went wrong. */}
+          {focus.interruptedBuilds.map((b) => (
+            <InterruptedBuildCard key={`interrupted-${b.projectId}`} item={b} />
           ))}
           {focus.jobs.map((j) => <JobProblemCard key={`job-${j.jobId}`} item={j} />)}
         </div>

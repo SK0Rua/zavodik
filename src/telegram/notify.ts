@@ -185,6 +185,29 @@ export async function notifySubscriptionPause(input: {
   );
 }
 
+/**
+ * A build the server restart killed.
+ *
+ * Sent by `workers/main.ts` from the reconciler's report, never by the
+ * reconciler itself — see the no-notify rule in `orchestrator/reconcile.ts`.
+ *
+ * It lives here rather than being assembled at the call site because this
+ * module owns the two rules every notification has to obey: HTML escaping of
+ * a business name that came from Google Maps, and degrading to plain text when
+ * UI_BASE_URL is localhost (Telegram rejects such URLs in inline keyboards, so
+ * a hand-rolled `reply_markup` at the call site would silently fail to send).
+ */
+export async function notifyBuildInterrupted(input: {
+  businessId: string; name: string;
+}): Promise<number | null> {
+  return notifyTelegram(
+    `🧱 Збірку <b>${esc(input.name)}</b> перервано перезапуском сервера.\n`
+    + 'Нічого не втрачено — відкрий картку і запусти збірку заново.'
+    + noButtonHint(),
+    withButton('Відкрити картку', uiLinks.business(input.businessId)),
+  );
+}
+
 /** Evening digest. */
 export async function notifyDailySummary(lines: string[]): Promise<number | null> {
   return notifyTelegram(

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Status } from './Status';
 import type { BuildReviewItem } from '@/lib/inbox';
 import type { ActionResult } from '@/lib/types';
+import { runWithToast, toastResult } from '@/lib/toast';
 import {
   deployBuildAsIs, openBuildPreview, rejectBuild, requestAnotherIteration,
 } from '@/lib/buildReviewActions';
@@ -37,7 +38,10 @@ export function BuildReviewCard({ item, showName = true, showDecision = true }: 
   const showPreview = () => startTransition(async () => {
     const res = await openBuildPreview(item.projectId);
     setResult(res.ok ? null : res);
+    // A successful preview needs no toast: the preview itself appears, which is
+    // a louder answer than any sentence. A failure has nothing to show.
     if (res.ok && res.url) setPreview(res.url);
+    else toastResult(res, 'Preview не відкрився');
   });
 
   const shipIt = () => {
@@ -46,19 +50,21 @@ export function BuildReviewCard({ item, showName = true, showDecision = true }: 
       + 'Критик його не прийняв. Після публікації воно потрапить у Вхідні '
       + 'на підтвердження відправки — саме собою нікому не надішлеться.',
     )) return;
-    startTransition(async () => setResult(await deployBuildAsIs(item.projectId)));
+    startTransition(() => {
+      void runWithToast(() => deployBuildAsIs(item.projectId), { onResult: setResult });
+    });
   };
 
-  const iterate = () => startTransition(async () => {
-    const res = await requestAnotherIteration({ projectId: item.projectId, note });
-    setResult(res);
-    if (res.ok) { setMode('idle'); setNote(''); }
+  const iterate = () => startTransition(() => {
+    void runWithToast(() => requestAnotherIteration({ projectId: item.projectId, note }), {
+      onResult: (res) => { setResult(res); if (res.ok) { setMode('idle'); setNote(''); } },
+    });
   });
 
-  const drop = () => startTransition(async () => {
-    const res = await rejectBuild({ projectId: item.projectId, reason: note });
-    setResult(res);
-    if (res.ok) setMode('idle');
+  const drop = () => startTransition(() => {
+    void runWithToast(() => rejectBuild({ projectId: item.projectId, reason: note }), {
+      onResult: (res) => { setResult(res); if (res.ok) setMode('idle'); },
+    });
   });
 
   // Once an action has succeeded the item is gone from the pipeline's point of

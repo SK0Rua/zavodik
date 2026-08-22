@@ -161,8 +161,8 @@ export const SETTINGS: SettingDef[] = [
   },
   {
     key: 'BUILD_TERMINAL_BASE_URL', label: 'Адреса термінала збірки', group: 'agents',
-    kind: 'text', validate: url, placeholder: 'http://localhost:7681',
-    hint: 'Куди веде кнопка «Відкрити термінал». Порожньо = кнопки немає, підключення тільки по SSH.',
+    kind: 'text', validate: url, placeholder: 'https://<адреса цього UI>/terminal',
+    hint: 'Куди веде кнопка «Відкрити термінал». Новий домен НЕ потрібен: у Dokploy додай до сервісу factory-build запис з тим САМИМ доменом, шлях /terminal, порт 7681 — і встав сюди https://<домен UI>/terminal. Порожньо = кнопки немає.',
   },
   {
     key: 'BUILD_TERMINAL_PORT', label: 'Порт термінала збірки', group: 'agents',

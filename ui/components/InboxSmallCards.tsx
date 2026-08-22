@@ -3,10 +3,71 @@
 import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import { Status } from './Status';
-import { retryJobAction } from '@/lib/actions';
+import { retryJobAction, startDemoBuild } from '@/lib/actions';
 import { runWithToast } from '@/lib/toast';
 import { stageName } from '@/lib/stageNames';
-import type { JobProblemItem, ReplyItem } from '@/lib/inbox';
+import type { InterruptedBuildItem, JobProblemItem, ReplyItem } from '@/lib/inbox';
+
+/**
+ * A build the server restart killed.
+ *
+ * Roman, 2026-08-22 (BEAUTIFY Laser): a container recreate mid-build left the
+ * card claiming «Фабрика будує» over a live log that had stopped moving hours
+ * earlier, with no restart button and no notification. The reconciler now fails
+ * the orphaned project on the next boot; this is the card that says so.
+ *
+ * It reuses `startDemoBuild` rather than re-enqueueing the dead job: the job is
+ * `stale` bookkeeping and its payload points at a workspace the container no
+ * longer has, so resuming it would fail on the missing directory. A fresh build
+ * is what «Запустити заново» has always meant on the business card, and this is
+ * the same action behind a second door.
+ */
+export function InterruptedBuildCard({ item }: { item: InterruptedBuildItem }) {
+  const [started, setStarted] = useState(false);
+  const [pending, startTransition] = useTransition();
+
+  const restart = () => startTransition(() => {
+    void runWithToast(() => startDemoBuild(item.businessId), {
+      onResult: (res) => { if (res.ok) setStarted(true); },
+    });
+  });
+
+  return (
+    <article className="card p-5 sm:p-6">
+      {/* `wait`, not `stop`: nothing failed and nothing was judged. The build
+          was interrupted, which is a thing to redo, not a thing to diagnose. */}
+      <Status tone="wait">Збірку перервано</Status>
+
+      <h2 className="text-lg font-semibold mt-2">
+        <Link href={`/businesses/${item.businessId}`} className="link">{item.name}</Link>
+      </h2>
+
+      <p className="text-sm text-ink-soft mt-1.5 max-w-[70ch]">
+        Сервер перезапустився, поки будувався демосайт, і збірка обірвалась на пів дорозі.
+        Нічого не втрачено — усе зібране про бізнес на місці, треба лише почати збірку заново.
+      </p>
+
+      {started ? (
+        <p role="status" className="text-sm text-accent mt-4">
+          Збірку поставлено в чергу. Прогрес видно на картці бізнесу.
+        </p>
+      ) : (
+        <div className="mt-4 flex flex-wrap gap-2 items-center">
+          <button
+            type="button"
+            className="btn-primary btn-sm"
+            disabled={!item.canRestart || pending}
+            title={item.hint}
+            onClick={restart}
+          >
+            {pending ? 'Ставлю в чергу…' : 'Запустити заново'}
+          </button>
+          <span className="text-sm text-ink-mute">{item.hint}</span>
+        </div>
+      )}
+    </article>
+  );
+}
 
 /** A stage that stopped and will not restart itself. */
 export function JobProblemCard({ item }: { item: JobProblemItem }) {

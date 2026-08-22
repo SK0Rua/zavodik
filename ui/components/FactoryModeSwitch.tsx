@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import { Status } from '@/components/Status';
 import { setFactoryMode } from '@/lib/settingsActions';
+import { runWithToast } from '@/lib/toast';
 
 /**
  * The one setting that decides whether real businesses get messaged, and
@@ -25,10 +26,13 @@ export function FactoryModeSwitch({ current }: { current: 'dry_run' | 'live' }) 
   const [pending, startTransition] = useTransition();
 
   function apply(next: 'dry_run' | 'live') {
-    startTransition(async () => {
-      const res = await setFactoryMode(next);
-      setMsg(res.message);
-      if (res.ok) { setMode(next); setConfirming(false); setTyped(''); }
+    startTransition(() => {
+      void runWithToast(() => setFactoryMode(next), {
+        onResult: (res) => {
+          setMsg(res.message);
+          if (res.ok) { setMode(next); setConfirming(false); setTyped(''); }
+        },
+      });
     });
   }
 

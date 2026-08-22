@@ -696,6 +696,7 @@ export function ConnectedAccounts({ accounts, checks, checksError }: {
   async function doDisconnect(provider: CheckKind) {
     const r = await disconnectAccount(provider);
     setDisc(r.message);
+    toastResult(r, r.ok ? `${provider} відключено` : 'Відключити не вдалося');
     if (r.ok) setLive((c) => ({ ...c, [provider]: { ok: false, message: 'Відключено.' } }));
   }
 
