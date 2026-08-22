@@ -128,7 +128,18 @@ BUILD_TERMINAL_BASE_URL=http://<host-або-tailscale-імʼя>:7681
 
 Порт `7681` опублікований на `127.0.0.1` контейнера `factory-build`, тому
 «з браузера» означає: через Tailscale, SSH-тунель (`ssh -L 7681:localhost:7681
-<host>`) або той самий authenticated reverse-proxy, що й UI. Пароль — basic auth,
+<host>`) або той самий authenticated reverse-proxy, що й UI.
+
+**Як це налаштовано на бойовому сервері (2026-08-22):** Dokploy сам не вміє
+додати path-маршрут на compose-сервіс, тому маршрут заведений РУЧНИМ файлом
+`/etc/dokploy/traefik/dynamic/website-factory-terminal-custom.yml` —
+`Host(website-factory.kdnx.cloud) && PathPrefix(/terminal)` →
+`http://factory-build:7681`, priority 100 (вище за Host-only роутер UI).
+Traefik підхоплює зміни файлу без рестарту; Dokploy цей файл не генерує і не
+чіпає. При переїзді сервера файл треба перенести або створити заново, а в
+«Адресі термінала збірки» стоїть `https://website-factory.kdnx.cloud/terminal`.
+Памʼятай: ttyd живе лише під час активної збірки — поза нею `/terminal`
+відповідає 502/504, і це норма, а не зламаний маршрут. Пароль — basic auth,
 логін `roman`, пароль **похідний** від `INTERNAL_API_KEY`; побачити його можна
 так:
 
