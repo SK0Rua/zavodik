@@ -110,6 +110,16 @@ export const ArtDirectionSchema = z.object({
   name: z.string().min(1),
   /** One line naming what makes this direction structurally different from the others. */
   bigIdea: z.string().min(1),
+  /**
+   * The ONE element this page will be remembered by — what it is, which section
+   * it lives in, and why it belongs to THIS business's world. The direction's
+   * boldness is spent here; everything around it stays quiet and disciplined.
+   * A page whose signature could be deleted without anyone noticing has none —
+   * that is the "default AI template" failure in one sentence.
+   */
+  signature: z.string().min(1).describe(
+    'The single element this page is remembered by: what it is, which section, why it is native to this business.',
+  ),
   /** Ordered layout skeleton — section ids from the brief plus their composition. */
   layoutSkeleton: z.array(z.object({
     sectionId: z.string().min(1),

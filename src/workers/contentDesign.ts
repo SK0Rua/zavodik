@@ -400,6 +400,20 @@ face are on the anti-slop ban-list and are vetoed by code.`;
 page. Different hero device, different section rhythm, different relationship between type and
 image. If two directions could be swapped by editing CSS variables, you have failed.
 
+CALIBRATION — the three looks AI design defaults to, regardless of subject:
+(1) warm cream background (~#F4F1EA), high-contrast serif display, terracotta accent;
+(2) near-black with a single acid-green or vermilion accent;
+(3) broadsheet: hairline rules, zero border-radius, dense newspaper columns.
+These are defaults, not choices. A direction may land on one ONLY when the business's own
+measured identity genuinely leads there — and must say so in \`derivedFrom\`. The test for
+every direction: would you produce roughly this for any other business in this category and
+city? If yes, it is a template wearing this business's colours — replace it before submitting.
+
+THE SIGNATURE. Each direction fills \`signature\`: the ONE element this page will be remembered
+by — what it is, which section it lives in, and why it is native to THIS business's world (its
+materials, tools, rituals, place — not to web design). Spend the direction's boldness there and
+keep everything else quiet; scattered effects are how pages read as AI-generated.
+
 Ground rules:
 - Each direction names EXACTLY ONE reference from the reference pack, by its exact name, and
   lists the concrete mechanics it borrows. Available: ${referenceNames.join(', ') || '(see pack)'}.

@@ -90,6 +90,17 @@ buttons; every section a full-width band with a centred title; icon grids of unr
 default Inter/Poppins/Montserrat as the display face; neon-on-black startup palette on a beauty
 business; text that would read identically for any other business in the world.
 
+Also flag the three looks AI design defaults to REGARDLESS of subject, unless the business's
+measured identity genuinely leads there: (1) warm cream (~#F4F1EA) + high-contrast serif +
+terracotta accent; (2) near-black + one acid-green/vermilion accent; (3) broadsheet hairline
+rules, zero radius, newspaper columns. Landing on one of these without a brand-driven reason
+is a "slop" issue: it is a default wearing the business's colours.
+
+THE SIGNATURE TEST. After scoring, answer: what is the ONE element this page would be
+remembered by? If you cannot name one — if deleting any single element would lose nothing —
+file a high-severity "wow" issue saying exactly that, and name where the signature should
+live given this business's world.
+
 The \`desktop-reduced-motion\` screenshot is the SAME page with reduced motion on. Content missing
 or invisible there that is present in the normal render is a high-severity issue.
 

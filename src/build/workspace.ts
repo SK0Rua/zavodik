@@ -343,6 +343,9 @@ ${contactLines}
 
 ${design.bigIdea}
 
+- **THE SIGNATURE — build this one with the most care:** ${design.signature ?? '(not named — pick the strongest single element of the direction and execute it as the signature)'}
+  Spend the page's boldness here and keep everything around it quiet. If the finished page
+  would lose nothing by deleting this element, the page has failed as a design.
 - **Reference:** ${design.reference.name} — borrow: ${design.reference.borrowedMechanics.join('; ')}
 - **Motion reference:** \`${design.referenceSlug}\` (see the motion section below)
 - **Typography:** ${design.typography.displayFont} (display) + ${design.typography.bodyFont} (body).
