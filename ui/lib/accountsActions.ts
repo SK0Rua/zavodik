@@ -121,7 +121,7 @@ export async function disconnectAccount(provider: string): Promise<{ ok: boolean
     `/internal/accounts/${encodeURIComponent(provider)}/disconnect`, { method: 'POST' },
   );
   if (!r.ok) return { ok: false, message: r.message ?? 'Не вдалося.' };
-  revalidatePath('/settings');
+  revalidatePath('/settings', 'layout');
   return { ok: Boolean(r.data?.ok), message: r.data?.message ?? '' };
 }
 
@@ -153,7 +153,7 @@ export async function useTelegramChat(chatId: string): Promise<{ ok: boolean; me
   } catch (err) {
     return { ok: false, message: `Не збереглося: ${String(err).slice(0, 160)}` };
   }
-  revalidatePath('/settings');
+  revalidatePath('/settings', 'layout');
   return { ok: true, message: `Chat id ${id} збережено.` };
 }
 
@@ -169,7 +169,7 @@ export async function saveTelegramToken(token: string): Promise<{ ok: boolean; m
       message: `Не збереглося: ${String(err).slice(0, 200)}. Найімовірніше не заданий SETTINGS_MASTER_KEY.`,
     };
   }
-  revalidatePath('/settings');
+  revalidatePath('/settings', 'layout');
   return { ok: true, message: 'Токен збережено. Тепер знайди chat id.' };
 }
 
@@ -215,6 +215,6 @@ export async function saveGmail(
       message: `Не збереглося: ${String(err).slice(0, 200)}. Найімовірніше не заданий SETTINGS_MASTER_KEY.`,
     };
   }
-  revalidatePath('/settings');
+  revalidatePath('/settings', 'layout');
   return { ok: true, message: 'Gmail збережено (SMTP + IMAP). Тисни «Перевірити».' };
 }

@@ -260,7 +260,7 @@ export async function reenqueueStage(formData: FormData): Promise<ActionResult> 
     idempotencyKey: `${job}:${businessId}:${Date.now()}`,
   });
   revalidatePath(`/businesses/${businessId}`);
-  revalidatePath('/settings/system');
+  revalidatePath('/settings', 'layout');
 
   if (!jobId) return { ok: false, message: `Крок «${stageName(job)}» уже стоїть у черзі` };
   return { ok: true, message: `Крок «${stageName(job)}» поставлено в чергу` };
@@ -288,7 +288,7 @@ export async function retryJob(formData: FormData): Promise<ActionResult> {
   const id = Number(formData.get('jobId'));
   if (!id) return { ok: false, message: 'Не вибрано крок' };
   const enqueued = await retryWorkflowJob(id);
-  revalidatePath('/settings/system');
+  revalidatePath('/settings', 'layout');
   revalidatePath('/inbox');
   if (enqueued === null) return { ok: false, message: 'Цей крок уже не знайти.' };
   return {
@@ -360,7 +360,7 @@ export async function retryJobAction(jobId: number): Promise<ActionResult> {
   if (enqueued === null) return { ok: false, message: 'Цей крок уже не знайти.' };
 
   revalidatePath('/inbox');
-  revalidatePath('/settings');
+  revalidatePath('/settings', 'layout');
   return {
     ok: true,
     message: enqueued
@@ -525,7 +525,7 @@ export async function startDemoBuild(businessId: string): Promise<ActionResult> 
 
   revalidatePath('/businesses');
   revalidatePath(`/businesses/${businessId}`);
-  revalidatePath('/settings/system');
+  revalidatePath('/settings', 'layout');
 
   if (!jobId) {
     return { ok: false, message: `${biz.name}: такий job уже активний у черзі` };
@@ -629,7 +629,7 @@ export async function startSocialsDiscovery(businessId: string): Promise<ActionR
 
   revalidatePath(`/businesses/${businessId}`);
   revalidatePath('/businesses');
-  revalidatePath('/settings/system');
+  revalidatePath('/settings', 'layout');
 
   if (!jobId) return { ok: false, message: `${biz.name}: такий job уже активний у черзі` };
   return { ok: true, message: `${biz.name}: пошук соцмереж поставлено в чергу` };

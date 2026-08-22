@@ -2,8 +2,8 @@ import Link from 'next/link';
 import { desc, eq, inArray, sql, type SQL, and } from 'drizzle-orm';
 import { db, schema } from '@/lib/db';
 import { Status } from '@/components/Status';
-import { SettingsTabs } from '@/components/SettingsTabs';
 import { SystemStatusPanel } from '@/components/SystemStatusPanel';
+import { EffectiveConfigPanel } from '@/components/EffectiveConfigPanel';
 import { loadSystemStatus } from '@/lib/systemStatus';
 import { fmtDate, fmtTime, truncate } from '@/lib/format';
 import { humanJobLine, humanJobStatus } from '@/lib/humanStatus';
@@ -87,13 +87,8 @@ export default async function SystemPage({
       : [],
   );
 
-  const problems = Number(byStatus.get('failed') ?? 0) + Number(byStatus.get('needs_human') ?? 0);
-
   return (
     <div>
-      <h1 className="h-page mb-6">Налаштування</h1>
-      <SettingsTabs problemCount={problems} />
-
       <div className="space-y-6">
         <SystemStatusPanel status={status_} />
 
@@ -181,6 +176,10 @@ export default async function SystemPage({
             </p>
           )}
         </section>
+
+        {/* The debugging escape hatch for "чи бачить фабрика мою зміну" lives
+            with the rest of the under-the-hood reading, not on a config page. */}
+        <EffectiveConfigPanel />
       </div>
     </div>
   );

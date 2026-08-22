@@ -1,7 +1,8 @@
 'use client';
 
 /**
- * "Підключені акаунти" — every credential the factory needs, one card each.
+ * "Підключені акаунти" — every credential the factory needs, one ROW each,
+ * expanding into the full connect/check flow on click (see `AccountRow`).
  *
  * Two rules decide everything on this screen, both of them from Roman's
  * feedback on 2026-08-21 ("Заходжу — Claude 'налаштовано', Codex 'частково',
@@ -107,11 +108,23 @@ function Outcome({ outcome, prefix }: { outcome: CheckOutcome | undefined; prefi
   );
 }
 
-function AccountCard({ title, blurb, verdict, checkedAt, actions, children, footnote, how }: {
+/**
+ * One account as one ROW: name, real status, when it was checked — and nothing
+ * else until it is clicked (Roman's pick, 2026-08-22, against the six
+ * always-open cards that made this the tallest block of the old page).
+ *
+ * The collapsed row answers the only question a working account ever gets
+ * asked: «воно живе?». Everything a person needs while CONNECTING — buttons,
+ * QR, forms, instructions — expands under the one account being worked on,
+ * one at a time (an accordion), because nobody connects two services at once.
+ */
+function AccountRow({ title, blurb, verdict, checkedAt, open, onToggle, actions, children, footnote, how }: {
   title: string;
   blurb: string;
   verdict: Verdict;
   checkedAt?: string | null;
+  open: boolean;
+  onToggle: () => void;
   /** The action row. Exactly one filled button in here, or none — or nothing at all. */
   actions?: React.ReactNode;
   children?: React.ReactNode;
@@ -121,42 +134,52 @@ function AccountCard({ title, blurb, verdict, checkedAt, actions, children, foot
   how?: React.ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-line bg-paper-card p-4 space-y-3">
-      <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <h3 className="text-base font-medium text-ink">{title}</h3>
-            <Status tone={verdict.tone}>{verdict.label}</Status>
-          </div>
-          <p className="text-sm text-ink-mute mt-0.5">{blurb}</p>
+    <div className="border-b border-line last:border-b-0">
+      {/* The whole row is the toggle, with an explicit ▸ — the affordance rule:
+          if it can be clicked, it looks clickable. */}
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        className="w-full flex items-center gap-x-3 py-3 px-2 -mx-2 rounded-lg text-left
+                   transition-colors hover:bg-paper-sunk"
+      >
+        <span aria-hidden className={`text-ink-mute shrink-0 transition-transform duration-150 ${open ? 'rotate-90' : ''}`}>▸</span>
+        <span className="text-sm font-medium text-ink shrink-0">{title}</span>
+        <Status tone={verdict.tone}>{verdict.label}</Status>
+        <span className="ml-auto hidden sm:inline"><CheckedAgo at={checkedAt} /></span>
+      </button>
+
+      {open && (
+        <div className="pb-4 pl-6 space-y-3">
+          <p className="text-sm text-ink-mute max-w-[70ch]">{blurb}</p>
+
+          {verdict.reason && (
+            <p className="text-sm text-dot-stop break-words">{verdict.reason}</p>
+          )}
+
+          {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+
+          {children}
+
+          {footnote && <p className="text-sm text-ink-mute max-w-[70ch]">{footnote}</p>}
+
+          {/* The disclosure triangle is drawn explicitly: globals.css hides the
+              native marker, and without a replacement a <summary> is a line of
+              text that happens to be clickable — which is the confusion this
+              whole screen is being fixed for. */}
+          {how && (
+            <details className="text-sm group">
+              <summary className="inline-flex items-center gap-1.5 text-ink-soft hover:text-ink">
+                <span aria-hidden className="text-ink-mute transition-transform group-open:rotate-90">›</span>
+                Як це працює
+              </summary>
+              <div className="mt-2 space-y-2 text-ink-mute max-w-[70ch]">{how}</div>
+            </details>
+          )}
         </div>
-        <CheckedAgo at={checkedAt} />
-      </header>
-
-      {verdict.reason && (
-        <p className="text-sm text-dot-stop break-words">{verdict.reason}</p>
       )}
-
-      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
-
-      {children}
-
-      {footnote && <p className="text-sm text-ink-mute max-w-[70ch]">{footnote}</p>}
-
-      {/* The disclosure triangle is drawn explicitly: globals.css hides the
-          native marker, and without a replacement a <summary> is a line of text
-          that happens to be clickable — which is the confusion this whole
-          screen is being fixed for. */}
-      {how && (
-        <details className="text-sm group">
-          <summary className="inline-flex items-center gap-1.5 text-ink-soft hover:text-ink">
-            <span aria-hidden className="text-ink-mute transition-transform group-open:rotate-90">›</span>
-            Як це працює
-          </summary>
-          <div className="mt-2 space-y-2 text-ink-mute max-w-[70ch]">{how}</div>
-        </details>
-      )}
-    </section>
+    </div>
   );
 }
 
@@ -387,9 +410,9 @@ function useCliFlow({ provider, needsCode, onDone }: {
  * account is a recovery action and must never sit filled and inviting next to a
  * green status. Quiet, not hidden — see rule 3 in the block comment above.
  */
-function CliAccountCard({
+function CliAccountRow({
   provider, title, blurb, verdict, checkedAt, needsCode, canDisconnect,
-  onResult, onDisconnect, footnote, how,
+  open, onToggle, onResult, onDisconnect, footnote, how,
 }: {
   provider: 'claude' | 'codex';
   title: string;
@@ -398,6 +421,8 @@ function CliAccountCard({
   checkedAt: string | null;
   needsCode: boolean;
   canDisconnect: boolean;
+  open: boolean;
+  onToggle: () => void;
   onResult: (o: CheckOutcome) => void;
   onDisconnect?: () => void;
   footnote?: React.ReactNode;
@@ -406,11 +431,15 @@ function CliAccountCard({
   const flow = useCliFlow({ provider, needsCode, onDone: onResult });
 
   return (
-    <AccountCard
+    <AccountRow
       title={title}
       blurb={blurb}
       verdict={verdict}
       checkedAt={checkedAt}
+      // A live login flow pins the row open: collapsing it mid-login would hide
+      // the URL and the code box while the CLI is still waiting on them.
+      open={open || flow.live}
+      onToggle={onToggle}
       footnote={footnote}
       how={how}
       actions={flow.live ? (
@@ -442,7 +471,7 @@ function CliAccountCard({
       )}
     >
       {flow.panel}
-    </AccountCard>
+    </AccountRow>
   );
 }
 
@@ -692,6 +721,15 @@ export function ConnectedAccounts({ accounts, checks, checksError }: {
     [],
   );
 
+  // The accordion: one account expanded at a time, none by default. The
+  // collapsed list IS the answer for working accounts; expanding is for the one
+  // being connected or debugged right now.
+  const [openRow, setOpenRow] = useState<string | null>(null);
+  const row = (id: string) => ({
+    open: openRow === id,
+    onToggle: () => setOpenRow((cur) => (cur === id ? null : id)),
+  });
+
   const [disc, setDisc] = useState<string | null>(null);
   async function doDisconnect(provider: CheckKind) {
     const r = await disconnectAccount(provider);
@@ -722,8 +760,8 @@ export function ConnectedAccounts({ accounts, checks, checksError }: {
       <div>
         <h2 className="h-section">Підключені акаунти</h2>
         <p className="text-sm text-ink-mute mt-1 max-w-[70ch]">
-          Стан кожного рядка — результат справжньої перевірки, яка запускається при відкритті
-          сторінки і кешується на 10 хвилин. «Оновити» перепитує зараз.
+          Стан — результат справжньої перевірки при відкритті сторінки (кеш 10 хв).
+          Клікни рядок, щоб підключити, перевірити чи налаштувати.
         </p>
       </div>
 
@@ -740,9 +778,10 @@ export function ConnectedAccounts({ accounts, checks, checksError }: {
         </div>
       )}
 
-      <div className="grid gap-3">
-        <CliAccountCard
+      <div>
+        <CliAccountRow
           provider="claude"
+          {...row('claude')}
           title="Claude Code"
           blurb="Агентні етапи: brief, контент, збірка сайту, visual QA. По підписці Pro/Max."
           verdict={claude}
@@ -761,8 +800,9 @@ export function ConnectedAccounts({ accounts, checks, checksError }: {
           )}
         />
 
-        <CliAccountCard
+        <CliAccountRow
           provider="codex"
+          {...row('codex')}
           title="Codex CLI"
           blurb="Генерація зображень (gen-image) по підписці ChatGPT."
           verdict={codex}
@@ -780,8 +820,9 @@ export function ConnectedAccounts({ accounts, checks, checksError }: {
         />
 
         {/* ── Telegram ── */}
-        <AccountCard
+        <AccountRow
           title="Telegram"
+          {...row('telegram')}
           blurb="Тільки сповіщення з лінками в цей UI (рішення №9). Approve тут не робиться."
           verdict={telegram}
           checkedAt={at('telegram')}
@@ -808,11 +849,12 @@ export function ConnectedAccounts({ accounts, checks, checksError }: {
             onCheck={set('telegram')}
           />
           <Outcome outcome={live.telegram} />
-        </AccountCard>
+        </AccountRow>
 
         {/* ── WhatsApp ── */}
-        <AccountCard
+        <AccountRow
           title="WhatsApp (WAHA)"
+          {...row('waha')}
           blurb="Self-hosted WAHA, не Meta Cloud API (рішення №2). Головний канал outreach."
           verdict={waha}
           checkedAt={at('waha')}
@@ -838,8 +880,9 @@ export function ConnectedAccounts({ accounts, checks, checksError }: {
         />
 
         {/* ── Gmail ── */}
-        <AccountCard
+        <AccountRow
           title="Gmail"
+          {...row('gmail')}
           blurb="Резервний канал; месенджери мають пріоритет (рішення №8). IMAP ловить відповіді."
           verdict={gmail}
           checkedAt={at('smtp')}
@@ -867,11 +910,12 @@ export function ConnectedAccounts({ accounts, checks, checksError }: {
           <GmailFlow connected={gmail.connected} onSmtp={set('smtp')} onImap={set('imap')} />
           <Outcome outcome={live.smtp} prefix="SMTP" />
           <Outcome outcome={live.imap} prefix="IMAP" />
-        </AccountCard>
+        </AccountRow>
 
         {/* ── FlowKit ── */}
-        <AccountCard
+        <AccountRow
           title="FlowKit"
+          {...row('flowkit')}
           blurb="AI-відео для hero. Опційно: без нього — Ken Burns по реальних фото."
           verdict={flowkit}
           checkedAt={at('flowkit')}

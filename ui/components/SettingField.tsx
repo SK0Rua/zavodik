@@ -69,6 +69,48 @@ function Provenance({ field }: { field: SettingView }) {
   return null;
 }
 
+/**
+ * The hint, folded into an ⓘ beside the label (Roman's pick, 2026-08-22).
+ *
+ * Rendered inline under every row, the hints WERE the «навала тексту»: thirty
+ * rows carried thirty paragraphs that Roman reads once per field per lifetime.
+ * Hover or keyboard focus opens the bubble; click toggles it, which is the
+ * whole story on a phone where hover does not exist.
+ */
+function HintTip({ hint }: { hint: string }) {
+  const [open, setOpen] = useState(false);
+  // No `relative` here on purpose: the bubble anchors to the label span in the
+  // row (the nearest positioned ancestor), so its left edge lines up with the
+  // label and never starts mid-viewport where 44ch would overflow the screen.
+  return (
+    <span className="inline-flex">
+      <button
+        type="button"
+        aria-label={`Пояснення: ${hint}`}
+        aria-expanded={open}
+        className="text-ink-mute hover:text-ink transition-colors px-1 -my-1 py-1 leading-none"
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        onClick={() => setOpen((s) => !s)}
+      >
+        <span aria-hidden>ⓘ</span>
+      </button>
+      {open && (
+        <span
+          role="tooltip"
+          className="absolute left-0 top-full z-20 mt-1 w-max max-w-[min(44ch,calc(100vw-6rem))]
+                     rounded-lg border border-line bg-paper-card shadow-card px-3 py-2
+                     text-sm font-normal text-ink-soft whitespace-normal"
+        >
+          {hint}
+        </span>
+      )}
+    </span>
+  );
+}
+
 /** The editor for one field, by kind. Secrets always open empty. */
 function Editor({ field, value, onChange }: {
   field: SettingView;
@@ -191,12 +233,15 @@ export function SettingField({ field, locked }: {
   return (
     <div className="py-3.5 border-b border-line last:border-b-0">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <label
-          className="text-sm font-medium text-ink" title={field.key}
-          htmlFor={open ? field.key : undefined}
-        >
-          {field.label}
-        </label>
+        <span className="relative inline-flex items-baseline gap-0.5 min-w-0">
+          <label
+            className="text-sm font-medium text-ink" title={field.key}
+            htmlFor={open ? field.key : undefined}
+          >
+            {field.label}
+          </label>
+          {field.hint && <HintTip hint={field.hint} />}
+        </span>
         <Provenance field={field} />
       </div>
 
@@ -255,8 +300,6 @@ export function SettingField({ field, locked }: {
           </div>
         )}
       </div>
-
-      {field.hint && <p className="text-sm text-ink-mute mt-1.5 max-w-[70ch]">{field.hint}</p>}
 
       {secretsBlocked && (
         <p className="text-sm text-dot-wait mt-1.5">

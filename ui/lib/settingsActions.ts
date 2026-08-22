@@ -58,7 +58,7 @@ export async function saveSettingValue(key: string, raw: string): Promise<Settin
     return { ok: false, message: `Не збереглося: ${String(e).slice(0, 200)}` };
   }
 
-  revalidatePath('/settings');
+  revalidatePath('/settings', 'layout');
   return {
     ok: true,
     // The TTL is the honest promise: the workers re-read within 15s, no restart.
@@ -88,7 +88,7 @@ export async function resetSettingValue(key: string): Promise<SettingsSaveResult
 export async function setFactoryMode(mode: 'dry_run' | 'live'): Promise<SettingsSaveResult> {
   if (mode !== 'dry_run' && mode !== 'live') return { ok: false, message: 'Невідомий режим' };
   await saveSetting('FACTORY_MODE', mode);
-  revalidatePath('/settings');
+  revalidatePath('/settings', 'layout');
   revalidatePath('/inbox');
   return {
     ok: true,
@@ -166,7 +166,7 @@ export async function runCheck(kind: string): Promise<CheckOutcome> {
  */
 export async function refreshCheck(kind: string): Promise<CheckOutcome> {
   const out = await runCheck(kind);
-  revalidatePath('/settings');
+  revalidatePath('/settings', 'layout');
   return out;
 }
 
