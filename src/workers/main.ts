@@ -18,7 +18,7 @@
  */
 import { inArray } from 'drizzle-orm';
 import { register, getBoss, type JobName } from '../orchestrator/queue.js';
-import { reconcileOnStartup } from '../orchestrator/reconcile.js';
+import { reconcileOnStartup, requeueOrphanedBuildJobs } from '../orchestrator/reconcile.js';
 import { db, schema } from '../db/client.js';
 import { notifyBuildInterrupted } from '../telegram/notify.js';
 import { ensureBuckets } from '../lib/storage.js';
@@ -184,6 +184,18 @@ export async function startWorkers(explicit?: WorkerGroup[]): Promise<void> {
     // to act on: the card offers «Спробувати ще раз», but nothing would have
     // told Roman to go and look.
     await notifyInterruptedBuilds(report.interruptedBuilds);
+  }
+
+  // The build container resurrects ITS OWN dead: a `running` build job at this
+  // process's boot died with the previous container (the tmux session cannot
+  // survive a recreate), and pg-boss would only notice at the 90-minute
+  // expiration — a «Виконується» that lies for an hour and a half. Requeue them
+  // now, BEFORE handlers register, so the first fetch picks the build back up.
+  if (groups.includes('build')) {
+    const requeued = await requeueOrphanedBuildJobs(WORKER_GROUPS.build);
+    if (requeued) {
+      log.warn('requeued builds interrupted by the container restart', { requeued });
+    }
   }
 
   const concurrency = concurrencyFor(groups);

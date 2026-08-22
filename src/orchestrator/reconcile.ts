@@ -234,6 +234,51 @@ async function failInterruptedBuilds(): Promise<ReconcileReport['interruptedBuil
   }));
 }
 
+/**
+ * Build-chain jobs whose worker died WITH this container: put them back in the
+ * queue NOW instead of letting them lie for 90 minutes.
+ *
+ * Called at `factory-build` boot only, for the job types that container owns
+ * exclusively. At that moment any mirror row still `running` for those types is
+ * dead by definition — its tmux session and agent died with the old container —
+ * but pg-boss does not know yet: the boss job sits `active` until its
+ * expiration, so for up to 90 minutes the console shows «Виконується» for a
+ * process that does not exist. Roman's rule (2026-08-22): «В системі має завжди
+ * відображатись поточний реальний стан всього».
+ *
+ * This is NOT the re-enqueue the module doc above forbids. That rule is about
+ * days-old stranded backlog, where restarting is a decision. Here the work was
+ * authorized minutes ago, pg-boss is ALREADY going to re-dispatch this exact
+ * job at expiration — flipping it to `retry` with `start_after = now()` only
+ * removes the artificial wait, and the retry budget is untouched.
+ */
+export async function requeueOrphanedBuildJobs(ownedTypes: readonly string[]): Promise<number> {
+  const rows = await db.execute(sql`
+    with orphans as (
+      select w.id as mirror_id, j.id as boss_id
+      from workflow_jobs w
+      join pgboss.job j on j.id::text = w.boss_job_id
+      where w.status = 'running'
+        and j.state = 'active'
+        and w.job_type in (${sql.join(ownedTypes.map((t) => sql`${t}`), sql`, `)})
+    ),
+    bump as (
+      update pgboss.job j
+      set state = 'retry', start_after = now()
+      from orphans o
+      where j.id = o.boss_id
+      returning j.id
+    )
+    update workflow_jobs w
+    set status = 'queued',
+        error_detail = 'Збірку перервано перезапуском контейнера — крок одразу повернено в чергу.'
+    from orphans o
+    where w.id = o.mirror_id
+    returning w.id
+  `);
+  return rows.rows.length;
+}
+
 export async function reconcileOnStartup(): Promise<ReconcileReport> {
   const report: ReconcileReport = { staleJobs: 0, revertedBusinesses: [], interruptedBuilds: [] };
   try {
