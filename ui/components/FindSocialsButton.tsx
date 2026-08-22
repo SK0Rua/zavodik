@@ -11,15 +11,15 @@
  * session. The worst case of an accidental click is a few minutes of searching.
  */
 
-import { useState, useTransition } from 'react';
+import { useTransition } from 'react';
 import { startSocialsDiscovery } from '@/lib/actions';
+import { runWithToast } from '@/lib/toast';
 import type { SocialsButtonState } from '@/lib/socials';
 
 export function FindSocialsButton({ businessId, state }: {
   businessId: string;
   state: SocialsButtonState;
 }) {
-  const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   return (
@@ -33,15 +33,13 @@ export function FindSocialsButton({ businessId, state }: {
         className="btn-outline"
         disabled={!state.enabled || pending}
         title={state.hint}
-        onClick={() => startTransition(async () => {
-          const res = await startSocialsDiscovery(businessId);
-          setMessage(res.message);
+        onClick={() => startTransition(() => {
+          void runWithToast(() => startSocialsDiscovery(businessId));
         })}
       >
         {pending ? 'Ставлю в чергу…' : 'Дошукати соцмережі'}
       </button>
       <span className="text-sm text-ink-mute">{state.hint}</span>
-      {message && <span className="text-sm text-ink-soft">{message}</span>}
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { loadSystemStatus } from '@/lib/systemStatus';
 import { fmtDate, fmtTime, truncate } from '@/lib/format';
 import { humanJobLine, humanJobStatus } from '@/lib/humanStatus';
 import { stageName } from '@/lib/stageNames';
+import { ActionForm } from '@/components/ActionForm';
 import { retryJob } from '@/lib/actions';
 
 export const dynamic = 'force-dynamic';
@@ -161,10 +162,10 @@ export default async function SystemPage({
                     )}
                   </div>
                   {['failed', 'needs_human'].includes(j.status) && (
-                    <form action={retryJob}>
+                    <ActionForm action={retryJob}>
                       <input type="hidden" name="jobId" value={j.id} />
                       <button type="submit" className="btn-outline btn-sm">Повторити</button>
-                    </form>
+                    </ActionForm>
                   )}
                 </li>
               );

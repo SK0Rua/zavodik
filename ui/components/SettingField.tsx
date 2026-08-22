@@ -18,6 +18,7 @@
 
 import { useState, useTransition } from 'react';
 import { resetSettingValue, saveSettingValue, type SettingsSaveResult } from '@/lib/settingsActions';
+import { runWithToast } from '@/lib/toast';
 import type { SettingView } from '@/lib/settings';
 
 /**
@@ -156,14 +157,31 @@ export function SettingField({ field, locked }: {
   // browser: any typing at all is a change, and an empty box is not.
   const dirty = open && live !== (field.secret ? '' : field.value);
 
-  function commit(value: string) {
-    startTransition(async () => {
-      const res = await saveSettingValue(field.key, value);
-      setResult(res);
-      // The page revalidates on success, so the row re-renders with the new
-      // effective value and a fresh «змінено» mark; staying in edit mode would
-      // show a stale draft on top of it.
-      if (res.ok) { setEditing(false); setDraft(''); }
+  /**
+   * Save or reset, reporting both ways.
+   *
+   * The toast names the FIELD; the action's own message does not, because the
+   * action answers a key and the row it came from is right there. Detached in
+   * the corner it is not: «Збережено» with thirty rows on screen says nothing
+   * about which of them.
+   */
+  function commit(run: () => Promise<SettingsSaveResult>) {
+    startTransition(() => {
+      void runWithToast(
+        async () => {
+          const res = await run();
+          return { ...res, message: res.ok ? `${field.label}: ${res.message}` : res.message };
+        },
+        {
+          onResult: (res) => {
+            setResult(res);
+            // The page revalidates on success, so the row re-renders with the
+            // new effective value and a fresh «змінено» mark; staying in edit
+            // mode would show a stale draft on top of it.
+            if (res.ok) { setEditing(false); setDraft(''); }
+          },
+        },
+      );
     });
   }
 
@@ -201,7 +219,7 @@ export function SettingField({ field, locked }: {
                 <button
                   type="button" className="btn-primary btn-sm w-full sm:w-auto"
                   disabled={pending || secretsBlocked}
-                  onClick={() => commit(live)}
+                  onClick={() => commit(() => saveSettingValue(field.key, live))}
                 >
                   {pending ? 'Зберігаю…' : live.trim() === '' ? 'Очистити' : 'Зберегти'}
                 </button>
@@ -229,7 +247,7 @@ export function SettingField({ field, locked }: {
                 title={field.fallback?.source === 'env'
                   ? 'Повернутися до значення з .env'
                   : 'Повернутися до типового значення'}
-                onClick={() => startTransition(async () => setResult(await resetSettingValue(field.key)))}
+                onClick={() => commit(() => resetSettingValue(field.key))}
               >
                 {pending ? '…' : 'Скинути'}
               </button>

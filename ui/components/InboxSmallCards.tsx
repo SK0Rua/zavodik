@@ -4,17 +4,24 @@ import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import { Status } from './Status';
 import { retryJobAction } from '@/lib/actions';
+import { runWithToast } from '@/lib/toast';
 import { stageName } from '@/lib/stageNames';
 import type { JobProblemItem, ReplyItem } from '@/lib/inbox';
 
 /** A stage that stopped and will not restart itself. */
 export function JobProblemCard({ item }: { item: JobProblemItem }) {
   const [open, setOpen] = useState(false);
+  // Kept alongside the toast because it also RETIRES the retry button: once a
+  // retry is queued, offering the same button again would queue a second one.
   const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
-  const retry = () => startTransition(async () => {
-    setMessage(await retryJobAction(item.jobId));
+  const retry = () => startTransition(() => {
+    void runWithToast(() => retryJobAction(item.jobId), {
+      // Only a SUCCESS retires the button. A failed retry has to stay
+      // retryable, or one unreachable moment costs Roman the only control.
+      onResult: (res) => { if (res.ok) setMessage(res.message); },
+    });
   });
 
   return (

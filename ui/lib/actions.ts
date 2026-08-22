@@ -19,10 +19,12 @@ import { db, schema } from './db';
 import { enqueueJob, type JobName } from './queue';
 import { sendIdempotencyKey, followupIdempotencyKey, isManualChannel, deepLinkFor } from './keys';
 import {
-  BUILDABLE_STATUSES, buildJobPriority, isActiveJobStatus, isActiveProjectState,
-  normalizeBuildPolicy,
+  BUILDABLE_STATUSES, BUILD_POLICY_LABELS, buildJobPriority, isActiveJobStatus,
+  isActiveProjectState, normalizeBuildPolicy,
 } from './buildPolicy';
 import { CLOSED_STATUSES, isSocialChannel, socialsButtonState } from './socials';
+import { humanStatus } from './humanStatus';
+import { stageName } from './stageNames';
 import type { ActionResult } from './types';
 
 // ─── Approvals ───────────────────────────────────────────────────────────────
@@ -190,20 +192,31 @@ export async function transitionBusiness(
   return { ok: true, message: `${biz.status} → ${to}` };
 }
 
-/** Форма-обгортка для manual transition (щоб не передавати обʼєкт з клієнта). */
-export async function forceStatusAction(formData: FormData): Promise<void> {
+/**
+ * Форма-обгортка для manual transition (щоб не передавати обʼєкт з клієнта).
+ *
+ * Returns a result rather than void: every action in the console reports what
+ * it did through a toast (Roman, 2026-08-22 — «нажав змінити статус і хз,
+ * спрацювало чи ні»), and a `Promise<void>` has nothing to report. The message
+ * names the state in HIS words, not the enum: `humanStatus` is what the rest of
+ * the console prints, so the toast and the card cannot say different things.
+ */
+export async function forceStatusAction(formData: FormData): Promise<ActionResult> {
   const businessId = String(formData.get('businessId') ?? '');
   const to = String(formData.get('to') ?? '');
   const reason = String(formData.get('reason') ?? '').trim();
-  if (!businessId || !to) return;
-  await transitionBusiness(businessId, to, reason || 'ручна зміна статусу Романом');
+  if (!businessId || !to) return { ok: false, message: 'Не вибрано бізнес або стан' };
+
+  const moved = await transitionBusiness(businessId, to, reason || 'ручна зміна статусу Романом');
+  if (!moved.ok) return moved;
+  return { ok: true, message: `Стан змінено на «${humanStatus(to).text}»` };
 }
 
 /** Permanent opt-out (SPEC §8): checked again at send time by the worker. */
-export async function markDoNotContact(formData: FormData): Promise<void> {
+export async function markDoNotContact(formData: FormData): Promise<ActionResult> {
   const businessId = String(formData.get('businessId') ?? '');
   const reason = String(formData.get('reason') ?? '').trim() || 'позначено вручну в UI';
-  if (!businessId) return;
+  if (!businessId) return { ok: false, message: 'Не вибрано бізнес' };
 
   await db.insert(schema.doNotContact)
     .values({ matchType: 'business_id', value: businessId, reason })
@@ -222,21 +235,35 @@ export async function markDoNotContact(formData: FormData): Promise<void> {
   }
 
   await transitionBusiness(businessId, 'do_not_contact', reason);
+
+  // Named by its consequence, and it says how many addresses went with the
+  // business — that is the part a person cannot see from the card afterwards.
+  return {
+    ok: true,
+    message: contacts.length
+      ? `Заблоковано назавжди — бізнес і ${contacts.length} його адрес`
+      : 'Заблоковано назавжди',
+  };
 }
 
 /** Re-run a pipeline stage for one business. */
-export async function reenqueueStage(formData: FormData): Promise<void> {
+export async function reenqueueStage(formData: FormData): Promise<ActionResult> {
   const businessId = String(formData.get('businessId') ?? '');
   const job = String(formData.get('job') ?? '') as JobName;
-  if (!businessId || !job) return;
+  if (!businessId || !job) return { ok: false, message: 'Не вибрано крок' };
   const [biz] = await db.select().from(schema.businesses).where(eq(schema.businesses.id, businessId));
-  if (!biz) return;
-  await enqueueJob({
+  if (!biz) return { ok: false, message: 'Бізнес не знайдено' };
+  // A fresh key every time on purpose: this button means "run it again NOW",
+  // and a stable key would make the second press a silent no-op.
+  const jobId = await enqueueJob({
     name: job, businessId, campaignId: biz.campaignId,
     idempotencyKey: `${job}:${businessId}:${Date.now()}`,
   });
   revalidatePath(`/businesses/${businessId}`);
   revalidatePath('/settings/system');
+
+  if (!jobId) return { ok: false, message: `Крок «${stageName(job)}» уже стоїть у черзі` };
+  return { ok: true, message: `Крок «${stageName(job)}» поставлено в чергу` };
 }
 
 // ─── Jobs ────────────────────────────────────────────────────────────────────
@@ -257,12 +284,19 @@ export async function reenqueueStage(formData: FormData): Promise<void> {
  * decide "a build is already running" — so a phantom `queued` row blocks the
  * business indefinitely. Caught by `pnpm e2e`, group 6.
  */
-export async function retryJob(formData: FormData): Promise<void> {
+export async function retryJob(formData: FormData): Promise<ActionResult> {
   const id = Number(formData.get('jobId'));
-  if (!id) return;
-  await retryWorkflowJob(id);
+  if (!id) return { ok: false, message: 'Не вибрано крок' };
+  const enqueued = await retryWorkflowJob(id);
   revalidatePath('/settings/system');
   revalidatePath('/inbox');
+  if (enqueued === null) return { ok: false, message: 'Цей крок уже не знайти.' };
+  return {
+    ok: true,
+    message: enqueued
+      ? 'Поставлено в чергу — фабрика спробує ще раз.'
+      : 'Цей крок уже стоїть у черзі.',
+  };
 }
 
 /**
@@ -317,21 +351,27 @@ async function retryWorkflowJob(jobId: number): Promise<boolean | null> {
  * The inbox shows the outcome in place rather than reloading the page under
  * Roman's finger, so it needs a message; the form wrapper above stays for the
  * settings-side jobs table.
+ *
+ * `ActionResult` rather than a bare string, so the toast can tell "queued" from
+ * "there is nothing here to retry" — as a string both were success-green.
  */
-export async function retryJobAction(jobId: number): Promise<string> {
+export async function retryJobAction(jobId: number): Promise<ActionResult> {
   const enqueued = await retryWorkflowJob(jobId);
-  if (enqueued === null) return 'Цей крок уже не знайти.';
+  if (enqueued === null) return { ok: false, message: 'Цей крок уже не знайти.' };
 
   revalidatePath('/inbox');
   revalidatePath('/settings');
-  return enqueued
-    ? 'Поставлено в чергу — фабрика спробує ще раз.'
-    : 'Цей крок уже стоїть у черзі.';
+  return {
+    ok: true,
+    message: enqueued
+      ? 'Поставлено в чергу — фабрика спробує ще раз.'
+      : 'Цей крок уже стоїть у черзі.',
+  };
 }
 
 // ─── Campaigns ───────────────────────────────────────────────────────────────
 
-export async function createCampaign(formData: FormData): Promise<void> {
+export async function createCampaign(formData: FormData): Promise<ActionResult> {
   const city = String(formData.get('city') ?? '').trim();
   const niche = String(formData.get('niche') ?? '').trim();
   const country = String(formData.get('country') ?? 'GR').trim();
@@ -345,30 +385,39 @@ export async function createCampaign(formData: FormData): Promise<void> {
   // the factory starts building for on its own. Default is "only those with no
   // site of their own" (Roman's rule), and it stays editable on this page.
   const autoBuild = normalizeBuildPolicy(String(formData.get('autoBuild') ?? ''));
-  if (!city || !niche || !queries.length) return;
+  if (!city || !niche || !queries.length) {
+    return { ok: false, message: 'Потрібні місто, ніша і хоча б один пошуковий запит' };
+  }
 
   const slug = `${country}-${city}-${niche}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const id = `${slug}-${new Date().toISOString().slice(0, 7)}`;
 
-  await db.insert(schema.campaigns).values({
+  // `onConflictDoNothing` means a repeat of this month's city+niche is a no-op,
+  // and the operator has to be told that rather than shown a success.
+  const created = await db.insert(schema.campaigns).values({
     id, country, city, niche, language, queries,
     geofence: { lat, lng, radiusKm },
     targetCount,
     autoBuild,
     mode: process.env.FACTORY_MODE === 'live' ? 'live' : 'dry_run',
     status: 'running',
-  }).onConflictDoNothing();
+  }).onConflictDoNothing().returning({ id: schema.campaigns.id });
+
+  if (!created.length) {
+    return { ok: false, message: `Кампанія «${id}» уже існує — нову не створено` };
+  }
 
   await enqueueJob({ name: 'discover', campaignId: id, idempotencyKey: `discover:${id}` });
   revalidatePath('/campaigns');
+  return { ok: true, message: `Кампанію «${city} · ${niche}» створено, пошук бізнесів поставлено в чергу` };
 }
 
 // ─── Deals ───────────────────────────────────────────────────────────────────
 
-export async function updateDealStage(formData: FormData): Promise<void> {
+export async function updateDealStage(formData: FormData): Promise<ActionResult> {
   const businessId = String(formData.get('businessId') ?? '');
   const state = String(formData.get('state') ?? '');
-  if (!businessId || !state) return;
+  if (!businessId || !state) return { ok: false, message: 'Не вибрано етап' };
 
   await db.insert(schema.deals).values({ businessId, state })
     .onConflictDoUpdate({
@@ -381,6 +430,8 @@ export async function updateDealStage(formData: FormData): Promise<void> {
     await transitionBusiness(businessId, state, `deal stage → ${state} (вручну)`);
   }
   revalidatePath('/inbox');
+  revalidatePath(`/businesses/${businessId}`);
+  return { ok: true, message: `Етап розмови: «${humanStatus(state).text}»` };
 }
 
 // ─── Funnel counts (used by several pages) ───────────────────────────────────
@@ -491,13 +542,6 @@ async function latestVerdict(businessId: string): Promise<string | null> {
   return row?.verdict ?? null;
 }
 
-/** Row-level form wrapper: one business, one button. */
-export async function startDemoBuildAction(formData: FormData): Promise<void> {
-  const businessId = String(formData.get('businessId') ?? '');
-  if (!businessId) return;
-  await startDemoBuild(businessId);
-}
-
 /**
  * Bulk build over the ids the operator currently has selected.
  *
@@ -527,15 +571,16 @@ export async function startDemoBuildBulk(businessIds: string[]): Promise<ActionR
 }
 
 /** Change a campaign's build policy. Affects future transitions only. */
-export async function setCampaignBuildPolicy(formData: FormData): Promise<void> {
+export async function setCampaignBuildPolicy(formData: FormData): Promise<ActionResult> {
   const campaignId = String(formData.get('campaignId') ?? '');
   const policy = normalizeBuildPolicy(String(formData.get('autoBuild') ?? ''));
-  if (!campaignId) return;
+  if (!campaignId) return { ok: false, message: 'Не вибрано кампанію' };
   await db.update(schema.campaigns)
     .set({ autoBuild: policy })
     .where(eq(schema.campaigns.id, campaignId));
   revalidatePath('/campaigns');
   revalidatePath('/businesses');
+  return { ok: true, message: `Політика збірки: ${BUILD_POLICY_LABELS[policy]}` };
 }
 
 // ─── Social discovery: «Дошукати соцмережі» ──────────────────────────────────
@@ -667,12 +712,12 @@ export async function startSocialsDiscoveryBulk(businessIds: string[]): Promise<
  * (`source_id` → the captured profile page) is untouched — confirming does not
  * create a fact, it endorses one that already has a source.
  */
-export async function verifySocialContact(formData: FormData): Promise<void> {
+export async function verifySocialContact(formData: FormData): Promise<ActionResult> {
   const contactId = Number(formData.get('contactId'));
-  if (!contactId) return;
+  if (!contactId) return { ok: false, message: 'Не вибрано контакт' };
   const [contact] = await db.select().from(schema.businessContacts)
     .where(eq(schema.businessContacts.id, contactId));
-  if (!contact) return;
+  if (!contact) return { ok: false, message: 'Контакт не знайдено' };
 
   await db.update(schema.businessContacts)
     .set({
@@ -694,6 +739,7 @@ export async function verifySocialContact(formData: FormData): Promise<void> {
 
   revalidatePath(`/businesses/${contact.businessId}`);
   revalidatePath('/businesses');
+  return { ok: true, message: `${contact.channel} підтверджено — тепер це доведений контакт` };
 }
 
 /**
@@ -704,12 +750,15 @@ export async function verifySocialContact(formData: FormData): Promise<void> {
  * answerable. Only an unverified row may be deleted, so a click can never
  * destroy a confirmed contact.
  */
-export async function rejectSocialContact(formData: FormData): Promise<void> {
+export async function rejectSocialContact(formData: FormData): Promise<ActionResult> {
   const contactId = Number(formData.get('contactId'));
-  if (!contactId) return;
+  if (!contactId) return { ok: false, message: 'Не вибрано контакт' };
   const [contact] = await db.select().from(schema.businessContacts)
     .where(eq(schema.businessContacts.id, contactId));
-  if (!contact || contact.verified) return;
+  if (!contact) return { ok: false, message: 'Контакт не знайдено' };
+  if (contact.verified) {
+    return { ok: false, message: 'Цей контакт уже підтверджений — видалити його звідси не можна' };
+  }
 
   await db.delete(schema.businessContacts)
     .where(and(
@@ -719,4 +768,5 @@ export async function rejectSocialContact(formData: FormData): Promise<void> {
 
   revalidatePath(`/businesses/${contact.businessId}`);
   revalidatePath('/businesses');
+  return { ok: true, message: `${contact.channel} прибрано зі списку. Докази лишились у базі.` };
 }

@@ -6,6 +6,7 @@ import { Status } from './Status';
 import { safeHttpUrl } from '@/lib/format';
 import type { DotTone } from '@/lib/humanStatus';
 import { startDemoBuild, startDemoBuildBulk, startSocialsDiscoveryBulk } from '@/lib/actions';
+import { runWithToast } from '@/lib/toast';
 import type { BuildButtonState } from '@/lib/buildPolicy';
 import type { SocialsButtonState } from '@/lib/socials';
 
@@ -67,10 +68,12 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
       + 'Бізнес у стані «потрібна твоя увага», але всі пропуски закриті — '
       + 'він перейде в «готово до демо» від твого імені.',
     )) return;
-    startTransition(async () => {
-      const res = await startDemoBuild(row.id);
-      setMessage(res.message);
-      setSelected((prev) => { const n = new Set(prev); n.delete(row.id); return n; });
+    startTransition(() => {
+      void runWithToast(() => startDemoBuild(row.id), {
+        onResult: () => setSelected((prev) => {
+          const n = new Set(prev); n.delete(row.id); return n;
+        }),
+      });
     });
   };
 
@@ -82,9 +85,13 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
       `Почати збірку демо для ${ids.length} бізнесів?`
       + (ignored > 0 ? `\n\n${ignored} з обраних пропустимо — для них збірка зараз неможлива.` : ''),
     )) return;
-    startTransition(async () => {
-      setMessage((await startDemoBuildBulk(ids)).message);
-      setSelected(new Set());
+    // A bulk result enumerates every business it skipped and why, which is more
+    // than a toast should hold — so the toast confirms the click and the banner
+    // keeps the list to read through afterwards.
+    startTransition(() => {
+      void runWithToast(() => startDemoBuildBulk(ids), {
+        onResult: (res) => { setMessage(res.message); setSelected(new Set()); },
+      });
     });
   };
 
@@ -96,9 +103,10 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
       `Дошукати соцмережі для ${ids.length} бізнесів?`
       + (ignored > 0 ? `\n\n${ignored} пропустимо: вже знайдені або пошук у черзі.` : ''),
     )) return;
-    startTransition(async () => {
-      setMessage((await startSocialsDiscoveryBulk(ids)).message);
-      setSelected(new Set());
+    startTransition(() => {
+      void runWithToast(() => startSocialsDiscoveryBulk(ids), {
+        onResult: (res) => { setMessage(res.message); setSelected(new Set()); },
+      });
     });
   };
 

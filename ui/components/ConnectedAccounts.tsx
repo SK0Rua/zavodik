@@ -34,6 +34,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Status } from '@/components/Status';
 import { WahaQr } from '@/components/WahaQr';
 import { refreshCheck, runCheck, type CheckOutcome } from '@/lib/settingsActions';
+import { toastError, toastResult } from '@/lib/toast';
 import {
   cancelAccount, disconnectAccount, findTelegramChats, pollAccount,
   saveGmail, saveTelegramToken, startAccount, submitAccountCode, useTelegramChat,
@@ -159,7 +160,13 @@ function AccountCard({ title, blurb, verdict, checkedAt, actions, children, foot
   );
 }
 
-/** «Оновити» — re-runs one check and replaces the card's status. */
+/**
+ * «Оновити» — re-runs one check and replaces the card's status.
+ *
+ * The toast matters most on the FAILING path: a check that comes back red only
+ * repaints a word in the card header, and «Надіслати тест» in particular is a
+ * button whose whole purpose is to tell you whether something arrived.
+ */
 function RefreshButton({ kind, onResult, label = 'Оновити' }: {
   kind: CheckKind; onResult: (o: CheckOutcome) => void; label?: string;
 }) {
@@ -170,7 +177,15 @@ function RefreshButton({ kind, onResult, label = 'Оновити' }: {
       onClick={async () => {
         setBusy(true);
         onResult({ ok: false, message: '', pending: true });
-        onResult(await refreshCheck(kind));
+        try {
+          const out = await refreshCheck(kind);
+          onResult(out);
+          toastResult(out, out.ok ? `${label}: готово` : `${label}: не вдалося`);
+        } catch (err) {
+          const out = { ok: false, message: `Перевірка впала: ${String(err).slice(0, 160)}` };
+          onResult(out);
+          toastError(out.message);
+        }
         setBusy(false);
       }}
     >
@@ -225,6 +240,12 @@ function useCliFlow({ provider, needsCode, onDone }: {
         if (s.phase === 'done' || s.phase === 'error') {
           stopPolling();
           if (s.check) onDone(s.check);
+          // THE outcome of the whole flow, and the one moment Roman is most
+          // likely to have looked away — an interactive login takes minutes.
+          toastResult(
+            { ok: s.phase === 'done', message: s.message },
+            s.phase === 'done' ? 'Акаунт підключено' : 'Підключити не вдалося',
+          );
         }
       });
     }, 1500);
@@ -237,18 +258,30 @@ function useCliFlow({ provider, needsCode, onDone }: {
   const start = useCallback(() => {
     setBusy(true);
     setCode('');
-    void startAccount(provider).then((s) => { setSession(s); setBusy(false); });
+    void startAccount(provider).then((s) => {
+      setSession(s);
+      setBusy(false);
+      // Only the failure is toasted here. A started flow is not an outcome —
+      // the panel below now shows a login URL and a code box, which is far
+      // louder than a toast, and the outcome toast comes on `done`/`error`.
+      if (s.phase === 'error') toastError(s.message);
+    });
   }, [provider]);
 
   const cancel = useCallback(() => {
     stopPolling();
-    void cancelAccount(provider).then(setSession);
+    void cancelAccount(provider).then((s) => {
+      setSession(s);
+      toastResult({ ok: true, message: s.message }, 'Підключення скасовано');
+    });
   }, [provider, stopPolling]);
 
   async function submit() {
     if (!code.trim()) return;
     setBusy(true);
-    setSession(await submitAccountCode(provider, code));
+    const s = await submitAccountCode(provider, code);
+    setSession(s);
+    if (s.phase === 'error') toastError(s.message);
     setCode('');
     setBusy(false);
   }
@@ -442,6 +475,7 @@ function TelegramFlow({ status, chatId, onCheck }: {
     setBusy('token');
     const r = await saveTelegramToken(token);
     setMsg({ ok: r.ok, text: r.message });
+    toastResult(r, 'Токен бота збережено');
     if (r.ok) setToken('');
     setBusy(null);
   }
@@ -452,6 +486,11 @@ function TelegramFlow({ status, chatId, onCheck }: {
     // An unsaved token in the box wins, so "paste → знайти" works before saving.
     const r = await findTelegramChats(token.trim() || undefined);
     setMsg({ ok: r.ok, text: r.message });
+    // The found chats are the answer and they render right below, so only the
+    // "nothing came back" case needs saying out loud.
+    if (!r.ok || !r.chats.length) {
+      toastResult(r, 'Жодного чату не знайшлось — напиши боту повідомлення і спробуй ще');
+    }
     setChats(r.chats);
     setBusy(null);
   }
@@ -460,6 +499,7 @@ function TelegramFlow({ status, chatId, onCheck }: {
     setBusy(id);
     const r = await useTelegramChat(id);
     setMsg({ ok: r.ok, text: r.message });
+    toastResult(r, 'Chat id збережено');
     setBusy(null);
     if (r.ok) {
       // Saved id + saved token = the only thing left worth knowing is whether a
@@ -554,6 +594,15 @@ function GmailRefreshButton({ onSmtp, onImap }: {
         const [smtp, imap] = await Promise.all([refreshCheck('smtp'), refreshCheck('imap')]);
         onSmtp(smtp);
         onImap(imap);
+        // ONE toast for one click, even though two handshakes ran: two toasts
+        // saying almost the same thing is what a person reads as noise.
+        toastResult(
+          { ok: smtp.ok && imap.ok, message: '' },
+          smtp.ok && imap.ok
+            ? 'Gmail працює: і надсилання, і читання пошти'
+            : `Gmail: ${[!smtp.ok && `надсилання — ${smtp.message}`, !imap.ok && `читання — ${imap.message}`]
+              .filter(Boolean).join('; ')}`,
+        );
         setBusy(false);
       }}
     >
@@ -575,6 +624,7 @@ function GmailFlow({ connected, onSmtp, onImap }: {
     setBusy(true);
     const r = await saveGmail(addr, pass);
     setMsg({ ok: r.ok, text: r.message });
+    toastResult(r, 'Gmail збережено');
     if (r.ok) setPass('');
     setBusy(false);
     if (r.ok) {

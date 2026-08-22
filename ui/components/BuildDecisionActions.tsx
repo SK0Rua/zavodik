@@ -15,6 +15,7 @@
 
 import { useState, useTransition } from 'react';
 import type { ActionResult } from '@/lib/types';
+import { runWithToast } from '@/lib/toast';
 import { deployBuildAsIs, rejectBuild, requestAnotherIteration } from '@/lib/buildReviewActions';
 
 export function BuildDecisionActions({ projectId, name, onModeChange }: {
@@ -40,19 +41,21 @@ export function BuildDecisionActions({ projectId, name, onModeChange }: {
       + 'Критик його не прийняв. Після публікації воно потрапить у Вхідні '
       + 'на підтвердження відправки — саме собою нікому не надішлеться.',
     )) return;
-    startTransition(async () => setResult(await deployBuildAsIs(projectId)));
+    startTransition(() => {
+      void runWithToast(() => deployBuildAsIs(projectId), { onResult: setResult });
+    });
   };
 
-  const iterate = () => startTransition(async () => {
-    const res = await requestAnotherIteration({ projectId, note });
-    setResult(res);
-    if (res.ok) { setMode('idle'); setNote(''); }
+  const iterate = () => startTransition(() => {
+    void runWithToast(() => requestAnotherIteration({ projectId, note }), {
+      onResult: (res) => { setResult(res); if (res.ok) { setMode('idle'); setNote(''); } },
+    });
   });
 
-  const drop = () => startTransition(async () => {
-    const res = await rejectBuild({ projectId, reason: note });
-    setResult(res);
-    if (res.ok) setMode('idle');
+  const drop = () => startTransition(() => {
+    void runWithToast(() => rejectBuild({ projectId, reason: note }), {
+      onResult: (res) => { setResult(res); if (res.ok) setMode('idle'); },
+    });
   });
 
   if (done) {

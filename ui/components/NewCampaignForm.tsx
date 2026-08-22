@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { ActionForm } from './ActionForm';
 import { createCampaign } from '@/lib/actions';
 import {
   BUILD_POLICIES, BUILD_POLICY_HINTS, BUILD_POLICY_LABELS, DEFAULT_BUILD_POLICY,
@@ -42,7 +43,14 @@ export function NewCampaignForm() {
     <section className="card p-5 sm:p-6">
       <h2 className="h-section mb-5">Нова кампанія</h2>
 
-      <form action={createCampaign} className="space-y-5">
+      {/* Collapses itself once the campaign exists: the form has done its job,
+          and leaving it open next to the campaign it just created invites a
+          second one. The toast is what says it worked. */}
+      <ActionForm
+        action={createCampaign}
+        className="space-y-5"
+        onDone={() => { setOpen(false); setCity(''); setNiche(''); }}
+      >
         <div className="grid sm:grid-cols-2 gap-4">
           <div>
             <label className="label" htmlFor="city">Місто</label>
@@ -119,7 +127,7 @@ export function NewCampaignForm() {
           <button type="submit" className="btn-primary">Створити і почати пошук</button>
           <button type="button" className="btn-quiet" onClick={() => setOpen(false)}>Скасувати</button>
         </div>
-      </form>
+      </ActionForm>
     </section>
   );
 }

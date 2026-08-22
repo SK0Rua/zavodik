@@ -87,6 +87,8 @@ const STABLE_STATUSES = [
 export interface ReconcileReport {
   staleJobs: number;
   revertedBusinesses: Array<{ businessId: string; from: string; to: string }>;
+  /** Build projects whose worker died mid-flight; the card now offers a restart. */
+  interruptedBuilds: Array<{ businessId: string; projectId: number }>;
 }
 
 /**
@@ -206,10 +208,38 @@ async function revertStrandedBusinesses(): Promise<ReconcileReport['revertedBusi
  * workers from booting — the factory being up matters more than the ledger
  * being tidy, and the next boot will reconcile again.
  */
+/**
+ * Build projects frozen in a transient state with no live build-chain job.
+ *
+ * A container recreate mid-build leaves `site_projects.state = 'building'`
+ * forever: the card then claims «Фабрика будує демосайт», hides the build
+ * button, and the live panel shows a frozen log — with no way for Roman to
+ * restart (observed on BEAUTIFY Laser, 2026-08-22, after a git-pull redeploy).
+ * `failed` is the state the card already knows how to offer a restart for.
+ */
+async function failInterruptedBuilds(): Promise<ReconcileReport['interruptedBuilds']> {
+  const rows = await db.execute(sql`
+    update site_projects p set state = 'failed'
+    where p.state in ('pending', 'brief', 'building', 'qa')
+      and not exists (
+        select 1 from workflow_jobs w
+        where w.business_id = p.business_id
+          and w.job_type in ('content-and-design', 'build-site', 'visual-qa', 'deploy-demo')
+          and w.status in ('queued', 'running', 'retry_wait')
+      )
+    returning p.id, p.business_id
+  `);
+  return (rows.rows as Array<{ id: number; business_id: string }>).map((r) => ({
+    businessId: r.business_id, projectId: r.id,
+  }));
+}
+
 export async function reconcileOnStartup(): Promise<ReconcileReport> {
-  const report: ReconcileReport = { staleJobs: 0, revertedBusinesses: [] };
+  const report: ReconcileReport = { staleJobs: 0, revertedBusinesses: [], interruptedBuilds: [] };
   try {
     report.staleJobs = await markStaleJobs();
+    // AFTER markStaleJobs: a ghost job must not count as proof of a live build.
+    report.interruptedBuilds = await failInterruptedBuilds();
     report.revertedBusinesses = await revertStrandedBusinesses();
     if (report.staleJobs || report.revertedBusinesses.length) {
       log.warn('startup reconciliation closed stranded work', {

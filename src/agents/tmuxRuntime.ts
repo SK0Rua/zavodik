@@ -119,7 +119,13 @@ async function sendKickoffVerified(
     // `Try "…"` placeholder that false-positived here and killed the resend.
     if (/esc to interrupt/.test(await pane())) return;
   }
-  throw new Error(`tmux session ${session}: kickoff line never reached the input box`);
+  // Say what IS on screen — the next blocking dialog we have not met yet
+  // should diagnose itself from the error, not require exec-ing into the box.
+  const tail = (await pane().catch(() => ''))
+    .split('\n').map((l) => l.trim()).filter(Boolean).slice(-8).join(' | ');
+  throw new Error(
+    `tmux session ${session}: kickoff line never reached the input box. On screen: ${tail || '(порожня панель)'}`,
+  );
 }
 
 export async function preTrustWorkspace(cwd: string): Promise<void> {
@@ -128,6 +134,14 @@ export async function preTrustWorkspace(cwd: string): Promise<void> {
   const cfgPath = path.join(home, '.claude.json');
   let cfg: Record<string, unknown> = {};
   try { cfg = JSON.parse(await readFile(cfgPath, 'utf8')) as Record<string, unknown>; } catch { /* fresh file */ }
+  // First-run onboarding (theme picker etc.) blocks the TUI before the input
+  // box exactly like the trust dialog does. A container's HOME is fresh on
+  // every image rebuild, so unlike a dev Mac it hits onboarding every time —
+  // mark it completed the same way finishing the wizard would.
+  if (cfg.hasCompletedOnboarding !== true) {
+    cfg.hasCompletedOnboarding = true;
+    cfg.lastOnboardingVersion = cfg.lastOnboardingVersion ?? '2.0.0';
+  }
   const projects = (cfg.projects ?? {}) as Record<string, Record<string, unknown>>;
   projects[cwd] = {
     ...(projects[cwd] ?? {}),

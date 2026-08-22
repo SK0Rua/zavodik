@@ -1,3 +1,4 @@
+import { ActionForm } from '@/components/ActionForm';
 import { updateDealStage } from '@/lib/actions';
 import { DEAL_STATES } from '@/lib/format';
 import { humanStatus } from '@/lib/humanStatus';
@@ -14,7 +15,7 @@ import { humanStatus } from '@/lib/humanStatus';
 export function DealStageForm({ businessId, state }: { businessId: string; state: string }) {
   return (
     <section className="card p-5 sm:p-6">
-      <form action={updateDealStage} className="flex gap-3 items-end flex-wrap">
+      <ActionForm action={updateDealStage} className="flex gap-3 items-end flex-wrap">
         <input type="hidden" name="businessId" value={businessId} />
         <div className="min-w-[200px]">
           <label className="label" htmlFor={`deal-${businessId}`}>На якому ми етапі</label>
@@ -25,7 +26,7 @@ export function DealStageForm({ businessId, state }: { businessId: string; state
           </select>
         </div>
         <button type="submit" className="btn-outline btn-sm">Оновити</button>
-      </form>
+      </ActionForm>
     </section>
   );
 }

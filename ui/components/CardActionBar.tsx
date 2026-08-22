@@ -24,6 +24,7 @@
 
 import { useState, useTransition } from 'react';
 import { startDemoBuild, startSocialsDiscovery } from '@/lib/actions';
+import { runWithToast } from '@/lib/toast';
 import { BuildDecisionActions } from './BuildDecisionActions';
 import type { CardAction, CardActionBar as Bar } from '@/lib/cardActions';
 
@@ -47,7 +48,6 @@ export function CardActionBar({ bar, businessId, name, status, other }: {
   /** The «Інше…» link, rendered by the server component that owns the forms. */
   other: React.ReactNode;
 }) {
-  const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   // While a decision form is open the general "here are your three options"
   // sentence is stale advice — you have already picked one.
@@ -79,11 +79,14 @@ export function CardActionBar({ bar, businessId, name, status, other }: {
       );
       if (!ok) return;
     }
-    startTransition(async () => setMessage((await startDemoBuild(businessId)).message));
+    // The outcome goes to the toast rather than to a line under the band: on a
+    // phone the band is sticky and the sentence used to land off-screen under
+    // it, and the page revalidates on success anyway, which wipes local state.
+    startTransition(() => { void runWithToast(() => startDemoBuild(businessId)); });
   };
 
-  const runSocials = () => startTransition(async () => {
-    setMessage((await startSocialsDiscovery(businessId)).message);
+  const runSocials = () => startTransition(() => {
+    void runWithToast(() => startSocialsDiscovery(businessId));
   });
 
 
@@ -156,8 +159,6 @@ export function CardActionBar({ bar, businessId, name, status, other }: {
         {bar.actions.length > 0 && bar.waiting && (
           <p className="text-sm text-ink-soft mt-2.5 max-w-[70ch]">{bar.waiting}</p>
         )}
-
-        {message && <p role="status" className="text-sm text-accent mt-2.5">{message}</p>}
       </div>
 
       {showExplanation && (

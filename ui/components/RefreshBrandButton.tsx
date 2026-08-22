@@ -12,11 +12,11 @@
  * of an accidental click is a few seconds of worker time.
  */
 
-import { useState, useTransition } from 'react';
+import { useTransition } from 'react';
 import { refreshBrandIdentity } from '@/lib/actions';
+import { runWithToast } from '@/lib/toast';
 
 export function RefreshBrandButton({ businessId }: { businessId: string }) {
-  const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   return (
@@ -26,9 +26,8 @@ export function RefreshBrandButton({ businessId }: { businessId: string }) {
         className="btn-outline btn-sm"
         disabled={pending}
         title="Перешукати логотип і фото в уже збережених копіях сторінок, перерахувати палітру. Нічого не перебудовує."
-        onClick={() => startTransition(async () => {
-          const res = await refreshBrandIdentity(businessId);
-          setMessage(res.message);
+        onClick={() => startTransition(() => {
+          void runWithToast(() => refreshBrandIdentity(businessId));
         })}
       >
         {pending ? 'Ставлю в чергу…' : 'Оновити айдентику'}
@@ -36,7 +35,6 @@ export function RefreshBrandButton({ businessId }: { businessId: string }) {
       <span className="text-sm text-ink-mute">
         Перешукує логотип і фото в збережених доказах. Демо не перебудовується.
       </span>
-      {message && <span className="text-sm text-ink-soft">{message}</span>}
     </div>
   );
 }

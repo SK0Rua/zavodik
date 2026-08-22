@@ -8,6 +8,7 @@ import { humanVerdict } from '@/lib/humanStatus';
 import type { ApprovalItem } from '@/lib/approvals';
 import type { ActionResult } from '@/lib/types';
 import { deepLinkFor } from '@/lib/keys';
+import { runWithToast } from '@/lib/toast';
 import { approveOutreach, rejectOutreach, confirmManualSent } from '@/lib/actions';
 
 const CHANNELS = [
@@ -63,29 +64,39 @@ export function ApprovalCard({ item }: { item: ApprovalItem }) {
   const deepLink = deepLinkFor(channel, toAddress, body);
   const verdict = humanVerdict(item.websiteVerdict);
 
+  // The in-card result panel STAYS: for a manual channel it is not a message
+  // but a workflow — the deep link, the copy button and «Я надіслав». The toast
+  // is the immediate acknowledgement; the panel is what you then work in.
   function onApprove() {
     if (!item.approvalId) return;
-    startTransition(async () => {
-      setResult(await approveOutreach({
-        approvalId: item.approvalId!, channel, toAddress,
-        subject: subject || null, body,
-      }));
+    startTransition(() => {
+      void runWithToast(
+        () => approveOutreach({
+          approvalId: item.approvalId!, channel, toAddress,
+          subject: subject || null, body,
+        }),
+        { onResult: setResult },
+      );
     });
   }
 
   function onReject() {
     if (!item.approvalId) return;
-    startTransition(async () => {
-      const res = await rejectOutreach({ approvalId: item.approvalId!, reason: rejectReason });
-      setResult(res);
-      if (res.ok) setRejecting(false);
+    startTransition(() => {
+      void runWithToast(
+        () => rejectOutreach({ approvalId: item.approvalId!, reason: rejectReason }),
+        { onResult: (res) => { setResult(res); if (res.ok) setRejecting(false); } },
+      );
     });
   }
 
   function onConfirmManual() {
     if (!item.approvalId) return;
-    startTransition(async () => {
-      setResult(await confirmManualSent({ approvalId: item.approvalId! }));
+    startTransition(() => {
+      void runWithToast(
+        () => confirmManualSent({ approvalId: item.approvalId! }),
+        { onResult: setResult },
+      );
     });
   }
 

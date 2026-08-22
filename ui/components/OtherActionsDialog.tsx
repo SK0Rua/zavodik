@@ -16,9 +16,16 @@
  *
  * A native <dialog> rather than a hand-rolled overlay: Escape, focus trapping and
  * the backdrop come from the browser, and the whole thing is inert until opened.
+ *
+ * Every form CLOSES the dialog on success and reports through a toast (Roman,
+ * 2026-08-22). Before, a successful submit left the dialog sitting open over an
+ * already-updated page with no acknowledgement at all — the strongest possible
+ * signal that nothing happened, on the screen where the least reversible action
+ * in the console lives.
  */
 
 import { useRef } from 'react';
+import { ActionForm } from './ActionForm';
 import { forceStatusAction, markDoNotContact, reenqueueStage } from '@/lib/actions';
 import { humanStatus } from '@/lib/humanStatus';
 import { stageName } from '@/lib/stageNames';
@@ -85,7 +92,11 @@ export function OtherActionsDialog({ businessId, name, currentStatus, statuses }
 
         <div className="p-5 sm:p-6 space-y-7 overflow-y-auto min-h-0 flex-1">
           {/* ── 1: force a status ── */}
-          <form action={forceStatusAction} className="space-y-2.5">
+          <ActionForm
+            action={forceStatusAction}
+            className="space-y-2.5"
+            onDone={() => ref.current?.close()}
+          >
             <input type="hidden" name="businessId" value={businessId} />
             <h3 className="text-base font-medium text-ink">Перевести в інший стан</h3>
             <p className="text-sm text-ink-soft">
@@ -107,10 +118,14 @@ export function OtherActionsDialog({ businessId, name, currentStatus, statuses }
               </label>
             </div>
             <button type="submit" className="btn-outline btn-sm">Перевести</button>
-          </form>
+          </ActionForm>
 
           {/* ── 2: re-run a stage ── */}
-          <form action={reenqueueStage} className="space-y-2.5 pt-7 border-t border-line">
+          <ActionForm
+            action={reenqueueStage}
+            className="space-y-2.5 pt-7 border-t border-line"
+            onDone={() => ref.current?.close()}
+          >
             <input type="hidden" name="businessId" value={businessId} />
             <h3 className="text-base font-medium text-ink">Перезапустити крок</h3>
             <p className="text-sm text-ink-soft">
@@ -126,20 +141,19 @@ export function OtherActionsDialog({ businessId, name, currentStatus, statuses }
               </select>
             </label>
             <button type="submit" className="btn-outline btn-sm">Поставити в чергу</button>
-          </form>
+          </ActionForm>
 
           {/* ── 3: the one that cannot be undone ── */}
-          <form
+          <ActionForm
             action={markDoNotContact}
             className="space-y-2.5 pt-7 border-t border-line"
-            onSubmit={(e) => {
-              if (!window.confirm(
-                `Більше ніколи не писати «${name}»?\n\n`
-                + 'Бізнес і всі його адреси стануть заблокованими назавжди. '
-                + 'Це перевіряється в момент відправки, тож жодне повідомлення до нього не піде. '
-                + 'Скасувати це з інтерфейсу не можна.',
-              )) e.preventDefault();
-            }}
+            onDone={() => ref.current?.close()}
+            confirm={() => window.confirm(
+              `Більше ніколи не писати «${name}»?\n\n`
+              + 'Бізнес і всі його адреси стануть заблокованими назавжди. '
+              + 'Це перевіряється в момент відправки, тож жодне повідомлення до нього не піде. '
+              + 'Скасувати це з інтерфейсу не можна.',
+            )}
           >
             <input type="hidden" name="businessId" value={businessId} />
             <h3 className="text-base font-medium text-dot-stop">
@@ -165,7 +179,7 @@ export function OtherActionsDialog({ businessId, name, currentStatus, statuses }
             >
               Заблокувати назавжди
             </button>
-          </form>
+          </ActionForm>
         </div>
       </dialog>
     </>

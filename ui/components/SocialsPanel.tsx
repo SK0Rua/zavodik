@@ -1,9 +1,11 @@
 /**
  * The result of social discovery, on the business card.
  *
- * Server component with plain `<form action={...}>` submits: confirming or
- * rejecting a candidate is a one-shot mutation with no client state worth
- * keeping, and a form works with JS disabled.
+ * Server component whose two mutations submit through `ActionForm`: confirming
+ * or rejecting a candidate is a one-shot write with no client state worth
+ * keeping, so the markup stays a form and only the submission reports back —
+ * a candidate row vanishing with no word for it is precisely the silent action
+ * Roman objected to (2026-08-22).
  *
  * What it shows, and why each part is there:
  *  - VERIFIED profiles: the outreach channels that actually exist (decision #8
@@ -18,6 +20,7 @@
  *    looked and found nothing" is different from "we never looked".
  */
 
+import { ActionForm } from '@/components/ActionForm';
 import { Badge } from '@/components/Badge';
 import { safeHttpUrl } from '@/lib/format';
 import { verifySocialContact, rejectSocialContact } from '@/lib/actions';
@@ -116,7 +119,7 @@ export function SocialsPanel({ contacts, unresolvedGap }: {
                   <p className="text-xs text-dot-wait mt-0.5">проти: {c.match.blockers.join('; ')}</p>
                 ) : null}
                 <div className="flex gap-2 mt-1.5 flex-wrap items-center">
-                  <form action={verifySocialContact} className="flex gap-2 items-center">
+                  <ActionForm action={verifySocialContact} className="flex gap-2 items-center">
                     <input type="hidden" name="contactId" value={c.id} />
                     <input
                       name="note"
@@ -125,11 +128,11 @@ export function SocialsPanel({ contacts, unresolvedGap }: {
                       aria-label={`Нотатка до ${c.value}`}
                     />
                     <button type="submit" className="btn-outline btn-sm">Підтвердити</button>
-                  </form>
-                  <form action={rejectSocialContact}>
+                  </ActionForm>
+                  <ActionForm action={rejectSocialContact}>
                     <input type="hidden" name="contactId" value={c.id} />
                     <button type="submit" className="btn-danger btn-sm">Відхилити</button>
-                  </form>
+                  </ActionForm>
                 </div>
               </li>
             ))}

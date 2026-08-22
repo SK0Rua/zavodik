@@ -4,6 +4,7 @@ import { db, schema } from '@/lib/db';
 import { Status, Metric } from '@/components/Status';
 import { fmtDate, plural } from '@/lib/format';
 import { NewCampaignForm } from '@/components/NewCampaignForm';
+import { ActionForm } from '@/components/ActionForm';
 import { setCampaignBuildPolicy } from '@/lib/actions';
 import { BUILD_POLICIES, BUILD_POLICY_LABELS, normalizeBuildPolicy } from '@/lib/buildPolicy';
 
@@ -98,7 +99,7 @@ export default async function CampaignsPage() {
                     поняв би, що клікабельне». `.disclosure` draws the ▸ that
                     says this opens. */}
                 <summary className="disclosure">Налаштування кампанії</summary>
-                <form action={setCampaignBuildPolicy} className="mt-3 pl-4 border-l-2 border-line">
+                <ActionForm action={setCampaignBuildPolicy} className="mt-3 pl-4 border-l-2 border-line">
                   <label className="label" htmlFor={`ab-${c.id}`}>
                     Кому фабрика сама будує демо
                   </label>
@@ -116,7 +117,7 @@ export default async function CampaignsPage() {
                     </select>
                     <button type="submit" className="btn-outline btn-sm">Зберегти</button>
                   </div>
-                </form>
+                </ActionForm>
               </details>
             </section>
           );
