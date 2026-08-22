@@ -94,11 +94,36 @@ async function sendKickoffVerified(
   // The footer paints before the input box accepts keys — give the renderer a
   // beat after first paint. `❯` is NOT a readiness signal: the empty input box
   // shows a `❯ Try "…"` placeholder that also burned us in the running-agent
-  // check below.
+  // check below. Case-insensitive: the footer says «bypass permissions», the
+  // acceptance dialog says «Bypass Permissions», and matching only one of them
+  // is how the dialog sat unrecognised for the whole timeout.
   const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
+    // A dead CLI is not going to become ready — the old loop polled the void
+    // for 90s and then "diagnosed" an empty panel. remain-on-exit keeps the
+    // dead pane's output around, so the error can quote claude's actual last
+    // words (a crash, an unknown flag, an OOM kill) instead of guessing.
+    const died = await paneDeath(session, env);
+    if (died) {
+      const last = (await pane().catch(() => ''))
+        .split('\n').map((l) => l.trim()).filter(Boolean).slice(-10).join(' | ');
+      throw new Error(
+        `tmux session ${session}: claude завершився одразу після старту (${died}). ` +
+        `Останній вивід: ${last || '(нічого не встиг надрукувати)'}`,
+      );
+    }
     const text = await pane();
-    if (/bypass permissions|shift\+tab to cycle/.test(text)) break;
+    // preTrustWorkspace seeds bypassPermissionsModeAccepted so this dialog
+    // should never render — but a future CLI may rename the key, and Enter on
+    // this dialog EXITS the CLI (the cursor starts on «No, exit»). Accepting it
+    // here is strictly safer than the blind Enter below landing on it.
+    if (/Yes, I accept/i.test(text)) {
+      log.warn('bypass-permissions dialog appeared despite the seeded flag; accepting it', { session });
+      await exec('tmux', ['send-keys', '-t', session, '2'], { env });
+      await new Promise((r) => setTimeout(r, 1_500));
+      continue;
+    }
+    if (/bypass permissions|shift\+tab to cycle/i.test(text)) break;
     await new Promise((r) => setTimeout(r, 1_000));
   }
   await new Promise((r) => setTimeout(r, 3_000));
@@ -150,6 +175,14 @@ export async function preTrustWorkspace(cwd: string): Promise<void> {
     cfg.hasCompletedOnboarding = true;
     cfg.lastOnboardingVersion = cfg.lastOnboardingVersion ?? '2.0.0';
   }
+  // The third first-run blocker, and the nastiest: `--dangerously-skip-permissions`
+  // shows a one-time «Bypass Permissions mode — Yes, I accept / No, exit» dialog
+  // with the cursor ON «No, exit». The kickoff's Enter therefore EXITED the CLI,
+  // which is exactly the «порожня панель» failure reproduced in a stock
+  // node:22-bookworm container (2026-08-22, CLI 2.1.239): the session died and
+  // every later capture-pane came back empty. This key is what accepting the
+  // dialog writes; seeding it boots the TUI straight to the input box.
+  cfg.bypassPermissionsModeAccepted = true;
   const projects = (cfg.projects ?? {}) as Record<string, Record<string, unknown>>;
   projects[cwd] = {
     ...(projects[cwd] ?? {}),
@@ -248,6 +281,23 @@ export async function hasSession(session: string): Promise<boolean> {
   return res.code === 0;
 }
 
+/**
+ * Has the CLI inside the session exited? Sessions run with `remain-on-exit on`,
+ * so a dead claude leaves a capturable pane behind instead of vanishing with
+ * its last words. Returns a human fragment («сесії вже немає», «код виходу 1»)
+ * or null while the process is alive.
+ */
+async function paneDeath(session: string, env: Record<string, string>): Promise<string | null> {
+  if (!await hasSession(session)) return 'сесії вже немає';
+  const res = await exec(
+    'tmux', ['display-message', '-p', '-t', session, '#{pane_dead} #{pane_dead_status}'],
+    { env, timeoutMs: 5_000 },
+  );
+  const [dead, status] = res.stdout.trim().split(/\s+/);
+  if (dead !== '1') return null;
+  return status === undefined || status === '' ? 'процес завершився' : `код виходу ${status}`;
+}
+
 /** Full pane scrollback (`-S -` = from the very start of the history). */
 async function capturePane(session: string): Promise<string> {
   const res = await exec('tmux', ['capture-pane', '-p', '-S', '-', '-t', session], { timeoutMs: 20_000 });
@@ -341,6 +391,7 @@ async function waitForResult(
   session: string,
   resultPath: string,
   timeoutMs: number,
+  env: Record<string, string>,
   onTick?: () => void,
 ): Promise<TmuxRunOutcome> {
   const startedAt = Date.now();
@@ -354,10 +405,11 @@ async function waitForResult(
       return { reason: 'result', scrollback: await capturePane(session), elapsedMs: Date.now() - startedAt };
     }
 
-    if (!await hasSession(session)) {
-      // The session is gone, so there is no pane left to capture — whatever it
-      // printed is only recoverable if we captured it on a previous tick.
-      return { reason: 'gone', scrollback: lastPane, elapsedMs: Date.now() - startedAt };
+    // With remain-on-exit the session outlives a dead CLI, so «the process
+    // exited» is now a dead PANE, not a missing session — and its scrollback
+    // is still there to capture, which the old missing-session path never had.
+    if (await paneDeath(session, env)) {
+      return { reason: 'gone', scrollback: await capturePane(session) || lastPane, elapsedMs: Date.now() - startedAt };
     }
 
     // Every tick, whether or not the pane moved: the heartbeat says "this
@@ -448,6 +500,13 @@ export async function runCodeAgentTmux<T>(
       '--name', opts.name,
     ];
     if (opts.allowedTools?.length) args.push('--allowedTools', ...opts.allowedTools);
+    // Chained into the SAME tmux invocation (`;` is tmux's command separator,
+    // not the shell's — exec() spawns without a shell): a dying CLI keeps its
+    // pane, output and exit status around for `paneDeath` to quote, instead of
+    // taking the whole session — and the evidence — down with it. Chained
+    // rather than a second exec() so there is no window where an instant crash
+    // beats the option.
+    args.push(';', 'set-option', '-w', '-t', session, 'remain-on-exit', 'on');
 
     const env = codeAgentEnv(config.agents.oauthToken);
     const started = await exec('tmux', args, { env, timeoutMs: 30_000 });
@@ -486,7 +545,7 @@ export async function runCodeAgentTmux<T>(
       // pane and resend if it did not.
       await sendKickoffVerified(session, kickoffLine(PROMPT_FILE), env);
 
-      outcome = await waitForResult(session, resultPath, timeoutMs, () => { void writeMarker(); });
+      outcome = await waitForResult(session, resultPath, timeoutMs, env, () => { void writeMarker(); });
     } finally {
       // The marker goes first, in every ending: the UI must stop offering a
       // link to a terminal that is about to stop existing.
