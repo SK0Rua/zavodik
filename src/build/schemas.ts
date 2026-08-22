@@ -147,10 +147,22 @@ export const ArtDirectionSchema = z.object({
    * generic-бриф, який це поле замінює). Roman pastes it into a generator and
    * uploads the mp4 from the business card.
    */
-  heroVideoBrief: z.string().min(60).describe(
-    'The full i2v prompt for an external generator, in English: 8s landscape, start frame = the real hero photo, '
-    + 'camera/light/pace that SERVE this direction\'s mood and hero treatment, and the standing rule that nothing '
-    + 'in the frame may be added, removed or morphed.',
+  heroVideoBrief: z.string().min(60).nullable().describe(
+    'The full i2v prompt for an external generator, in English: 8s landscape, start frame = a real photo YOU HAVE '
+    + 'SEEN (attached to this call), camera/light/pace that SERVE this direction\'s mood and hero treatment, and '
+    + 'the standing rule that nothing in the frame may be added, removed or morphed. Describe only what is actually '
+    + 'in the chosen photo. null ONLY when the snapshot has no real photograph.',
+  ),
+  /**
+   * The exact snapshot asset the brief's start frame is: the UI links THIS
+   * file next to the prompt. The first shipped brief described an imagined
+   * photo («forearm skin with handpiece») while the panel offered a different
+   * file — a vertical text banner (Roman, 2026-08-22: «І шо це за брєд?»).
+   * Code vetoes a file that is not a real (non-AI) snapshot photo.
+   */
+  heroVideoStartFrame: z.string().min(1).nullable().describe(
+    'The snapshot asset file the brief starts from, exactly as listed in the asset inventory. '
+    + 'Must be a real (non-AI) photograph you have seen. null only when heroVideoBrief is null.',
   ),
   /** Ordered layout skeleton — section ids from the brief plus their composition. */
   layoutSkeleton: z.array(z.object({
@@ -453,5 +465,7 @@ export type VisualCritique = z.infer<typeof VisualCritiqueSchema>;
  * contracts — a build that meets an older version regenerates the design from
  * scratch under the current schema. Bump on every breaking contract change.
  * v2: sceneMap + heroVideoBrief + signature became required.
+ * v3: heroVideoStartFrame added; heroVideoBrief grounded in photos the art
+ *     director actually SAW (both nullable only when no real photo exists).
  */
-export const DESIGN_CONTRACT_VERSION = 2;
+export const DESIGN_CONTRACT_VERSION = 3;

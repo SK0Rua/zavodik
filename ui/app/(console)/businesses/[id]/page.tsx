@@ -223,17 +223,6 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
   // one-word status — see LiveBuildPanel for why that word was not enough.
   const IN_FLIGHT_STATES = new Set(['pending', 'brief', 'building', 'qa']);
 
-  // Inputs for the wow-video brief. The start frame is the same photo
-  // `planHeroMedia` would animate: the `hero` asset if one is marked, else the
-  // first real photo. Mood words come from the measured brand evidence — the
-  // same `brand.mood` fact the art director designs from.
-  const realImage = (a: (typeof assetRows)[number]) =>
-    !a.aiGenerated && (a.contentType ?? '').startsWith('image/');
-  const heroPhotoRow = assetRows.find((a) => realImage(a) && a.intendedUsage === 'hero')
-    ?? assetRows.find(realImage);
-  const heroPhotoAsset = heroPhotoRow
-    ? { file: heroPhotoRow.objectKey.split('/').pop() ?? heroPhotoRow.objectKey, objectKey: heroPhotoRow.objectKey }
-    : null;
   const latestHeroClip = [...assetRows]
     .filter((a) => a.intendedUsage === 'hero_clip')
     .sort((a, b) => new Date(a.capturedAt).getTime() - new Date(b.capturedAt).getTime())
@@ -243,10 +232,17 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
   // дизайну?» — про generic-промпт, якого більше немає). No contract yet, or a
   // pre-v2 contract → no brief; the panel says it arrives with the first build.
   const contractDoc = project?.designContractKey
-    ? await readRawJson<{ schemaVersion?: number; chosen?: { heroVideoBrief?: string } }>(project.designContractKey)
+    ? await readRawJson<{ schemaVersion?: number; chosen?: { heroVideoBrief?: string | null; heroVideoStartFrame?: string | null } }>(project.designContractKey)
     : null;
   const heroVideoBrief = (contractDoc?.schemaVersion ?? 1) >= 2 && contractDoc?.chosen?.heroVideoBrief
     ? contractDoc.chosen.heroVideoBrief
+    : null;
+  // The start frame is THE FILE THE BRIEF NAMES — never a guess. The first
+  // version guessed «the hero asset» and offered a vertical text banner while
+  // the brief described a different photo entirely.
+  const startFrameName = contractDoc?.chosen?.heroVideoStartFrame?.split('/').pop() ?? null;
+  const startFrameRow = startFrameName
+    ? assetRows.find((a) => (a.objectKey.split('/').pop() ?? '') === startFrameName)
     : null;
   // The live panel covers the WHOLE run, including the pre-project design
   // stage: it renders whenever a build-chain job is alive OR the newest
@@ -403,10 +399,10 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
         <HeroVideoPanel
           businessId={biz.id}
           brief={heroVideoBrief}
-          heroPhoto={heroPhotoAsset && {
-            file: heroPhotoAsset.file,
-            url: `/api/object?bucket=assets&key=${encodeURIComponent(heroPhotoAsset.objectKey)}`,
-          }}
+          heroPhoto={startFrameRow ? {
+            file: startFrameName!,
+            url: `/api/object?bucket=assets&key=${encodeURIComponent(startFrameRow.objectKey)}`,
+          } : null}
           currentClip={latestHeroClip
             ? { generator: latestHeroClip.generator, capturedAt: fmtDate(latestHeroClip.capturedAt) }
             : null}

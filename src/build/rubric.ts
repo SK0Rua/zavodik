@@ -228,6 +228,25 @@ export function vetoesFor(
     vetoes.push(`hero kind "${direction.heroTreatment.kind}" promises a real photo but names no asset file`);
   }
 
+  // The video brief must start from a REAL photo that exists — an imagined
+  // start frame sends Roman hunting for a picture that is not there.
+  const realFiles = snapshot.assets.filter((a) => !a.aiGenerated).map((a) => a.file);
+  if (direction.heroVideoBrief && !direction.heroVideoStartFrame) {
+    vetoes.push('heroVideoBrief is set but heroVideoStartFrame names no file');
+  }
+  if (direction.heroVideoStartFrame) {
+    const known = realFiles.some((f) => f === direction.heroVideoStartFrame
+      || f.endsWith(`/${direction.heroVideoStartFrame}`));
+    if (!known) {
+      vetoes.push(
+        `heroVideoStartFrame "${direction.heroVideoStartFrame}" is not a real (non-AI) photo in the snapshot`,
+      );
+    }
+  }
+  if (!direction.heroVideoBrief && realFiles.length > 0) {
+    vetoes.push('the snapshot has real photographs but heroVideoBrief is null — write the brief');
+  }
+
   if (direction.poolComponents.length > 4) {
     vetoes.push(`uses ${direction.poolComponents.length} pool components; the cap is 4 (component-demo look)`);
   }

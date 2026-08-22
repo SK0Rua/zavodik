@@ -16,7 +16,8 @@
  * Both documents are frozen into object storage and referenced from `site_projects`,
  * so a rebuild months later reproduces the same inputs.
  */
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { and, desc, eq, inArray, ne } from 'drizzle-orm';
@@ -468,6 +469,31 @@ face are on the anti-slop ban-list and are vetoed by code.`;
     `Арт-директор малює 3 структурно різні напрямки${galleryRefs.length ? ` (референсів з галереї: ${galleryRefs.length})` : ''}`,
     'content-design',
   );
+
+  // The art director SEES the material it designs with. Before this it worked
+  // from a list of FILENAMES and wrote photo-content claims from imagination —
+  // the first shipped heroVideoBrief described «forearm skin with handpiece»
+  // for a photo nobody had opened, while the card offered a vertical text
+  // banner as the start frame (Roman, 2026-08-22: «І шо це за брєд?»).
+  const photoDir = await mkdtemp(path.join(tmpdir(), 'factory-design-'));
+  const photoPaths: string[] = [];
+  for (const asset of realPhotos(snapshot).slice(0, 6)) {
+    try {
+      const f = path.join(photoDir, path.basename(asset.file));
+      await writeFile(f, await getObject('assets', asset.objectKey));
+      photoPaths.push(f);
+    } catch (err) {
+      log.warn('photo unavailable for the design call', {
+        businessId, objectKey: asset.objectKey, err: String(err).slice(0, 120),
+      });
+    }
+  }
+  for (const ref of galleryRefs) {
+    // The gallery layouts too: full pages beat their index.md descriptions.
+    const staged = path.join(galleryStagingDir(businessId), path.basename(ref.fullFile ?? ref.file));
+    if (existsSync(staged)) photoPaths.push(staged);
+  }
+
   const directions = await runAgent(
     'design-directions',
     `You are an art director producing THREE structurally different directions for a demo site.
@@ -500,12 +526,15 @@ direction argues otherwise. Sections you leave out are deliberately static — t
 choice, stated by omission. Keep every field to ONE line; this map is verified frame-by-frame
 by the critic, and every scene you promise will be judged.
 
-THE HERO VIDEO BRIEF. Each direction fills \`heroVideoBrief\`: the complete image-to-video
-prompt (in English) for the wow-clip a human will generate for THIS direction — 8s landscape,
-start frame = the real hero photo, camera movement / light / pace that serve this direction's
-mood, hero treatment and signature. Always include the standing rule: nothing in the frame may
-be added, removed or morphed. Write it as copy-paste-ready generator input, not as a
-description of one.
+THE HERO VIDEO BRIEF. Each direction fills \`heroVideoBrief\` and \`heroVideoStartFrame\`.
+You have the business's REAL photographs attached to this call — you have seen them; their
+file names match the asset inventory. Pick the one photo that best serves this direction as a
+video start frame (\`heroVideoStartFrame\` = its exact file from the inventory; it must be a
+real photo, not an AI image and not a text/banner graphic — code vetoes both) and write the
+complete image-to-video prompt (in English): 8s landscape, camera movement / light / pace that
+serve this direction's mood, hero treatment and signature, describing ONLY what is actually in
+that photo. Always include the standing rule: nothing in the frame may be added, removed or
+morphed. Both fields are null ONLY when no real photograph exists.
 
 Ground rules:
 - Each direction names EXACTLY ONE reference from the reference pack, by its exact name, and
@@ -666,11 +695,15 @@ arrows, everything animating on entrance at once.`,
       kind: 'design', heavy: true, timeoutMs: 15 * 60_000,
       // Three full art directions against the whole reference pack is the biggest
       // structured output in the pipeline; give it room rather than trimming the
-      // references decision #11 says should ground it.
-      maxTurns: 3,
+      // references decision #11 says should ground it. Extra turns cover the
+      // image Reads: the photos and gallery pages attached below are the
+      // grounding for photoTreatment, the signature and the video brief.
+      maxTurns: 3 + Math.min(photoPaths.length, 10),
+      imagePaths: photoPaths,
       onUsage: (u) => log.info('agent usage', { businessId, call: 'design-directions', ...u }),
     },
   );
+  await rm(photoDir, { recursive: true, force: true }).catch(() => {});
   await logStage(
     buildLogPath(businessId),
     `Напрямки готові: ${directions.directions.map((d) => `«${d.name}»`).join(', ')} — критик оцінює`,
