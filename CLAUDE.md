@@ -47,7 +47,7 @@ QA-loop.
 - Кожен факт має source_id → immutable raw evidence. Немає доказу = null + gap. Вигадувати контакти/послуги/відгуки/ціни неможливо by construction.
 - LLM ніколи не вирішує переходи статусів і не тримає стан. Це код + Postgres.
 - Без записаного в БД approval жоден send технічно неможливий. Один send на idempotency key, НІКОЛИ не auto-retry.
-- Всі AI-виклики по підписках (Claude Code OAuth / Codex CLI / FlowKit через Google AI), жодного pay-per-token API.
+- Всі AI-виклики по підписках (Claude Code OAuth / Codex CLI), жодного pay-per-token API. Hero-відео: авто Ken Burns або завантажений Романом кліп (SPEC §2.5, FlowKit видалено 2026-08-22).
 - AI-згенеровані медіа позначаються `ai_generated` і не видаються за реальні фото бізнесу.
 - Демо приватні: noindex, неугадувані URL, assets `private_demo_only`.
 - Падіння одного бізнесу не зупиняє кампанію.
@@ -84,7 +84,7 @@ pnpm tsx scripts/test-settings.ts             # шифрування + БД→en
 
 - **A** gosom сервісом у compose, discovery.ts = тонкий клієнт його REST API (email-екстракція on, проксі закладені порожнім списком, 0 результатів = failure з алертом), рукописний Maps-скрейпер видалити. Самоперевірка: реальна кампанія Patras beauty дає 20+ кандидатів у БД з raw evidence без дублікатів.
 - **B** агентний шар повністю на Claude Code по підписці (`CLAUDE_CODE_OAUTH_TOKEN`, рішення №10; `@anthropic-ai/sdk` з API-ключем прибрати), прогін етапів 2-8 на реальних кандидатах. Самоперевірка: 3+ бізнеси production_ready, у решти чесні gaps.
-- **C** builder з дизайн-стеком (Aceternity + Magic UI в шаблоні, gsap-skills, референси; розділ 2.4), FlowKit/gen-image інтеграція (розділ 2.5; Chrome-міст на маку Романа - якщо недоступний, зробити адаптер + мок і записати в SETUP.md), visual QA loop, private deploy. Самоперевірка: демо реального бізнесу відкривається по приватному URL, скриншоти і QA-звіт у storage.
+- **C** builder з дизайн-стеком (Aceternity + Magic UI в шаблоні, gsap-skills, референси; розділ 2.4), gen-image інтеграція + hero-відео за §2.5 (авто Ken Burns; FlowKit видалено 2026-08-22), visual QA loop, private deploy. Самоперевірка: демо реального бізнесу відкривається по приватному URL, скриншоти і QA-звіт у storage.
 - **D** Next.js UI (approval-черга, воронка, кампанії, jobs, розмови; розділ 12 спеки) + Telegram-пуші з лінками, outreach у dry_run. Самоперевірка: Approve в UI створює simulated send рівно один раз, ручні канали дають deep-link кнопку.
 - **E** live-адаптери: Gmail SMTP/IMAP, WAHA, follow-ups, reply detection. Без секретів Романа - будувати з моками, реальну перевірку описати в SETUP.md.
 - **F** імпортер legacy `/root/website-offers`. Самоперевірка: Get Nailed / MC Beauty / BE BEAUTIFUL імпортуються без дублювання.

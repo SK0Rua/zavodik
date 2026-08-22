@@ -20,12 +20,11 @@ import { ImapFlow } from 'imapflow';
 import { config } from '../config.js';
 import { getSetting, masterKeyConfigured, settingSource } from '../lib/settings.js';
 import * as waha from '../channels/waha.js';
-import { flowkitAvailable } from '../media/video.js';
 import { claudeCodeRuntime } from '../agents/claudeCodeRuntime.js';
 import { z } from 'zod';
 
 export type CheckKind =
-  | 'claude' | 'codex' | 'telegram' | 'telegram-send' | 'smtp' | 'imap' | 'waha' | 'flowkit';
+  | 'claude' | 'codex' | 'telegram' | 'telegram-send' | 'smtp' | 'imap' | 'waha';
 
 export interface CheckResult {
   ok: boolean;
@@ -325,25 +324,6 @@ async function checkWaha(): Promise<CheckResult> {
   }
 }
 
-// ─── FlowKit ─────────────────────────────────────────────────────────────────
-
-async function checkFlowkit(): Promise<CheckResult> {
-  const h = await flowkitAvailable();
-  const live = h.reachable && h.extensionConnected;
-  return {
-    ok: live,
-    message: live
-      ? 'FlowKit живий і Chrome-міст підключений — live-відео доступне.'
-      : h.reachable
-        ? `FlowKit відповідає, але Chrome-міст не підключений${h.detail ? `: ${h.detail}` : ''}. Відео піде в Ken Burns fallback.`
-        : `FlowKit недоступний на ${h.url}${h.detail ? `: ${h.detail}` : ''}. Відео піде в Ken Burns fallback.`,
-    detail: {
-      url: h.url, reachable: h.reachable, extensionConnected: h.extensionConnected,
-      flowKeyPresent: h.flowKeyPresent, mode: config.media.flowkit.mode,
-    },
-  };
-}
-
 // ─── Dispatch ────────────────────────────────────────────────────────────────
 
 const CHECKS: Record<CheckKind, () => Promise<CheckResult>> = {
@@ -354,7 +334,6 @@ const CHECKS: Record<CheckKind, () => Promise<CheckResult>> = {
   smtp: checkSmtp,
   imap: checkImap,
   waha: checkWaha,
-  flowkit: checkFlowkit,
 };
 
 export function isCheckKind(v: string): v is CheckKind {
@@ -389,7 +368,6 @@ export function effectiveConfig(): Record<string, unknown> {
     imapHost: config.imap.host || null,
     wahaUrl: config.waha.url,
     wahaSession: config.waha.session,
-    flowkitMode: config.media.flowkit.mode,
     demoBaseUrl: config.deploy.demoBaseUrl,
     uiBaseUrl: config.ui.baseUrl,
     generateImages: config.media.generateImages,

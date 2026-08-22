@@ -1,9 +1,11 @@
 /**
  * Media generation — public API (SPEC §2.5, decisions #12/#13).
  *
- * Everything here runs on subscriptions: images via the Codex CLI (gpt-image-2,
- * ChatGPT plan), video via FlowKit → Google Flow/Veo (Google AI plan). No
- * pay-per-token media API is reachable from this module.
+ * Everything here runs on subscriptions or fully offline: images via the Codex
+ * CLI (gpt-image-2, ChatGPT plan), the baseline hero clip via local ffmpeg
+ * (Ken Burns over a real photo). Wow-video is uploaded by Roman from the
+ * business card and reused as a `hero_clip` asset. No pay-per-token media API
+ * is reachable from this module.
  *
  * Usage contract for the builder/assets workers:
  *
@@ -15,7 +17,7 @@
  *   const clip = await generateHeroClip({ imagePath: realPhoto, prompt, outDir });
  *   if (clip) {
  *     await registerGeneratedAsset(businessId, clip.filePath, 'hero_clip', {
- *       generator: `flowkit:${clip.model ?? 'ken-burns'}`,
+ *       generator: 'ken-burns',
  *       prompt: clip.prompt, sourceImagePath: clip.sourceImagePath,
  *       durationSec: clip.durationSec,
  *     });
@@ -39,16 +41,12 @@ export {
 
 export {
   generateHeroClip,
-  flowkitAvailable,
   fallbackHeroMedia,
   kenBurnsClip,
   ffmpegAvailable,
-  FlowkitError,
   type GenerateHeroClipOptions,
   type HeroClip,
   type HeroClipSource,
-  type FlowkitHealth,
-  type FlowkitMode,
   type KenBurnsFallback,
 } from './video.js';
 

@@ -3,10 +3,11 @@
  *
  * Two optional enhancements, both non-fatal by design — a demo without a hero clip
  * is a slightly less impressive demo, but a demo that fails to build because a
- * Chrome bridge was down is a broken pipeline:
+ * media backend was down is a broken pipeline:
  *
- *   1. hero motion: FlowKit/Veo clip from a REAL evidence photo → ffmpeg Ken Burns
- *      mp4 → a CSS/GSAP Ken Burns config the builder applies to the real still.
+ *   1. hero motion: an UPLOADED wow-clip (hero_clip asset, added from the business
+ *      card) → ffmpeg Ken Burns mp4 from the real photo → a CSS/GSAP Ken Burns
+ *      config the builder applies to the real still.
  *   2. one decorative background image via gen-image (Codex), off by MEDIA_GEN_IMAGES=false.
  *
  * Everything generated here is registered through `registerGeneratedAsset`, which
@@ -87,8 +88,8 @@ export async function planHeroMedia(
     };
   }
 
-  // Idempotency: a retried or re-run build must not spend another FlowKit/ffmpeg
-  // run. The check has to hit the DB, NOT the snapshot: the snapshot is frozen at
+  // Idempotency + the upload path: the LATEST hero_clip asset wins here, which
+  // is also how an uploaded wow-clip replaces the generated Ken Burns one. The check has to hit the DB, NOT the snapshot: the snapshot is frozen at
   // stage 9, before any media exists, so it can never show a previous generation.
   // `registerGeneratedAsset` dedupes by content hash, but a fresh generation
   // produces fresh bytes, so the reuse decision must happen before generating.
@@ -136,11 +137,10 @@ export async function planHeroMedia(
       imagePath: localPhoto,
       prompt,
       outDir: dir,
-      projectId: String(projectId),
     });
     if (clip) {
       const registered = await registerGeneratedAsset(snapshot.businessId, clip.filePath, 'hero_clip', {
-        generator: `flowkit:${clip.model ?? 'ken-burns'}`,
+        generator: 'ken-burns',
         prompt: clip.prompt,
         sourceImagePath: hero.objectKey,
         durationSec: clip.durationSec,
@@ -151,12 +151,12 @@ export async function planHeroMedia(
         snapshot.assets.push({
           file, objectKey: registered.objectKey, kind: 'hero_clip',
           width: null, height: null, contentType: 'video/mp4',
-          aiGenerated: true, generator: `flowkit:${clip.model ?? 'ken-burns'}`,
-          sourceUrl: `generated://flowkit`,
+          aiGenerated: true, generator: 'ken-burns',
+          sourceUrl: 'generated://ken-burns',
         });
       }
       log.info('hero clip generated', {
-        businessId: snapshot.businessId, model: clip.model, durationSec: clip.durationSec,
+        businessId: snapshot.businessId, source: clip.source, durationSec: clip.durationSec,
       });
       return {
         kind: 'clip', file, sourceFile: hero.file, aiGenerated: true,
@@ -165,12 +165,12 @@ export async function planHeroMedia(
       };
     }
   } catch (err) {
-    log.warn('hero clip generation failed, degrading to Ken Burns', {
+    log.warn('hero clip generation failed, degrading to browser Ken Burns', {
       businessId: snapshot.businessId, err: String(err).slice(0, 300),
     });
   }
 
-  const fallback = fallbackHeroMedia({ imagePath: localPhoto, reason: 'no video backend available' });
+  const fallback = fallbackHeroMedia({ imagePath: localPhoto, reason: 'ffmpeg unavailable' });
   return {
     kind: 'ken-burns',
     file: null,

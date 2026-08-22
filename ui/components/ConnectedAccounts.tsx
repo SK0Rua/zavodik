@@ -745,7 +745,6 @@ export function ConnectedAccounts({ accounts, checks, checksError }: {
   const codex = v('codex', accounts.codex);
   const telegram = v('telegram', accounts.telegram);
   const waha = v('waha', accounts.whatsapp);
-  const flowkit = v('flowkit', accounts.flowkit);
   const smtp = v('smtp', accounts.gmail);
   const imap = v('imap', accounts.gmail);
   const gmail = gmailVerdict(smtp, imap);
@@ -912,16 +911,6 @@ export function ConnectedAccounts({ accounts, checks, checksError }: {
           <Outcome outcome={live.imap} prefix="IMAP" />
         </AccountRow>
 
-        {/* ── FlowKit ── */}
-        <AccountRow
-          title="FlowKit"
-          {...row('flowkit')}
-          blurb="AI-відео для hero. Опційно: без нього — Ken Burns по реальних фото."
-          verdict={flowkit}
-          checkedAt={at('flowkit')}
-          actions={<RefreshButton kind="flowkit" onResult={set('flowkit')} />}
-          footnote="Підключити звідси неможливо: FlowKit — це Python-агент на маку з Chrome-розширенням (docs/MEDIA.md). Тут видно лише, доступний він чи ні."
-        />
       </div>
 
       {disc && <p className="text-sm text-ink-soft">{disc}</p>}

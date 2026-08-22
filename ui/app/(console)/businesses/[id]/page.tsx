@@ -21,6 +21,8 @@ import { factLabel, groupFacts } from '@/lib/factLabels';
 import { buildButtonState } from '@/lib/buildPolicy';
 import { cardActionBar } from '@/lib/cardActions';
 import { FindSocialsButton } from '@/components/FindSocialsButton';
+import { HeroVideoPanel } from '@/components/HeroVideoPanel';
+import { buildHeroVideoPrompt } from '@/lib/videoBrief';
 import { SocialsPanel, type SocialContactRow } from '@/components/SocialsPanel';
 import { isSocialChannel, socialsButtonState } from '@/lib/socials';
 import { BrandSwatches } from '@/components/BrandSwatches';
@@ -220,6 +222,24 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
   // for exactly these states the tab leads with the live trace instead of a
   // one-word status — see LiveBuildPanel for why that word was not enough.
   const IN_FLIGHT_STATES = new Set(['pending', 'brief', 'building', 'qa']);
+
+  // Inputs for the wow-video brief. The start frame is the same photo
+  // `planHeroMedia` would animate: the `hero` asset if one is marked, else the
+  // first real photo. Mood words come from the measured brand evidence — the
+  // same `brand.mood` fact the art director designs from.
+  const realImage = (a: (typeof assetRows)[number]) =>
+    !a.aiGenerated && (a.contentType ?? '').startsWith('image/');
+  const heroPhotoRow = assetRows.find((a) => realImage(a) && a.intendedUsage === 'hero')
+    ?? assetRows.find(realImage);
+  const heroPhotoAsset = heroPhotoRow
+    ? { file: heroPhotoRow.objectKey.split('/').pop() ?? heroPhotoRow.objectKey, objectKey: heroPhotoRow.objectKey }
+    : null;
+  const moodValue = facts.find((f) => f.key === 'brand.mood')?.value as { mood?: unknown } | null;
+  const moodWords = Array.isArray(moodValue?.mood) ? moodValue.mood.map(String) : [];
+  const latestHeroClip = [...assetRows]
+    .filter((a) => a.intendedUsage === 'hero_clip')
+    .sort((a, b) => new Date(a.capturedAt).getTime() - new Date(b.capturedAt).getTime())
+    .at(-1) ?? null;
   const demoTab = (
     <div className="space-y-4">
       {project && IN_FLIGHT_STATES.has(project.state) && (
@@ -359,6 +379,30 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
             )}
           </div>
         </Panel>
+      )}
+
+      {/* The wow-video brief + upload slot. Rendered whenever a REAL photo
+          exists to derive video from — before the first build too, because the
+          best moment to upload is exactly then. */}
+      {heroPhotoAsset && (
+        <HeroVideoPanel
+          businessId={biz.id}
+          prompt={buildHeroVideoPrompt({
+            name: biz.name,
+            category: biz.category,
+            // The row has no city column; the id is `<country>-<city>-<slug>`.
+            city: biz.id.split('-')[1] ?? null,
+            moodWords,
+            heroFile: heroPhotoAsset.file,
+          })}
+          heroPhoto={{
+            file: heroPhotoAsset.file,
+            url: `/api/object?bucket=assets&key=${encodeURIComponent(heroPhotoAsset.objectKey)}`,
+          }}
+          currentClip={latestHeroClip
+            ? { generator: latestHeroClip.generator, capturedAt: fmtDate(latestHeroClip.capturedAt) }
+            : null}
+        />
       )}
     </div>
   );

@@ -132,7 +132,7 @@ export const assets = pgTable('assets', {
   // Media generation (SPEC §2.5, decisions #12/#13). AI media is decorative and
   // is NEVER presented as a real photo/video of the business.
   aiGenerated: boolean('ai_generated').notNull().default(false),
-  generator: text('generator'), // gen-image:gpt-image-2 | flowkit:veo | flowkit:omni_flash | ken-burns
+  generator: text('generator'), // gen-image:gpt-image-2 | ken-burns | manual-upload (historic rows may say flowkit:*)
   generationMeta: jsonb('generation_meta'), // prompt, model, ref asset, duration...
   capturedAt: timestamp('captured_at').notNull().defaultNow(),
 }, (t) => [index('asset_biz_idx').on(t.businessId), uniqueIndex('asset_hash_idx').on(t.businessId, t.hash)]);

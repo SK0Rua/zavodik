@@ -136,29 +136,13 @@ export const config = {
     /** Codex CLI binary for the gen-image flow (ChatGPT subscription, `codex login`). */
     get codexBin(): string { return process.env.CODEX_BIN ?? 'codex'; },
     get imageTimeoutMs(): number { return Number(process.env.GEN_IMAGE_TIMEOUT_SECONDS ?? 300) * 1000; },
-    flowkit: {
-      /** Python agent REST base. On the server this is Roman's mac over Tailscale. */
-      get url(): string { return getSetting('FLOWKIT_URL').replace(/\/+$/, ''); },
-      /**
-       * live = require the Chrome bridge; mock = deterministic local Ken Burns mp4
-       * (no Chrome, no network); auto = live when healthy, else fall back.
-       */
-      get mode(): 'auto' | 'live' | 'mock' {
-        return getSettingEnum('FLOWKIT_MODE', ['auto', 'live', 'mock'] as const, 'auto');
-      },
-      /** Flow project reused for factory clips; empty = create one per call. */
-      get projectId(): string { return process.env.FLOWKIT_PROJECT_ID ?? ''; },
-      /** veo (default) or omni_flash — omni supports 4/6/8/10s durations. */
-      get modelFamily(): 'veo' | 'omni_flash' {
-        return (process.env.FLOWKIT_MODEL_FAMILY ?? 'veo') as 'veo' | 'omni_flash';
-      },
-      get aspectRatio(): string { return process.env.FLOWKIT_ASPECT_RATIO ?? 'VIDEO_ASPECT_RATIO_LANDSCAPE'; },
-      get durationSeconds(): number { return Number(process.env.FLOWKIT_DURATION_SECONDS ?? 8); },
-      get healthTimeoutMs(): number { return Number(process.env.FLOWKIT_HEALTH_TIMEOUT_SECONDS ?? 5) * 1000; },
-      get requestTimeoutMs(): number { return Number(process.env.FLOWKIT_REQUEST_TIMEOUT_SECONDS ?? 120) * 1000; },
-      get pollIntervalMs(): number { return Number(process.env.FLOWKIT_POLL_INTERVAL_SECONDS ?? 10) * 1000; },
-      get jobTimeoutMs(): number { return Number(process.env.FLOWKIT_JOB_TIMEOUT_SECONDS ?? 900) * 1000; },
-    },
+    /**
+     * Baseline hero-clip length (ffmpeg Ken Burns over the real photo).
+     * FlowKit and every live-Flow bridge are gone (SPEC §2.5, 2026-08-22):
+     * they need an authenticated Chrome outside a datacenter, and Roman keeps
+     * nothing on the mac. Wow-video is uploaded from the business card instead.
+     */
+    get heroClipSeconds(): number { return Number(process.env.HERO_CLIP_DURATION_SECONDS ?? 8); },
     /** ffmpeg is only needed for the mock/Ken Burns path; absence degrades, never crashes. */
     get ffmpegBin(): string { return process.env.FFMPEG_BIN ?? 'ffmpeg'; },
     /**

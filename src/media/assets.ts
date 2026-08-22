@@ -17,7 +17,7 @@ import { log } from '../lib/logger.js';
 export type GeneratedAssetKind = 'background' | 'pattern' | 'og' | 'texture' | 'decor' | 'hero_clip';
 
 export interface GeneratedAssetMeta {
-  /** gen-image:gpt-image-2 | flowkit:veo | flowkit:omni_flash | ken-burns */
+  /** gen-image:gpt-image-2 | ken-burns | manual-upload */
   generator: string;
   prompt?: string;
   /** For hero clips: the real business photo the motion was derived from. */

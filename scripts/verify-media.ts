@@ -1,9 +1,8 @@
 /**
  * Media adapters smoke check (SPEC §2.5).
  *
- *   pnpm tsx scripts/verify-media.ts            # image (real) + video (mock)
+ *   pnpm tsx scripts/verify-media.ts            # image (real) + hero clip (ffmpeg)
  *   pnpm tsx scripts/verify-media.ts --no-image # skip the Codex call
- *   pnpm tsx scripts/verify-media.ts --live     # also try FlowKit for real
  *
  * Touches no database: the adapters are exercised as pure functions, so this
  * runs without Postgres/MinIO. Asset registration is covered by the pipeline.
@@ -15,17 +14,14 @@ import {
   generateImage,
   ImageGenerationError,
   generateHeroClip,
-  flowkitAvailable,
   fallbackHeroMedia,
   ffmpegAvailable,
-  FlowkitError,
 } from '../src/media/index.js';
 import { config } from '../src/config.js';
 
 const OUT_DIR = path.resolve('storage/media-verify');
 const args = new Set(process.argv.slice(2));
 const skipImage = args.has('--no-image');
-const live = args.has('--live');
 
 function heading(title: string): void {
   console.log(`\n${'─'.repeat(64)}\n${title}\n${'─'.repeat(64)}`);
@@ -91,17 +87,8 @@ async function main(): Promise<void> {
     }
   }
 
-  // ── 2. FlowKit health ──────────────────────────────────────────────────────
-  heading('2. FlowKit health probe');
-  const health = await flowkitAvailable();
-  console.log(`  url                : ${health.url}`);
-  console.log(`  reachable          : ${health.reachable}`);
-  console.log(`  extensionConnected : ${health.extensionConnected}`);
-  console.log(`  flowKeyPresent     : ${health.flowKeyPresent}`);
-  if (health.detail) console.log(`  detail             : ${health.detail}`);
-
   // ── 3. Hero clip in mock mode ──────────────────────────────────────────────
-  heading('3. generateHeroClip — mock mode (ffmpeg Ken Burns, no Chrome)');
+  heading('2. generateHeroClip — ffmpeg Ken Burns');
   const samplePhoto = await makeSampleImage();
   console.log(`  input photo: ${samplePhoto}`);
   console.log(`  ffmpeg     : ${(await ffmpegAvailable()) ? config.media.ffmpegBin : 'NOT AVAILABLE'}`);
@@ -112,12 +99,11 @@ async function main(): Promise<void> {
       durationSec: 4,
       outDir: OUT_DIR,
       fileName: 'verify-hero-mock',
-      mode: 'mock',
     });
     if (clip) {
       console.log(`  ok         : ${clip.filePath}`);
       console.log(`  bytes      : ${clip.bytes.toLocaleString()}`);
-      console.log(`  source     : ${clip.source} (model: ${clip.model ?? 'none'})`);
+      console.log(`  source     : ${clip.source}`);
       console.log(`  duration   : ${clip.durationSec}s, took ${(clip.durationMs / 1000).toFixed(1)}s`);
       console.log(`  fromPhoto  : ${clip.sourceImagePath}`);
     } else {
@@ -125,30 +111,12 @@ async function main(): Promise<void> {
     }
   } catch (err) {
     failures++;
-    console.error(`  FAILED: ${err instanceof FlowkitError ? `[${err.reason}] ${err.message}` : String(err)}`);
+    console.error(`  FAILED: ${String(err)}`);
   }
 
-  // ── 4. Fallback config ─────────────────────────────────────────────────────
-  heading('4. fallbackHeroMedia — Ken Burns config (no video, no network)');
+  // ── 3. Fallback config ─────────────────────────────────────────────────────
+  heading('3. fallbackHeroMedia — Ken Burns config (no video, no network)');
   console.log(JSON.stringify(fallbackHeroMedia({ imagePath: samplePhoto, durationSec: 6 }), null, 2));
-
-  // ── 5. Optional live FlowKit ───────────────────────────────────────────────
-  if (live) {
-    heading('5. generateHeroClip — LIVE FlowKit');
-    try {
-      const clip = await generateHeroClip({
-        imagePath: samplePhoto,
-        prompt: 'slow cinematic push-in, warm natural light',
-        outDir: OUT_DIR,
-        fileName: 'verify-hero-live',
-        mode: 'live',
-      });
-      console.log(`  ok: ${clip?.filePath} (${clip?.bytes.toLocaleString()} bytes, ${clip?.model})`);
-    } catch (err) {
-      failures++;
-      console.error(`  FAILED: ${err instanceof FlowkitError ? `[${err.reason}] ${err.message}` : String(err)}`);
-    }
-  }
 
   heading(failures === 0 ? 'verify-media: OK' : `verify-media: ${failures} failure(s)`);
   console.log(`output dir: ${OUT_DIR}`);

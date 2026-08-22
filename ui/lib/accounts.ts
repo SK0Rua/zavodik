@@ -20,7 +20,7 @@ import { effectiveValue } from './settings';
 export type AccountReadiness = 'configured' | 'missing' | 'partial';
 
 export interface AccountStatus {
-  id: 'claude' | 'codex' | 'telegram' | 'whatsapp' | 'gmail' | 'flowkit';
+  id: 'claude' | 'codex' | 'telegram' | 'whatsapp' | 'gmail';
   readiness: AccountReadiness;
   /** One line describing what IS set, or what is missing. */
   detail: string;
@@ -32,7 +32,6 @@ export interface AccountsSnapshot {
   telegram: AccountStatus;
   whatsapp: AccountStatus;
   gmail: AccountStatus;
-  flowkit: AccountStatus;
   /**
    * The Telegram chat id in plain sight.
    *
@@ -51,7 +50,7 @@ export async function loadAccounts(): Promise<AccountsSnapshot> {
   const [
     claudeToken, tgToken, tgChat,
     smtpUser, smtpPass, imapUser, imapPass,
-    wahaUrl, wahaKey, wahaSession, flowkitUrl, flowkitMode,
+    wahaUrl, wahaKey, wahaSession,
   ] = await Promise.all([
     effectiveValue('CLAUDE_CODE_OAUTH_TOKEN'),
     effectiveValue('TELEGRAM_BOT_TOKEN'),
@@ -63,8 +62,6 @@ export async function loadAccounts(): Promise<AccountsSnapshot> {
     effectiveValue('WAHA_URL'),
     effectiveValue('WAHA_API_KEY'),
     effectiveValue('WAHA_SESSION'),
-    effectiveValue('FLOWKIT_URL'),
-    effectiveValue('FLOWKIT_MODE'),
   ]);
 
   // Claude: a token here is one path; a CLI login inside the container is the
@@ -114,20 +111,10 @@ export async function loadAccounts(): Promise<AccountsSnapshot> {
     ? { id: 'whatsapp', readiness: 'partial', detail: `${wahaUrl}, сесія ${wahaSession || 'default'} — стан за перевіркою` }
     : { id: 'whatsapp', readiness: 'missing', detail: wahaUrl ? 'нема WAHA API key' : 'нема WAHA URL' };
 
-  // FlowKit is optional by design: its absence degrades to Ken Burns, it never
-  // fails a build. The row exists so that degradation is visible, not silent.
-  const flowkit: AccountStatus = {
-    id: 'flowkit',
-    readiness: flowkitUrl ? 'partial' : 'missing',
-    detail: flowkitUrl
-      ? `${flowkitUrl}, режим ${flowkitMode || 'auto'} — доступність за перевіркою`
-      : 'URL не заданий — відео завжди Ken Burns',
-  };
-
   const { masterKeyConfigured } = await import('./settings');
 
   return {
-    claude, codex, telegram, whatsapp, gmail, flowkit,
+    claude, codex, telegram, whatsapp, gmail,
     telegramChatId: tgChat || null,
     masterKey: masterKeyConfigured(),
   };

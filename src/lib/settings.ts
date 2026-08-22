@@ -238,16 +238,6 @@ export const SETTINGS: SettingDef[] = [
 
   // ── Медіа ─────────────────────────────────────────────────────────────────
   {
-    key: 'FLOWKIT_URL', label: 'Адреса FlowKit', group: 'media', kind: 'text',
-    default: 'http://localhost:8100', validate: url, advanced: true,
-    hint: 'Python-агент на маку Романа, доступний із сервера через Tailscale.',
-  },
-  {
-    key: 'FLOWKIT_MODE', label: 'Звідки брати відео для hero', group: 'media', kind: 'select',
-    options: ['auto', 'live', 'mock'], default: 'auto',
-    hint: 'auto — справжнє AI-відео, коли міст із Chrome живий, інакше плавний рух по фото. live вимагає мосту, mock ніколи його не чіпає.',
-  },
-  {
     key: 'MEDIA_GEN_IMAGES', label: 'Генерувати фонові зображення', group: 'media', kind: 'boolean', default: 'true',
     hint: 'Позначаються як ai_generated і ніколи не видаються за фото бізнесу. Вимкнено — білди швидші й повністю офлайнові.',
   },
