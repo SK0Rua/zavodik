@@ -109,8 +109,11 @@ services:
       # is served by `factory-build`; this process only reports the URL, so it
       # must be an address ROMAN'S BROWSER can reach, not a compose-internal one.
       # Empty is a valid answer: the console then explains the SSH attach instead
-      # of offering a link that would not resolve.
-      BUILD_TERMINAL_BASE_URL: ${BUILD_TERMINAL_BASE_URL:-http://localhost:7681}
+      # of offering a link that would not resolve. NO fallback here on purpose:
+      # the old `:-http://localhost:7681` default meant an EMPTY setting still
+      # rendered the button — pointing every server visitor at their own
+      # localhost — while the settings hint promised «порожньо = кнопки немає».
+      BUILD_TERMINAL_BASE_URL: ${BUILD_TERMINAL_BASE_URL:-}
     volumes:
       # Named volumes, NOT host bind mounts: a bind dir is created by the docker
       # daemon as root:root and the container runs as `node` (uid 1000), which

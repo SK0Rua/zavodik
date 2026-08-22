@@ -283,7 +283,18 @@ export function LiveBuildPanel({ projectId, projectState }: {
             {terminal.url && (
               <a
                 className="btn-quiet btn-sm"
-                href={terminal.url}
+                // Basic-auth credentials go INTO the link (https://user:pass@host):
+                // ttyd greets with a native browser password prompt otherwise, and
+                // «Це шо за хуйня?» (Roman, 2026-08-22) is the correct review of a
+                // button that opens onto a login dialog. Top-level navigation with
+                // userinfo still works in every current browser; the plain-text
+                // pair below stays as the fallback for one that decides not to.
+                href={terminal.user && terminal.password
+                  ? terminal.url.replace(
+                    '://',
+                    `://${encodeURIComponent(terminal.user)}:${encodeURIComponent(terminal.password)}@`,
+                  )
+                  : terminal.url}
                 target="_blank"
                 rel="noreferrer noopener"
               >
@@ -298,7 +309,7 @@ export function LiveBuildPanel({ projectId, projectState }: {
               monospace, because it is going to be copied. */}
           {terminal.url && terminal.password && (
             <p className="mt-1.5 text-sm text-ink-mute">
-              Термінал спитає пароль: логін{' '}
+              Кнопка логіниться сама. Якщо браузер усе ж спитає пароль: логін{' '}
               <span className="font-mono text-ink select-all">{terminal.user ?? 'roman'}</span>
               {' · '}пароль{' '}
               <span className="font-mono text-ink select-all break-all">{terminal.password}</span>
