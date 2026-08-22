@@ -385,6 +385,7 @@ export async function runStage9Calls(businessId: string, snapshot: BuildSnapshot
   const isGreek = snapshot.language.toLowerCase().startsWith('el');
 
   // ── 1. Content brief ──────────────────────────────────────────────────────
+  await logStage(buildLogPath(businessId), 'Дизайн-етап почався: пишу контент-бриф зі снапшота', 'content-design');
   const brief = await runAgent(
     'content-brief',
     `You write the content brief for a private demo website for a real local business.
@@ -422,6 +423,11 @@ Rules:
     businessId, sections: brief.sections.length, claims: brief.allowedClaims.length,
     omissions: brief.omissions.length,
   });
+  await logStage(
+    buildLogPath(businessId),
+    `Бриф готовий: ${brief.sections.length} секцій, ${brief.allowedClaims.length} підтверджених фактів`,
+    'content-design',
+  );
 
   // ── 2. Three structurally different art directions ────────────────────────
   const { references, components, referenceNames } = await designContext(niche);
@@ -457,6 +463,11 @@ Weight/style caveats that constrain the design, not just the build:
     : `Pick a distinctive pair. Inter, Poppins, Montserrat, Roboto and Open Sans as the DISPLAY
 face are on the anti-slop ban-list and are vetoed by code.`;
 
+  await logStage(
+    buildLogPath(businessId),
+    `Арт-директор малює 3 структурно різні напрямки${galleryRefs.length ? ` (референсів з галереї: ${galleryRefs.length})` : ''}`,
+    'content-design',
+  );
   const directions = await runAgent(
     'design-directions',
     `You are an art director producing THREE structurally different directions for a demo site.
@@ -660,6 +671,11 @@ arrows, everything animating on entrance at once.`,
       onUsage: (u) => log.info('agent usage', { businessId, call: 'design-directions', ...u }),
     },
   );
+  await logStage(
+    buildLogPath(businessId),
+    `Напрямки готові: ${directions.directions.map((d) => `«${d.name}»`).join(', ')} — критик оцінює`,
+    'content-design',
+  );
   log.info('art directions ready', {
     businessId, names: directions.directions.map((d) => d.name),
   });
@@ -742,6 +758,7 @@ export async function contentDesignHandler(payload: JobPayload): Promise<void> {
   const snapshot = await buildSnapshot(businessId);
   const { brief, directions, critique, usage, motionSlugs } = await runStage9Calls(businessId, snapshot);
 
+  await logStage(buildLogPath(businessId), 'Критик оцінив напрямки — рубрика обирає переможця', 'content-design');
   // ── Deterministic decision ────────────────────────────────────────────────
   const verdict = chooseDirection(
     directions.directions, critique.scores, snapshot, motionSlugs, usage,
@@ -816,9 +833,9 @@ export async function contentDesignHandler(payload: JobPayload): Promise<void> {
   // row is created a few lines above. Everything stage 9 did is summarised into
   // this one line rather than back-dated into a timeline that did not exist yet.
   await logStage(
-    buildLogPath(businessId, project!.id),
+    buildLogPath(businessId),
     `Текст і дизайн готові за ${Math.round((Date.now() - startedAt) / 60_000)} хв · `
-    + `обрано напрямок «${verdict.chosen.name}»`,
+    + `обрано напрямок «${verdict.chosen.name}» — стартує збірка сайту (проєкт ${project!.id})`,
     'content-design',
   );
 

@@ -916,7 +916,7 @@ export async function visualQaHandler(payload: JobPayload): Promise<void> {
     : await buildSnapshot(businessId);
 
   const dir = project.dir || path.resolve('sites', businessId, String(projectId));
-  const logPath = buildLogPath(businessId, projectId);
+  const logPath = buildLogPath(businessId);
   await logStage(logPath, `Перевірка сторінки, ітерація ${iteration + 1}: відкриваю в браузері`, 'visual-qa');
   const serveRoot = outputDir(dir);
   const { url, close } = await serveDir(serveRoot);

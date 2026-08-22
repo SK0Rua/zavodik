@@ -127,9 +127,10 @@ function renderLine(line: BuildLogLine): { glyph: string; text: string; tone: st
   }
 }
 
-export function LiveBuildPanel({ projectId, projectState }: {
-  projectId: number;
-  projectState: string;
+export function LiveBuildPanel({ businessId, projectState }: {
+  businessId: string;
+  /** Newest project's state; null while the design stage runs pre-project. */
+  projectState: string | null;
 }) {
   const [lines, setLines] = useState<BuildLogLine[]>([]);
   const [poll, setPoll] = useState<Poll | null>(null);
@@ -143,7 +144,7 @@ export function LiveBuildPanel({ projectId, projectState }: {
 
   const tick = useCallback(async () => {
     try {
-      const res = await fetch(`/api/build-log?projectId=${projectId}&after=${offset.current}`, {
+      const res = await fetch(`/api/build-log?businessId=${encodeURIComponent(businessId)}&after=${offset.current}`, {
         cache: 'no-store',
       });
       const body = await res.json() as Poll;
@@ -165,7 +166,7 @@ export function LiveBuildPanel({ projectId, projectState }: {
     } catch (err) {
       setError(`Немає звʼязку з фабрикою: ${String(err).slice(0, 120)}`);
     }
-  }, [projectId]);
+  }, [businessId]);
 
   useEffect(() => {
     void tick();
@@ -183,11 +184,17 @@ export function LiveBuildPanel({ projectId, projectState }: {
   // (Roman, 2026-08-22: «нічого не змінилось» — про панель, що показувала
   // мертві спроби замість живої). The earlier attempts stay one click away.
   const runStart = (() => {
+    let buildStart = 0;
     for (let i = lines.length - 1; i >= 0; i--) {
       const l = lines[i];
-      if (l.type === 'stage' && /Збірка почалась/.test(l.summary)) return i;
+      if (l.type !== 'stage') continue;
+      // The design start is the run boundary; «Збірка почалась» is a stage
+      // WITHIN the run (kept as a fallback for logs from before the design
+      // stage was traced).
+      if (/Дизайн-етап почався/.test(l.summary)) return i;
+      if (!buildStart && /Збірка почалась/.test(l.summary)) buildStart = i;
     }
-    return 0;
+    return buildStart;
   })();
   const current = showPastRuns ? lines : lines.slice(runStart);
 

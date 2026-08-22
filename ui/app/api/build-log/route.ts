@@ -15,16 +15,18 @@ import { factoryFetch } from '@/lib/factoryApi';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
-  const projectId = Number(req.nextUrl.searchParams.get('projectId'));
-  if (!Number.isInteger(projectId) || projectId <= 0) {
-    return NextResponse.json({ ok: false, message: 'Невірний id проєкту.' }, { status: 400 });
+  // Keyed by business: the pipeline log spans the whole run, including the
+  // design stage that happens before any project exists.
+  const businessId = req.nextUrl.searchParams.get('businessId') ?? '';
+  if (!/^[A-Za-z0-9_-]{1,120}$/.test(businessId)) {
+    return NextResponse.json({ ok: false, message: 'Невірний id бізнесу.' }, { status: 400 });
   }
   const after = Number(req.nextUrl.searchParams.get('after') ?? 0);
   const offset = Number.isFinite(after) && after > 0 ? Math.floor(after) : 0;
 
   // Short timeout: this is polled every few seconds, and a slow answer is worse
   // than a missed tick — the next poll is already on its way.
-  const res = await factoryFetch(`/internal/build-log/${projectId}?after=${offset}`, { timeoutMs: 8_000 });
+  const res = await factoryFetch(`/internal/build-log/${encodeURIComponent(businessId)}?after=${offset}`, { timeoutMs: 8_000 });
 
   if (!res.ok) {
     return NextResponse.json(

@@ -302,35 +302,44 @@ ${previous || '(попередніх автоматичних зауважень
    * building" and "a job is actually running" are exactly the two things that
    * disagree when something is wrong — which is the case this panel exists for.
    */
-  app.get('/internal/build-log/:projectId', internalAuth, async (c) => {
-    const projectId = Number(c.req.param('projectId'));
-    if (!Number.isInteger(projectId) || projectId <= 0) {
-      return c.json({ ok: false, message: 'invalid project id' }, 400);
+  app.get('/internal/build-log/:businessId', internalAuth, async (c) => {
+    // Keyed by BUSINESS: the pipeline log spans design → build → QA → deploy,
+    // and the design stage runs before any project row exists. The newest
+    // project (when there is one) contributes its state and terminal, as
+    // attributes rather than as the key.
+    const businessId = c.req.param('businessId');
+    if (!/^[A-Za-z0-9_-]{1,120}$/.test(businessId)) {
+      return c.json({ ok: false, message: 'invalid business id' }, 400);
     }
     const after = Number(c.req.query('after') ?? 0);
 
+    const [biz] = await db.select({ id: schema.businesses.id }).from(schema.businesses)
+      .where(eq(schema.businesses.id, businessId));
+    if (!biz) return c.json({ ok: false, message: 'бізнес не знайдено' }, 404);
+
     const [project] = await db.select().from(schema.siteProjects)
-      .where(eq(schema.siteProjects.id, projectId));
-    if (!project) return c.json({ ok: false, message: 'проєкт не знайдено' }, 404);
+      .where(eq(schema.siteProjects.businessId, businessId))
+      .orderBy(desc(schema.siteProjects.id))
+      .limit(1);
 
     // The most recent build-ish job for this business. `running` is the live
     // state; `retry_wait` counts as active too — the job is parked waiting for
     // a subscription window, which is progress, not a stall.
     const [job] = await db.select().from(schema.workflowJobs)
       .where(and(
-        eq(schema.workflowJobs.businessId, project.businessId),
+        eq(schema.workflowJobs.businessId, businessId),
         inArray(schema.workflowJobs.jobType, ['content-and-design', 'build-site', 'visual-qa', 'deploy-demo']),
       ))
       .orderBy(desc(schema.workflowJobs.createdAt))
       .limit(1);
 
-    const tail = await readBuildLog(buildLogPath(project.businessId, projectId), after);
+    const tail = await readBuildLog(buildLogPath(businessId), after);
 
     // Whether Roman can attach to the REAL terminal of this build right now.
     // Read off the shared volume rather than from tmux, because tmux runs in
     // `factory-build` and this endpoint answers from `factory` — see
     // TERMINAL_MARKER in src/agents/tmuxRuntime.ts.
-    const marker = project.dir ? await liveTerminal(project.dir) : null;
+    const marker = project?.dir ? await liveTerminal(project.dir) : null;
 
     return c.json({
       ok: true,
@@ -370,7 +379,7 @@ ${previous || '(попередніх автоматичних зауважень
       runningForSec: job?.startedAt && (job.status === 'running' || job.status === 'retry_wait')
         ? Math.max(0, Math.round((Date.now() - new Date(job.startedAt).getTime()) / 1000))
         : null,
-      projectState: project.state,
+      projectState: project?.state ?? null,
     });
   });
 

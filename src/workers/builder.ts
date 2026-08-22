@@ -84,7 +84,7 @@ export async function buildSiteHandler(payload: JobPayload): Promise<void> {
   // The live trace Roman watches while this runs. Written into the workspace
   // itself, so `factory` (which serves the API) reads it off the shared
   // `sitesdata` volume without this process having to publish anything.
-  const logPath = buildLogPath(businessId, projectId);
+  const logPath = buildLogPath(businessId);
   await logStage(
     logPath,
     isFix
@@ -149,7 +149,7 @@ last action, even if you think you are finished — the pipeline reads it as you
         businessId, projectId, contractVersion: designDoc.schemaVersion ?? 1, current: DESIGN_CONTRACT_VERSION,
       });
       await logStage(
-        buildLogPath(businessId, projectId),
+        buildLogPath(businessId),
         'Дизайн-контракт застарілого формату — фабрика генерує дизайн заново (нова схема)',
         'site-builder',
       );

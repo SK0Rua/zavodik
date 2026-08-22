@@ -75,8 +75,17 @@ const SUMMARY_RESULT_MAX = 120;
  */
 const MAX_LOG_BYTES = 8 * 1024 * 1024;
 
-export function buildLogPath(businessId: string, projectId: number | string): string {
-  return path.join(SITES_ROOT, businessId, String(projectId), 'build-log.ndjson');
+/**
+ * ONE live trace per business, for the WHOLE pipeline run (design → build →
+ * QA → deploy). Keyed by business, not by project, because the design stage
+ * runs before any project row exists — the old project-keyed file left the
+ * card blind for the first 10-15 minutes («а де відображення процесу дівся?»,
+ * Roman 2026-08-22) and split one run's history across two files. A new run
+ * appends after the previous one; the UI slices at the run-start marker.
+ * projectId belongs in the LINE (mentioned in summaries), never in the key.
+ */
+export function buildLogPath(businessId: string): string {
+  return path.join(SITES_ROOT, businessId, 'pipeline-log.ndjson');
 }
 
 /** Cut a string to `max`, marking the cut so a truncated line never reads as complete. */

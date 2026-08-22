@@ -159,7 +159,7 @@ export async function deployHandler(payload: JobPayload): Promise<void> {
   log.info('demo deployed', { businessId, projectId, deployUrl, health: health.detail, filesRewritten: rewritten });
   // Last line of this project's build log: the panel that showed the run turns
   // into a record of it, ending where the demo starts existing.
-  await logStage(buildLogPath(businessId, projectId), `Демо опубліковано: ${deployUrl}`, 'deploy');
+  await logStage(buildLogPath(businessId), `Демо опубліковано: ${deployUrl}`, 'deploy');
 
   // The demo now lives in deploys/<token>/ and the reports live in storage, so the
   // build artefacts in the workspace are dead weight. Never fails the deploy.

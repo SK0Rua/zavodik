@@ -248,10 +248,16 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
   const heroVideoBrief = (contractDoc?.schemaVersion ?? 1) >= 2 && contractDoc?.chosen?.heroVideoBrief
     ? contractDoc.chosen.heroVideoBrief
     : null;
+  // The live panel covers the WHOLE run, including the pre-project design
+  // stage: it renders whenever a build-chain job is alive OR the newest
+  // project is in flight. The pipeline log is business-keyed, so one panel
+  // follows the run from «Дизайн-етап почався» to deploy without switching.
+  const buildChainActive = buildJob
+    && ['queued', 'running', 'retry_wait'].includes(buildJob.status);
   const demoTab = (
     <div className="space-y-4">
-      {project && IN_FLIGHT_STATES.has(project.state) && (
-        <LiveBuildPanel projectId={project.id} projectState={project.state} />
+      {(buildChainActive || (project && IN_FLIGHT_STATES.has(project.state))) && (
+        <LiveBuildPanel businessId={biz.id} projectState={project?.state ?? null} />
       )}
 
       {/* A build the critic rejected gets the full decision card right here —
@@ -286,7 +292,7 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
 
       {/* No build strip here: «Побудувати демо» lives in the header, where it is
           visible without scrolling. This tab only ever shows demo THINGS. */}
-      {!project && (
+      {!project && !buildChainActive && (
         <Panel>
           <p className="text-sm text-ink-soft">
             Демосайт для цього бізнесу ще не будували. Кнопка — угорі картки.
