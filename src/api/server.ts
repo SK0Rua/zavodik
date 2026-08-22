@@ -20,6 +20,7 @@ import { ensureDemoServer, registerPreview, startDemoServer } from '../lib/serve
 import { writeQaIssues } from '../build/workspace.js';
 import { buildLogPath, readBuildLog } from '../build/buildLog.js';
 import { liveTerminal } from '../agents/tmuxRuntime.js';
+import { TERMINAL_USER, terminalPassword } from '../agents/terminalServer.js';
 import { config } from '../config.js';
 import { log } from '../lib/logger.js';
 import { handleWahaWebhook } from '../outreach/wahaInbound.js';
@@ -346,6 +347,19 @@ ${previous || '(попередніх автоматичних зауважень
             url: marker.served ? config.build.terminalBaseUrl || null : null,
             writable: config.build.terminalWritable,
             startedAt: marker.startedAt,
+            // ttyd's basic-auth pair, ONLY when a terminal is actually being
+            // served. Roman opened the link and hit a browser password prompt
+            // with nothing anywhere telling him the password — it is derived
+            // from INTERNAL_API_KEY (see terminalServer.ts) and therefore
+            // written down nowhere he can reach.
+            //
+            // Not a widening of access: this endpoint is already behind
+            // `internalAuth`, its only caller is a console page behind the UI
+            // password, and anyone holding INTERNAL_API_KEY can derive this
+            // value themselves. Withheld when no server is up, so the pair is
+            // never handed out for a terminal that does not exist.
+            user: marker.served ? TERMINAL_USER : null,
+            password: marker.served ? terminalPassword() || null : null,
           }
         : null,
       active: job?.status === 'running' || job?.status === 'retry_wait',

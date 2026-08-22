@@ -21,6 +21,8 @@
     "test:brand-agent": "tsx scripts/test-brand-agent.ts",
     "test:build-log": "tsx scripts/test-build-log.ts",
     "test:check-cache": "tsx scripts/test-check-cache.ts",
+    "test:toast": "tsx scripts/test-toast.ts",
+    "test:interrupted-build": "tsx --tsconfig scripts/e2e/tsconfig.json scripts/test-interrupted-build.ts",
     "test:landing-gallery": "tsx scripts/test-landing-gallery.ts",
     "test:tmux-agent": "tsx scripts/test-tmux-agent.ts",
     "verify:media-parsers": "tsx scripts/verify-media-parsers.ts",

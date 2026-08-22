@@ -12,7 +12,8 @@ export const dynamic = 'force-dynamic';
  *
  * Ordering is by how much a decision is worth, not by timestamp alone: a reply
  * from a real business beats a demo waiting for approval, which beats a build
- * the critic rejected, which beats a broken job. Within a kind, newest first.
+ * the critic rejected, which beats a build a restart killed, which beats a
+ * broken job. Within a kind, newest first.
  * There are no tabs and no filters here on purpose — a to-do list you have to
  * filter is a to-do list you do not trust.
  */

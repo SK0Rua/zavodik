@@ -56,6 +56,39 @@ const ACTIVE_PROJECT_STATES: ReadonlySet<string> = new Set([
   'pending', 'brief', 'building', 'qa',
 ]);
 
+/**
+ * Is the build this log belongs to dead, rather than slow?
+ *
+ * The distinction the live panel could not make (BEAUTIFY Laser, 2026-08-22):
+ * a container recreate mid-build leaves the last lines the agent wrote frozen
+ * on screen under a header that says the job is `stale`, forever. A frozen feed
+ * reads as a slow build, and those need opposite reactions — wait, versus press
+ * the button again.
+ *
+ * All four conditions are load-bearing:
+ *  - `active === false`, because a running job is never interrupted;
+ *  - not `queued`, because a build waiting its turn has not started, let alone
+ *    stopped — that is the one non-live status that must NOT show the banner;
+ *  - and then either the reconciler's fingerprint (`stale`), a job row that no
+ *    longer exists at all, or a project the reconciler failed.
+ *
+ * Deliberately NOT "the log has not moved in N minutes": a `pnpm build` inside
+ * a 40-minute agent session goes quiet for far longer than any threshold that
+ * would catch a real interruption, which is what `QUIET_WARN_SEC` is for. This
+ * asks the queue, which knows.
+ */
+export function isInterruptedBuild(input: {
+  active: boolean | null | undefined;
+  jobStatus: string | null | undefined;
+  projectState: string | null | undefined;
+}): boolean {
+  if (input.active !== false) return false;
+  if (input.jobStatus === 'queued') return false;
+  return input.jobStatus === 'stale'
+    || input.jobStatus == null
+    || input.projectState === 'failed';
+}
+
 export function isActiveProjectState(state: string | null | undefined): boolean {
   return ACTIVE_PROJECT_STATES.has(state ?? '');
 }

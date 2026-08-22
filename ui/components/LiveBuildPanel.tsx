@@ -21,6 +21,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { isInterruptedBuild } from '@/lib/buildPolicy';
+import { humanJobStatus } from '@/lib/humanStatus';
 
 export interface BuildLogLine {
   t: string;
@@ -41,6 +43,18 @@ interface TerminalInfo {
   url: string | null;
   writable: boolean;
   startedAt: string;
+  /**
+   * ttyd's basic-auth pair, present only when a terminal is actually being
+   * served. Roman opened the link, got a browser password prompt and had
+   * nowhere to look for the answer — the password is derived from
+   * INTERNAL_API_KEY, so it is not written down anywhere he can reach.
+   *
+   * Handing it to this page is not a widening of access: the page is already
+   * behind the console's own auth, and anyone who can read it can read the
+   * factory's internal API through the server actions on the same screen.
+   */
+  user?: string | null;
+  password?: string | null;
 }
 
 interface Poll {
@@ -166,6 +180,16 @@ export function LiveBuildPanel({ projectId, projectState }: {
   const quietSec = poll?.lastEventAgoSec ?? null;
   const isQuiet = poll?.active === true && quietSec !== null && quietSec > QUIET_WARN_SEC;
 
+  // The rule itself lives in `lib/buildPolicy.ts` so it is testable with the
+  // stack down; `poll &&` is only "we have not heard from the factory yet",
+  // which is not the same as "not interrupted" and must not draw the banner.
+  const jobStatus = poll?.jobStatus ?? null;
+  const interrupted = Boolean(poll) && isInterruptedBuild({
+    active: poll?.active,
+    jobStatus,
+    projectState: poll?.projectState,
+  });
+
   // The iteration number, read off the stage markers rather than passed in:
   // the log is the thing that knows, and a prop would go stale between polls.
   const iterationLine = [...stages].reverse().find((s) => /Ітерац/i.test(s.summary));
@@ -173,19 +197,58 @@ export function LiveBuildPanel({ projectId, projectState }: {
   // by a heartbeat, and a dead attach link reads as a broken feature.
   const terminal = poll?.active ? poll.terminal ?? null : null;
 
+  // The event tail, extracted so it can be rendered in place OR folded away —
+  // the two states this panel has once a build can be interrupted.
+  const feed = (
+    <div
+      className="mt-4 max-h-80 overflow-y-auto rounded-lg border border-line bg-paper-sunk/50 p-3 space-y-1"
+      // Newest at the bottom, like a terminal; the box scrolls, the page never does.
+      // Not `aria-live` on a finished log: it is no longer live, and announcing
+      // 300 lines when a disclosure opens is the opposite of helpful.
+      {...(interrupted ? {} : { 'aria-live': 'polite' as const })}
+    >
+      {visible.map((l, i) => {
+        const r = renderLine(l);
+        return (
+          <div key={`${l.t}-${i}`} className="flex gap-2 text-sm leading-snug">
+            <span className="text-ink-mute tabular-nums shrink-0 w-12">{clockTime(l.t)}</span>
+            <span className="shrink-0 w-4 text-ink-mute">{r.glyph}</span>
+            <span className={`min-w-0 flex-1 break-words ${r.tone}`}>{r.text}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+
   return (
     <section className="card p-5 sm:p-6">
       <div className="flex items-baseline justify-between gap-3 flex-wrap">
         <h3 className="label mb-0">Збірка наживо</h3>
         <span className="text-sm text-ink-mute">
+          {/* `завдання: stale` was the raw enum leaking through — the one word
+              on this header, in English, naming a state Roman has no reason to
+              know. `humanJobStatus` is the map the rest of the console reads. */}
           {poll?.active
             ? `йде ${poll.runningForSec ? humanDuration(poll.runningForSec) : '…'}`
-            : poll?.jobStatus
-              ? `завдання: ${poll.jobStatus}`
-              : 'дивлюсь…'}
-          {iterationLine && ` · ${iterationLine.summary.split(':')[0]}`}
+            : interrupted
+              ? 'перервано'
+              : jobStatus
+                ? humanJobStatus(jobStatus).text.toLowerCase()
+                : 'дивлюсь…'}
+          {iterationLine && !interrupted && ` · ${iterationLine.summary.split(':')[0]}`}
         </span>
       </div>
+
+      {/* The build is dead. This replaces the feed rather than sitting above it,
+          because a live-looking log is the thing that misled Roman for hours. */}
+      {interrupted && (
+        <div className="mt-3 rounded-lg border border-dot-wait/40 bg-dot-wait/10 px-3 py-2.5">
+          <p className="text-sm text-dot-wait">
+            Збірку перервано перезапуском сервера. Запусти її заново кнопкою вгорі картки —
+            усе зібране про бізнес на місці.
+          </p>
+        </div>
+      )}
 
       {/* The one row that answers "чи воно ще живе?". Shown only when it is
           genuinely worrying — a panel that always warns warns about nothing. */}
@@ -222,6 +285,19 @@ export function LiveBuildPanel({ projectId, projectState }: {
               </a>
             )}
           </div>
+
+          {/* ttyd asks for a password in a native browser prompt, and the
+              password is derived from INTERNAL_API_KEY — so without this line
+              the link opens onto a dialog nobody can answer. Selectable
+              monospace, because it is going to be copied. */}
+          {terminal.url && terminal.password && (
+            <p className="mt-1.5 text-sm text-ink-mute">
+              Термінал спитає пароль: логін{' '}
+              <span className="font-mono text-ink select-all">{terminal.user ?? 'roman'}</span>
+              {' · '}пароль{' '}
+              <span className="font-mono text-ink select-all break-all">{terminal.password}</span>
+            </p>
+          )}
           {!terminal.url && (
             <p className="mt-1.5 text-sm text-ink-mute">
               Веб-термінал не налаштований. Підключитись можна по SSH:{' '}
@@ -258,7 +334,7 @@ export function LiveBuildPanel({ projectId, projectState }: {
         </ol>
       )}
 
-      {lines.length === 0 && !error && (
+      {lines.length === 0 && !error && !interrupted && (
         <p className="mt-3 text-sm text-ink-mute">
           Поки що нічого не записано. Якщо збірка щойно стала в чергу — перші рядки зʼявляться
           за хвилину.
@@ -266,40 +342,42 @@ export function LiveBuildPanel({ projectId, projectState }: {
       )}
 
       {visible.length > 0 && (
-        <>
-          <div
-            className="mt-4 max-h-80 overflow-y-auto rounded-lg border border-line bg-paper-sunk/50 p-3 space-y-1"
-            // Newest at the bottom, like a terminal; the box scrolls, the page never does.
-            aria-live="polite"
-          >
-            {visible.map((l, i) => {
-              const r = renderLine(l);
-              return (
-                <div key={`${l.t}-${i}`} className="flex gap-2 text-sm leading-snug">
-                  <span className="text-ink-mute tabular-nums shrink-0 w-12">{clockTime(l.t)}</span>
-                  <span className="shrink-0 w-4 text-ink-mute">{r.glyph}</span>
-                  <span className={`min-w-0 flex-1 break-words ${r.tone}`}>{r.text}</span>
-                </div>
-              );
-            })}
-          </div>
-          {lines.length > visible.length && (
-            <button type="button" className="btn-quiet btn-sm mt-2" onClick={() => setShowAll(true)}>
-              показати всі {lines.length} подій
-            </button>
-          )}
-        </>
+        // An interrupted build's log is EVIDENCE, not a feed: it is how far the
+        // agent got before the container went away, worth having and worth not
+        // looking like something still being written to. So it folds away, and
+        // its <summary> says which log it is.
+        interrupted ? (
+          <details className="mt-4">
+            <summary className="disclosure">показати лог перерваної збірки</summary>
+            <div className="mt-2">{feed}</div>
+          </details>
+        ) : (
+          <>
+            {feed}
+            {lines.length > visible.length && (
+              <button type="button" className="btn-quiet btn-sm mt-2" onClick={() => setShowAll(true)}>
+                показати всі {lines.length} подій
+              </button>
+            )}
+          </>
+        )
       )}
 
-      <p className="mt-3 text-sm text-ink-mute">
-        {/* This used to say «тільки перегляд» unconditionally. With a writable
-            terminal that is simply untrue, and a false reassurance about what
-            can change a client's site is worse than none. */}
-        {terminal?.writable
-          ? 'Цей список — тільки перегляд. Термінал вище відкритий на запис.'
-          : 'Тільки перегляд — звідси нічого не запускається і не зупиняється.'}
-        {projectState && ` Стан проєкту: ${projectState}.`}
-      </p>
+      {/* The "read-only" reassurance only makes sense while there is something
+          live to read. On an interrupted build the banner has already said what
+          this panel is, and repeating «звідси нічого не запускається» under it
+          reads as a refusal rather than a description. */}
+      {!interrupted && (
+        <p className="mt-3 text-sm text-ink-mute">
+          {/* This used to say «тільки перегляд» unconditionally. With a writable
+              terminal that is simply untrue, and a false reassurance about what
+              can change a client's site is worse than none. */}
+          {terminal?.writable
+            ? 'Цей список — тільки перегляд. Термінал вище відкритий на запис.'
+            : 'Тільки перегляд — звідси нічого не запускається і не зупиняється.'}
+          {projectState && ` Стан проєкту: ${projectState}.`}
+        </p>
+      )}
     </section>
   );
 }
