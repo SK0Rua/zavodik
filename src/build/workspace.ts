@@ -258,6 +258,9 @@ field, and the pipeline rejects a result without it):
    direction was chosen against. Note the type scale, the crop language, how much air it uses.
 2. Every image in \`references/gallery/\` (if present) — current real-world layouts fetched for
    THIS business. Note one compositional idea per image worth keeping or rejecting.
+   Where a pair exists (\`N.webp\` + \`N-full.webp\`), the \`-full\` file is the one that matters:
+   it is the page top to bottom — study the section rhythm, how density changes as you scroll,
+   and how the page ends. The short file is only the masthead.
 3. The 3-5 strongest photos in \`public/assets/\` — the actual material you are designing WITH.
    Note their light, tone and orientation: the page must be composed around what they really
    look like, not around what the brief says about them.

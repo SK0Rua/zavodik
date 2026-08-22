@@ -265,6 +265,14 @@ export interface DownloadedRef extends GalleryEntry {
    * builder agent, which sees it at that path.
    */
   file: string;
+  /**
+   * The FULL-PAGE screenshot, when it downloaded. The preview is a 720x1080
+   * crop of the top — a hero, not a layout. Composition, section rhythm and
+   * how a page ends are exactly what a reference is for, and the first version
+   * skipped these "because they are tall": the agent was studying mastheads
+   * and calling it inspiration.
+   */
+  fullFile?: string;
 }
 
 /**
@@ -302,12 +310,29 @@ export async function downloadRefs(
     }
     // The CDN serves `format=auto` (webp in practice); the extension follows the
     // content type so the builder agent's image reader is not lied to.
-    const ext = res.contentType.includes('png') ? 'png'
-      : res.contentType.includes('webp') ? 'webp'
+    const extOf = (contentType: string): string => contentType.includes('png') ? 'png'
+      : contentType.includes('webp') ? 'webp'
       : 'jpg';
-    const name = `${saved.length + 1}.${ext}`;
+    const n = saved.length + 1;
+    const name = `${n}.${extOf(res.contentType)}`;
     await writeFile(path.join(galleryDir, name), res.buffer);
-    saved.push({ ...entry, file: `references/gallery/${name}` });
+
+    // The whole page, not just its top. Best-effort like everything here: a
+    // full screenshot too tall for the byte cap degrades to preview-only.
+    let fullFile: string | undefined;
+    if (entry.fullScreenshotUrl && entry.fullScreenshotUrl !== entry.previewUrl) {
+      const full = await safeFetchImage(entry.fullScreenshotUrl, {
+        maxBytes: 8 * 1024 * 1024,
+        timeoutMs: config.landingGallery.timeoutMs,
+      });
+      if (!('blocked' in full)) {
+        const fullName = `${n}-full.${extOf(full.contentType)}`;
+        await writeFile(path.join(galleryDir, fullName), full.buffer);
+        fullFile = `references/gallery/${fullName}`;
+      }
+    }
+
+    saved.push({ ...entry, file: `references/gallery/${name}`, fullFile });
   }
 
   if (saved.length === 0) return saved;
@@ -330,6 +355,7 @@ export function renderIndexMd(refs: DownloadedRef[]): string {
       `## ${r.file}`,
       '',
       `- **${r.title}**${r.builder ? ` (${r.builder})` : r.framework ? ` (${r.framework})` : ''}`,
+      ...(r.fullFile ? [`- Full page: \`${r.fullFile}\` — the layout top to bottom; the file above is only the masthead crop.`] : []),
       `- Site: ${r.sourceUrl}`,
       `- Gallery: ${r.galleryUrl}`,
       `- Fetched for the query: \`${r.query}\``,
