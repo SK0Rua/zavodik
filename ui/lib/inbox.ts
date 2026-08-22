@@ -276,11 +276,31 @@ async function loadJobProblems(excludeBusinessIds: Set<string>): Promise<JobProb
     .orderBy(desc(schema.workflowJobs.createdAt))
     .limit(400);
 
+  // A failure is only a to-do while it is the LAST WORD on that stage for that
+  // business. «Повторити» cancels the clicked row and enqueues a fresh one —
+  // which lets an OLDER failed row of the same stage resurface as "the newest
+  // failed", so Roman saw «Крок упав · спроб: 2» while the retried build was
+  // running, pressed «Повторити» again, and re-built a demo that had already
+  // succeeded (measured on the server, 2026-08-22: rows failed → cancelled →
+  // cancelled → succeeded → running, and the card showed the first one).
+  // One query answers it: the newest row per (stage, business) regardless of
+  // status; a candidate survives only if that newest row is itself.
+  const newest = all.length
+    ? (await db.execute(sql`
+        select distinct on (job_type, coalesce(business_id, campaign_id, 'global'))
+          id, job_type, coalesce(business_id, campaign_id, 'global') as scope
+        from workflow_jobs
+        order by job_type, coalesce(business_id, campaign_id, 'global'), created_at desc
+      `)).rows as Array<{ id: number; job_type: string; scope: string }>
+    : [];
+  const newestIdByKey = new Map(newest.map((r) => [`${r.job_type}:${r.scope}`, Number(r.id)]));
+
   const seen = new Set<string>();
   const jobs = all.filter((j) => {
     if (!isActionableJob(j.jobType) && j.createdAt < since) return false;
     if (j.businessId && excludeBusinessIds.has(j.businessId)) return false;
     const key = `${j.jobType}:${j.businessId ?? j.campaignId ?? 'global'}`;
+    if (newestIdByKey.get(key) !== j.id) return false;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
