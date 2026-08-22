@@ -121,10 +121,18 @@ async function sendKickoffVerified(
   }
   // Say what IS on screen — the next blocking dialog we have not met yet
   // should diagnose itself from the error, not require exec-ing into the box.
-  const tail = (await pane().catch(() => ''))
-    .split('\n').map((l) => l.trim()).filter(Boolean).slice(-8).join(' | ');
+  const raw = await pane().catch(() => '');
+  const tail = raw.split('\n').map((l) => l.trim()).filter(Boolean).slice(-8).join(' | ');
+  // The two blockers we HAVE met get named, with the action that clears them —
+  // this error surfaces on the inbox card, where «подивись у tmux» is not a
+  // step Roman should need.
+  const hint = /select login method|sign in|log in to continue|api key/i.test(raw)
+    ? ' CLI просить логін — токен Claude Code не дійшов або недійсний: перепідключи його в /settings → Акаунти.'
+    : /choose the text style|dark mode.*light mode|to get started/i.test(raw)
+      ? ' CLI показує первинний майстер налаштування — образ factory-build старий (фікс preTrustWorkspace ще не задеплоєний): онови деплой.'
+      : '';
   throw new Error(
-    `tmux session ${session}: kickoff line never reached the input box. On screen: ${tail || '(порожня панель)'}`,
+    `tmux session ${session}: kickoff line never reached the input box.${hint} On screen: ${tail || '(порожня панель)'}`,
   );
 }
 
