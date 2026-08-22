@@ -389,14 +389,15 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
         </Panel>
       )}
 
-      {/* The wow-video brief + upload slot. Rendered whenever a REAL photo
-          exists to derive video from — before the first build too, because the
-          best moment to upload is exactly then. */}
-      {heroPhotoAsset && (
+      {/* The wow-video brief + upload slot. Rendered ONLY once the art
+          director has written the brief (first build done): before that there
+          is no design, no prompt, and nothing for Roman to act on — an empty
+          form here was noise (2026-08-22). */}
+      {heroVideoBrief && (
         <HeroVideoPanel
           businessId={biz.id}
           brief={heroVideoBrief}
-          heroPhoto={{
+          heroPhoto={heroPhotoAsset && {
             file: heroPhotoAsset.file,
             url: `/api/object?bucket=assets&key=${encodeURIComponent(heroPhotoAsset.objectKey)}`,
           }}

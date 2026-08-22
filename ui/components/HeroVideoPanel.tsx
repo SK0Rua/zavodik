@@ -19,11 +19,11 @@ import { runWithToast } from '@/lib/toast';
 export function HeroVideoPanel({ businessId, brief, heroPhoto, currentClip }: {
   businessId: string;
   /**
-   * The art-director-authored i2v prompt from the design contract, or null
-   * before the first build (the brief only exists once a direction is chosen —
-   * a generic pre-design prompt is exactly what Roman rejected).
+   * The art-director-authored i2v prompt from the design contract. The panel
+   * is not rendered at all until it exists (Roman, 2026-08-22: «Ще немає ні
+   * дизайну, ні промпта, нічого. Нахуй мені бачити цей блок?»).
    */
-  brief: string | null;
+  brief: string;
   /** The start-frame photo: workspace file name + a downloadable URL. */
   heroPhoto: { file: string; url: string } | null;
   /** The newest hero_clip asset, if one exists. */
@@ -34,7 +34,6 @@ export function HeroVideoPanel({ businessId, brief, heroPhoto, currentClip }: {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const copy = () => {
-    if (!brief) return;
     void navigator.clipboard.writeText(brief).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -54,35 +53,24 @@ export function HeroVideoPanel({ businessId, brief, heroPhoto, currentClip }: {
       <h3 className="label mb-0">Відео для hero</h3>
       <p className="text-sm text-ink-mute mt-2 max-w-[70ch]">
         {uploaded
-          ? `Зараз демо використовує ЗАВАНТАЖЕНЕ відео (${currentClip!.capturedAt}). Новий файл замінить його в наступній збірці.`
-          : currentClip
-            ? 'Зараз демо використовує автоматичний Ken Burns з реального фото. Хочеш wow-відео — згенеруй за брифом нижче і завантаж: наступна збірка підхопить його сама.'
-            : 'Кліпа ще немає — збірка зробить автоматичний Ken Burns. Хочеш wow-відео — згенеруй за брифом нижче і завантаж до збірки.'}
+          ? `Зараз використовується завантажене відео (${currentClip!.capturedAt}). Новий файл замінить його в наступній збірці.`
+          : 'Бриф від арт-директора під обраний дизайн. Згенеруй, завантаж — наступна збірка підхопить. Без відео буде автоматичний Ken Burns.'}
       </p>
 
-      {brief ? (
-        <>
-          <div className="mt-3 rounded-lg border border-line bg-paper-sunk/50 p-3">
-            <pre className="text-sm whitespace-pre-wrap font-mono text-ink-soft">{brief}</pre>
-          </div>
+      <div className="mt-3 rounded-lg border border-line bg-paper-sunk/50 p-3">
+        <pre className="text-sm whitespace-pre-wrap font-mono text-ink-soft">{brief}</pre>
+      </div>
 
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button type="button" className="btn-outline btn-sm" onClick={copy}>
-              {copied ? 'Скопійовано' : 'Скопіювати промпт'}
-            </button>
-            {heroPhoto && (
-              <a className="btn-quiet btn-sm no-underline" href={heroPhoto.url} download>
-                Стартовий кадр: {heroPhoto.file} ↓
-              </a>
-            )}
-          </div>
-        </>
-      ) : (
-        <p className="mt-3 text-sm text-ink-mute max-w-[70ch]">
-          Промпт для генерації напише арт-директор під обраний дизайн — він з&apos;явиться тут
-          після першої збірки. Завантажити готовий mp4 можна вже зараз: збірка підхопить його.
-        </p>
-      )}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button type="button" className="btn-outline btn-sm" onClick={copy}>
+          {copied ? 'Скопійовано' : 'Скопіювати промпт'}
+        </button>
+        {heroPhoto && (
+          <a className="btn-quiet btn-sm no-underline" href={heroPhoto.url} download>
+            Стартовий кадр: {heroPhoto.file} ↓
+          </a>
+        )}
+      </div>
 
       <form action={upload} className="mt-4 flex flex-wrap items-center gap-2">
         <input
@@ -95,10 +83,6 @@ export function HeroVideoPanel({ businessId, brief, heroPhoto, currentClip }: {
           {pending ? 'Завантажую…' : 'Завантажити mp4'}
         </button>
       </form>
-      <p className="text-sm text-ink-mute mt-2 max-w-[70ch]">
-        Файл позначається як AI-згенерований і ніколи не видається за реальне відео бізнесу.
-        Стартовим кадром має бути фото вище — кліп анімує реальність, а не вигадує сцену.
-      </p>
     </section>
   );
 }
