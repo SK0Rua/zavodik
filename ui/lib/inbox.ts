@@ -171,10 +171,16 @@ async function loadInterruptedBuilds(): Promise<InterruptedBuildItem[]> {
           and w.job_type in ('content-and-design', 'build-site', 'visual-qa', 'deploy-demo')
           and w.status in ('queued', 'running', 'retry_wait')
       ) as "busy",
+      -- ANY non-failed project supersedes the failure. This was an IN-list of
+      -- states and it missed needs_human_review, so the moment a rebuilt demo
+      -- reached the critic's verdict, yesterday's killed project popped back up
+      -- NEXT TO the review card — «в сенсі перервано? Воно ж дойшло до кінця»
+      -- (Roman, 2026-08-22). An allowlist of live states has to be updated every
+      -- time one is added; «не failed» is the actual meaning and cannot drift.
       exists (
         select 1 from site_projects q
         where q.business_id = p.business_id
-          and q.state in ('pending', 'brief', 'building', 'qa', 'ready', 'deployed')
+          and q.state <> 'failed'
       ) as "superseded"
     from site_projects p
     join businesses b on b.id = p.business_id
