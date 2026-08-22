@@ -78,7 +78,10 @@ RUBRIC
 - photoTreatment: are real photographs given room and cropped well, or squeezed into small equal
   boxes? Is the hero photo-led? Are crops awkward (heads cut, subject dead-centre by accident)?
 - motionAppropriateness: judge from what is visible — anything that looks mid-animation, cut off,
-  or half-faded in a static screenshot is a defect.
+  or half-faded in a static screenshot is a defect. On a hero backed by VIDEO, compare its crop
+  across the motion frames: the file already pans/zooms, so if the framing ALSO shifts with
+  scroll or time beyond that, two motion sources are stacked — file it as high severity
+  ("compounded hero motion"), it reads as a shaking background at full speed.
 
 ANTI-SLOP BAN-LIST. Any of these present is an issue with category "slop":
 purple/violet-to-blue gradients; gradient text on a headline; three identical cards in a row;

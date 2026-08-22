@@ -412,6 +412,11 @@ six mechanics; taking all of them produces a showreel, not a business page.
   render and any invisible text is a high-severity failure.
 - At least 3 of the components you import must be visible in the DOM *and* animating. Importing a
   component you never render scores nothing.
+- Magnetic / cursor-follow effects are for SMALL, compact controls — an icon, a pill CTA. Never
+  attach them to headline-scale text, a phone number, or anything wider than ~240px: a large
+  element chasing the cursor reads as a glitch, not a delight (shipped and rejected, 2026-08-22:
+  a 6rem phone number on \`MagneticButton\`). Screenshot QA cannot see cursor effects, so nothing
+  downstream catches this — the rule here is the only gate.
 
 ### Hero media
 
@@ -419,7 +424,12 @@ ${heroMedia.kind === 'clip'
   ? `A generated hero clip exists at \`/${heroMedia.file}\` (${heroMedia.durationSec ?? '?'}s, derived from the real photo \`${heroMedia.sourceFile}\`).
 Use it as a muted, looping, \`playsInline\` background video with the real photo as its \`poster\`.
 Under \`prefers-reduced-motion: reduce\` show the still poster instead — do not autoplay.
-It is AI-derived motion over a real photo: never caption it as raw footage of the business.`
+It is AI-derived motion over a real photo: never caption it as raw footage of the business.
+**ONE MOTION SOURCE PER HERO.** The clip already moves — a slow pan/zoom is baked into the
+file. Do NOT layer anything on top: no scroll-scrub scale, no parallax, no transform tweens on
+the \`<video>\` or its wrapper, and no CSS upscale beyond what \`object-fit: cover\` needs.
+A doubly-animated, upscaled clip reads as a shaking background (shipped and rejected,
+2026-08-22: baked pan/zoom + GSAP scroll-scale 1.04→1.13 + \`scale-[1.95]\` on one hero).`
   : heroMedia.kind === 'ken-burns'
   ? `No video file. Animate the REAL photo \`${heroMedia.sourceFile}\` with a slow Ken Burns move
 (CSS or GSAP, transform only, ~${heroMedia.durationSec ?? 20}s, subtle). Under reduced motion render it perfectly static.
