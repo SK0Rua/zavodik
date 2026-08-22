@@ -119,12 +119,14 @@ export function galleryStagingDir(businessId: string): string {
   return path.join(path.resolve('sites'), businessId, 'gallery');
 }
 
-async function galleryContext(snapshot: BuildSnapshot): Promise<DownloadedRef[]> {
+async function galleryContext(snapshot: BuildSnapshot, niche: string): Promise<DownloadedRef[]> {
   if (!config.landingGallery.enabled) return [];
 
   const queries = buildQueries({
     category: snapshot.category,
     moodWords: snapshot.brand.mood?.words ?? null,
+    // The Latin word that survives a localized business — see NICHE_QUERY_WORDS.
+    niche,
   });
   const entries = await searchInspiration(queries, { limit: config.landingGallery.maxRefs });
   if (entries.length === 0) {
@@ -360,7 +362,7 @@ Rules:
   // ── 2. Three structurally different art directions ────────────────────────
   const { references, components, referenceNames } = await designContext(niche);
   const motion = await motionContext({ category: snapshot.category, name: snapshot.name });
-  const galleryRefs = await galleryContext(snapshot);
+  const galleryRefs = await galleryContext(snapshot, niche);
   const siblings = await siblingDesigns(biz.campaignId, businessId);
   const brandText = brandBlock(snapshot);
   log.info('brand context for design', {

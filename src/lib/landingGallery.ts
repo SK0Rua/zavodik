@@ -222,9 +222,24 @@ export async function searchInspiration(
  * Words shorter than four characters are dropped: `"a"` matches 1613 entries and
  * would return the corpus's four newest sites for every business alike.
  */
+/**
+ * English corpus words per campaign niche — the query source that SURVIVES a
+ * non-Latin business. Measured on GR-patras (2026-08-22): the mood words and
+ * category were Greek, the `[^a-z]` strip erased them all, only the `design`
+ * floor remained — and every Greek salon got the same four SaaS landing pages
+ * as "inspiration", which is the exact pull towards a startup template the
+ * prompt warns against. The niche comes from the campaign row and is always
+ * a Latin word we chose ourselves.
+ */
+const NICHE_QUERY_WORDS: Record<string, string[]> = {
+  beauty: ['beauty', 'salon', 'studio', 'wellness'],
+};
+
 export function buildQueries(business: {
   category?: string | null;
   moodWords?: string[] | null;
+  /** Campaign niche — the reliable Latin fallback when the business is localized. */
+  niche?: string | null;
 }, max = 3): string[] {
   const words: string[] = [];
   const push = (raw: string) => {
@@ -236,6 +251,8 @@ export function buildQueries(business: {
 
   for (const m of business.moodWords ?? []) for (const part of m.split(/\s+/)) push(part);
   for (const part of (business.category ?? '').split(/[^a-zA-Z]+/)) push(part);
+  const niche = (business.niche ?? '').toLowerCase();
+  for (const w of NICHE_QUERY_WORDS[niche] ?? [niche]) push(w);
   push('design'); // the floor: always matches, so the block is rarely empty
   return words.slice(0, max);
 }
