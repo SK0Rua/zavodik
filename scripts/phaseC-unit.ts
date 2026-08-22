@@ -116,6 +116,20 @@ function direction(over: Partial<ArtDirection> = {}): ArtDirection {
     preloader: true,
     typeAsDesign: 'display serif at 9vw against 13px letterspaced caps',
     photoGrade: 'grade-warm',
+    // Contract v2/v3 required fields (signature + sceneMap + the art-director
+    // video brief with its named real start frame) — the fixture must satisfy
+    // the same vetoes production directions do.
+    signature: 'the amber seam dividing hero from services',
+    sceneMap: {
+      system: 'power2.out everywhere, 0.6/0.9/1.2s scale',
+      scenes: [
+        { section: 'hero', trigger: 'load', motion: 'headline split rises', handoff: 'seam wipes down' },
+        { section: 'services', trigger: 'scrub', motion: 'rows slide in', handoff: 'fade to contact' },
+        { section: 'contact', trigger: 'enter', motion: 'type settles', handoff: 'page end' },
+      ],
+    },
+    heroVideoBrief: '8-second landscape clip from the attached photograph; one slow push-in, warm key light, nothing added or morphed.',
+    heroVideoStartFrame: 'assets/hero-abc.jpg',
     ...over,
   };
 }

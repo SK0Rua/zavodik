@@ -25,7 +25,7 @@ import { db, schema } from '../db/client.js';
 import { getObject, putRaw } from '../lib/storage.js';
 import { runAgent } from '../agents/agent.js';
 import { transition } from '../orchestrator/statuses.js';
-import { enqueue, type JobPayload } from '../orchestrator/queue.js';
+import { enqueue, NeedsHumanError, type JobPayload } from '../orchestrator/queue.js';
 import { buildSnapshot, primaryContact, realPhotos, type BuildSnapshot } from '../build/snapshot.js';
 import {
   ArtDirectionsSchema, ContentBriefSchema, DESIGN_CONTRACT_VERSION, DirectionCritiqueSchema,
@@ -370,7 +370,12 @@ function assetInventory(snapshot: BuildSnapshot): string {
  * Pure with respect to pipeline state: it reads the DB and calls agents, and
  * writes nothing.
  */
-export async function runStage9Calls(businessId: string, snapshot: BuildSnapshot): Promise<{
+export async function runStage9Calls(
+  businessId: string,
+  snapshot: BuildSnapshot,
+  /** Why the previous stage-9 attempt was rejected by the design gate, if it was. */
+  retryFeedback?: string,
+): Promise<{
   brief: ContentBrief;
   directions: { directions: ArtDirection[] };
   critique: { scores: DirectionScore[] };
@@ -497,7 +502,11 @@ face are on the anti-slop ban-list and are vetoed by code.`;
   const directions = await runAgent(
     'design-directions',
     `You are an art director producing THREE structurally different directions for a demo site.
-
+${retryFeedback ? `
+A PREVIOUS attempt at these directions was REJECTED by the deterministic design gate.
+The reasons, verbatim — do not repeat these failures:
+${retryFeedback}
+` : ''}
 "Structurally different" means different LAYOUT ARCHITECTURE — not three palettes of the same
 page. Different hero device, different section rhythm, different relationship between type and
 image. If two directions could be swapped by editing CSS variables, you have failed.
@@ -789,7 +798,10 @@ export async function contentDesignHandler(payload: JobPayload): Promise<void> {
   await transition(businessId, 'site_in_progress', 'content-design-worker');
 
   const snapshot = await buildSnapshot(businessId);
-  const { brief, directions, critique, usage, motionSlugs } = await runStage9Calls(businessId, snapshot);
+  const designAttempt = (payload.designAttempt as number | undefined) ?? 1;
+  const { brief, directions, critique, usage, motionSlugs } = await runStage9Calls(
+    businessId, snapshot, (payload.designFeedback as string | undefined) ?? undefined,
+  );
 
   await logStage(buildLogPath(businessId), 'Критик оцінив напрямки — рубрика обирає переможця', 'content-design');
   // ── Deterministic decision ────────────────────────────────────────────────
@@ -805,13 +817,40 @@ export async function contentDesignHandler(payload: JobPayload): Promise<void> {
     wow: `${verdict.chosenWow.total}/${WOW_MAX}`,
     wowPassed: verdict.chosenWow.passed,
   });
-  if (!verdict.chosenWow.passed) {
-    // Not fatal: all three directions can be weak, and the build task carries the
-    // gap forward so the builder aims higher. Stage 11 still fails a page that
-    // arrives without motion, so this cannot ship quietly.
-    log.warn('winning direction does not clear the wow floor', {
-      businessId, chosen: verdict.chosen.name, reasons: verdict.chosenWow.reasons,
+  // ── The design gate (Roman's review, 2026-08-23): a contract that fails
+  // here must NOT ride into a 40-90 minute build. One retry of stage 9 with
+  // the gate's own reasons as feedback; a second failure is a fact about this
+  // business's material, and a human should look before more money burns.
+  const winnerVetoes = verdict.ranking[0]?.vetoes ?? [];
+  const gateReasons = [
+    ...(!verdict.chosenWow.passed ? verdict.chosenWow.reasons : []),
+    ...winnerVetoes,
+  ];
+  if (gateReasons.length > 0 && designAttempt === 1) {
+    log.warn('design gate rejected the winning direction; retrying stage 9 once', {
+      businessId, chosen: verdict.chosen.name, reasons: gateReasons,
     });
+    await logStage(
+      buildLogPath(businessId),
+      `Дизайн-гейт відхилив «${verdict.chosen.name}» (${gateReasons.length} причин) — арт-директор пробує ще раз`,
+      'content-design',
+    );
+    await enqueue('content-and-design', {
+      businessId, campaignId: biz.campaignId,
+      designAttempt: 2,
+      designFeedback: gateReasons.map((r) => `- ${r}`).join('\n'),
+      idempotencyKey: `content-and-design:${businessId}:gate-retry:${Date.now()}`,
+    });
+    return;
+  }
+  if (!verdict.chosenWow.passed && designAttempt > 1) {
+    // Vetoes alone still build (the builder resolves them, and BUILD-TASK
+    // carries them as «Open vetoes you MUST resolve»); a wow floor missed
+    // TWICE does not — that concept costs a full build to repair.
+    throw new NeedsHumanError(
+      `Дизайн-гейт відхилив обидві спроби: ${verdict.chosenWow.reasons.join('; ')}. `
+      + 'Подивись на матеріал бізнесу — можливо, бракує фото або айдентики для сильного напрямку.',
+    );
   }
 
   // ── Freeze everything ─────────────────────────────────────────────────────
