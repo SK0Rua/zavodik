@@ -118,8 +118,10 @@ function Outcome({ outcome, prefix }: { outcome: CheckOutcome | undefined; prefi
  * QR, forms, instructions — expands under the one account being worked on,
  * one at a time (an accordion), because nobody connects two services at once.
  */
-function AccountRow({ title, blurb, verdict, checkedAt, open, onToggle, actions, children, footnote, how }: {
+function AccountRow({ title, identity, blurb, verdict, checkedAt, open, onToggle, actions, children, footnote, how }: {
   title: string;
+  /** Human identity for the connected account, shown without opening the row. */
+  identity?: string | null;
   blurb: string;
   verdict: Verdict;
   checkedAt?: string | null;
@@ -147,6 +149,9 @@ function AccountRow({ title, blurb, verdict, checkedAt, open, onToggle, actions,
         <span aria-hidden className={`text-ink-mute shrink-0 transition-transform duration-150 ${open ? 'rotate-90' : ''}`}>▸</span>
         <span className="text-sm font-medium text-ink shrink-0">{title}</span>
         <Status tone={verdict.tone}>{verdict.label}</Status>
+        {identity && (
+          <span className="min-w-0 truncate text-sm text-ink-soft" title={identity}>{identity}</span>
+        )}
         <span className="ml-auto hidden sm:inline"><CheckedAgo at={checkedAt} /></span>
       </button>
 
@@ -411,11 +416,12 @@ function useCliFlow({ provider, needsCode, onDone }: {
  * green status. Quiet, not hidden — see rule 3 in the block comment above.
  */
 function CliAccountRow({
-  provider, title, blurb, verdict, checkedAt, needsCode, canDisconnect,
+  provider, title, identity, blurb, verdict, checkedAt, needsCode, canDisconnect,
   open, onToggle, onResult, onDisconnect, footnote, how,
 }: {
   provider: 'claude' | 'codex';
   title: string;
+  identity?: string | null;
   blurb: string;
   verdict: Verdict;
   checkedAt: string | null;
@@ -433,6 +439,7 @@ function CliAccountRow({
   return (
     <AccountRow
       title={title}
+      identity={identity}
       blurb={blurb}
       verdict={verdict}
       checkedAt={checkedAt}
@@ -748,6 +755,15 @@ export function ConnectedAccounts({ accounts, checks, checksError }: {
   const smtp = v('smtp', accounts.gmail);
   const imap = v('imap', accounts.gmail);
   const gmail = gmailVerdict(smtp, imap);
+  // Keep the known identity while a refresh is in flight, but clear it when a
+  // fresh check says the session is no longer valid. A nullish fallback here
+  // would otherwise pair a red «помилка» with the stale cached email.
+  const codexEmailValue = live.codex
+    ? live.codex.pending
+      ? checks.codex?.detail?.accountEmail
+      : live.codex.detail?.accountEmail
+    : checks.codex?.detail?.accountEmail;
+  const codexEmail = typeof codexEmailValue === 'string' ? codexEmailValue : null;
 
   // WAHA drives the QR: the check reports `needsQr` when the session is
   // unpaired, and the QR appears right there instead of on another port.
@@ -803,6 +819,7 @@ export function ConnectedAccounts({ accounts, checks, checksError }: {
           provider="codex"
           {...row('codex')}
           title="Codex CLI"
+          identity={codexEmail}
           blurb="Генерація зображень (gen-image) по підписці ChatGPT."
           verdict={codex}
           checkedAt={at('codex')}

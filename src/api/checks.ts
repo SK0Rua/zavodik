@@ -22,6 +22,7 @@ import { getSetting, masterKeyConfigured, settingSource } from '../lib/settings.
 import * as waha from '../channels/waha.js';
 import { claudeCodeRuntime } from '../agents/claudeCodeRuntime.js';
 import { z } from 'zod';
+import { readCodexAccountEmail } from './codexAccount.js';
 
 export type CheckKind =
   | 'claude' | 'codex' | 'telegram' | 'telegram-send' | 'smtp' | 'imap' | 'waha';
@@ -110,15 +111,18 @@ async function checkCodex(): Promise<CheckResult> {
   }
   const text = out.trim();
   const loggedIn = code === 0 && !/not logged in|logged out|no credentials/i.test(text);
+  const accountEmail = loggedIn ? await readCodexAccountEmail() : null;
   return {
     ok: loggedIn,
     message: loggedIn
-      ? `Codex залогінений: ${text.slice(0, 160) || 'ok'}`
+      ? accountEmail
+        ? `Codex залогінений як ${accountEmail}.`
+        : `Codex залогінений: ${text.slice(0, 160) || 'ok'}`
       // The remedy is the «Підключити» button on this very card (it runs
       // `codex login --device-auth` in the factory container), so the message
       // must not send Roman to a terminal for something the page now does.
       : 'Codex не залогінений — натисни «Підключити».',
-    detail: { bin, exit: code, output: text.slice(0, 300) },
+    detail: { accountEmail, bin, exit: code, output: text.slice(0, 300) },
   };
 }
 

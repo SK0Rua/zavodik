@@ -11,6 +11,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { stripAnsi, extractUrl, extractDeviceCode, tidyCliReason } from '../src/api/accounts.js';
+import { codexEmailFromAuth } from '../src/api/codexAccount.js';
 
 let failures = 0;
 
@@ -124,6 +125,23 @@ console.log('codex login --device-auth (plain stdout)');
   const url = extractUrl(clean, ['openai.com', 'chatgpt.com']);
   check('device URL extracted', url === 'https://auth.openai.com/codex/device', String(url));
   check('one-time code extracted', extractDeviceCode(clean) === 'XD37-SXIBN', String(extractDeviceCode(clean)));
+}
+
+console.log('codex account identity');
+{
+  const payload = Buffer.from(JSON.stringify({
+    sub: 'user_123',
+    email: 'roman@example.com',
+    email_verified: true,
+  })).toString('base64url');
+  const auth = { tokens: { id_token: `header.${payload}.signature`, access_token: 'secret' } };
+
+  check('email extracted from the id token', codexEmailFromAuth(auth) === 'roman@example.com');
+  check('malformed id token is ignored', codexEmailFromAuth({ tokens: { id_token: 'not-a-jwt' } }) === null);
+  check('missing email is ignored', codexEmailFromAuth({ tokens: { id_token: 'header.e30.signature' } }) === null);
+  check('non-email claim is ignored', codexEmailFromAuth({
+    tokens: { id_token: `header.${Buffer.from(JSON.stringify({ email: 'not-an-email' })).toString('base64url')}.signature` },
+  }) === null);
 }
 
 // ─── Regression: the real thing, byte for byte ───────────────────────────────
