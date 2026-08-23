@@ -94,6 +94,25 @@ async function settingRows(): Promise<Map<string, Row>> {
  */
 export async function loadSettingViews(): Promise<SettingView[]> {
   const rows = await settingRows();
+  const runtimeRow = rows.get('AGENT_RUNTIME');
+  const effectiveRuntime = runtimeRow?.value
+    || process.env.AGENT_RUNTIME
+    || settingDef('AGENT_RUNTIME')?.default
+    || 'claude-code';
+  const codexNormalModel = rows.get('AGENT_MODEL')?.value
+    || process.env.AGENT_MODEL
+    || '';
+
+  // The registry carries Claude's defaults for the Claude adapter. Codex must
+  // not display those as its fallback because the factory deliberately omits
+  // --model until Roman saves a Codex model and lets the CLI choose instead.
+  const defaultFor = (def: SettingDef): string => {
+    if (effectiveRuntime !== 'codex') return def.default ?? '';
+    if (def.key === 'AGENT_MODEL') return '';
+    if (def.key === 'AGENT_MODEL_HEAVY') return codexNormalModel;
+    return def.default ?? '';
+  };
+
   return SETTINGS.map((def) => {
     const row = rows.get(def.key);
     const envValue = process.env[def.key] ?? '';
@@ -102,13 +121,13 @@ export async function loadSettingViews(): Promise<SettingView[]> {
 
     const plain = fromDb
       ? (def.secret ? decryptSecret(row!.value) : row!.value)
-      : (envValue !== '' ? envValue : (def.default ?? ''));
+      : (envValue !== '' ? envValue : defaultFor(def));
 
     const fallback: SettingView['fallback'] = source !== 'db'
       ? null
       : envValue !== ''
         ? { value: def.secret ? '' : envValue, source: 'env' }
-        : { value: def.secret ? '' : (def.default ?? ''), source: 'default' };
+        : { value: def.secret ? '' : defaultFor(def), source: 'default' };
 
     return {
       key: def.key,

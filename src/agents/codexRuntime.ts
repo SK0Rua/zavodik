@@ -80,7 +80,7 @@ function assertNotRateLimited(res: ExecResult): void {
   }
 }
 
-function modelArgs(heavy: boolean | undefined): string[] {
+export function codexModelArgs(heavy: boolean | undefined): string[] {
   const model = heavy ? config.agents.codexModelHeavy : config.agents.codexModel;
   return model ? ['--model', model] : [];
 }
@@ -118,7 +118,7 @@ export const codexRuntime: AgentRuntime = {
               '--cd', opts.cwd ?? scratch,
               '--output-schema', schemaPath,
               '--output-last-message', lastMessagePath,
-              ...modelArgs(opts.heavy),
+              ...codexModelArgs(opts.heavy),
               ...imageArgs,
               prompt,
             ];
@@ -175,7 +175,7 @@ export const codexRuntime: AgentRuntime = {
         '--sandbox', 'workspace-write',
         '--skip-git-repo-check',
         '--cd', opts.cwd,
-        ...modelArgs(opts.heavy),
+        ...codexModelArgs(opts.heavy),
         prompt,
       ];
       const res = await runCodex(args, opts.cwd, timeoutMs);

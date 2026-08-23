@@ -46,24 +46,31 @@ import { runCodeAgent } from '../agents/codeAgent.js';   // workspace
 
 ## Моделі
 
-Перевірено емпірично на `claude` CLI 2.1.233 — обидва id приймаються:
+Два поля моделей у UI належать вибраному runtime. Для Claude перевірено
+емпірично на `claude` CLI 2.1.233 — обидва id приймаються:
 
 ```
 AGENT_MODEL=claude-sonnet-5        # enrichment, QA, content, outreach
 AGENT_MODEL_HEAVY=claude-opus-5    # builder, design, visual critique
 ```
 
-Для Codex `CODEX_MODEL` за замовчуванням порожній = дефолтна модель CLI.
+Для Codex значення з тих самих полів передаються як `codex exec --model …`.
+Якщо модель ще не була збережена, `--model` не передається і діє типова модель
+Codex CLI; Claude-типові значення з реєстру в Codex не просочуються.
 
 ## Вибір рантайму
 
 ```bash
 AGENT_RUNTIME=claude-code      # глобально: claude-code | codex
-AGENT_RUNTIME_BUILDER=codex    # перевизначення на етап
 ```
 
-Доступні kind'и: `enrichment`, `qa`, `content`, `design`, `outreach`, `builder`, `visual-critique`.
-`config.agents.runtimeFor(kind)` повертає ефективний рантайм. Значення `api` більше не існує — якщо воно лишилось у старому `.env`, код друкує попередження і використовує `claude-code`, а не вмикає API-білінг.
+Вибір один і застосовується до `enrichment`, `qa`, `content`, `design`,
+`outreach`, `builder` та `visual-critique`. Старі приховані
+`AGENT_RUNTIME_<KIND>` більше не читаються: значення на сторінці налаштувань є
+джерелом істини. `config.agents.runtimeFor(kind)` лишається типізованою точкою
+маршрутизації. Значення `api` більше не існує — якщо воно лишилось у старому
+`.env`, код друкує попередження і використовує `claude-code`, а не вмикає
+API-білінг.
 
 ## Turn budget і рятування результату
 
@@ -156,7 +163,7 @@ bookworm просто впаде і забере з собою весь білд
 ## Перевірка
 
 ```bash
-pnpm tsx scripts/test-agent-parsing.ts     # 31 тест: парсинг, схеми, rate-limit, семафор (без мережі)
+pnpm tsx scripts/test-agent-parsing.ts     # парсинг, схеми, routing/model args, rate-limit, семафор (без мережі)
 pnpm tsx scripts/test-rate-limit-requeue.ts # retry_wait проти реального Postgres/pg-boss
 pnpm tsx scripts/test-agent-salvage.ts     # рятування результату при error_max_turns (реальні виклики)
 pnpm tsx scripts/test-agent-sandbox.ts     # env-allowlist + guard (33 офлайн); --live = реальна атака
@@ -188,8 +195,9 @@ WORKER_GROUPS=build pnpm workers  # те саме через env
 `AGENT_CONCURRENCY`). Розклади реєструє тільки `core`. Деталі груп і сервісів
 compose — `docs/BUILD-PIPELINE.md` §11.
 
-Альтернативний важіль: `AGENT_RUNTIME_BUILDER=codex` кладе білд на підписку
-ChatGPT, повністю звільняючи вікно Claude для enrichment.
+Перемикання `AGENT_RUNTIME=codex` у UI кладе всі агентні етапи на підписку
+ChatGPT. Поточний runtime і фактичні normal/heavy моделі можна запитати прямо
+на сторінці «Агенти»; відповідь приходить із живого процесу factory.
 
 ## Мова нотаток: український шар над агентним текстом (рішення Романа, 2026-08-20)
 

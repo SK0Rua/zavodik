@@ -7,7 +7,7 @@ Code-first мультиагентна система: **PostgreSQL = state machi
 Агентний шар працює **тільки по підписці, без API-білінгу** (спека §2.3, рішення №10) — деталі в [docs/AGENT-RUNTIME.md](docs/AGENT-RUNTIME.md). Етапи 9-12 (brief → дизайн → збірка → QA → приватний деплой) описані в [docs/BUILD-PIPELINE.md](docs/BUILD-PIPELINE.md). Два взаємозамінні рантайми (`AGENT_RUNTIME`):
 
 - **claude-code (default)**: Claude Code по підписці Pro/Max. Два режими виклику — headless structured (enrichment, brief, дизайн-напрямки, QA, текст outreach) і code agent з workspace (builder + QA-fix loop): ізольований Next.js-шаблон, immutable snapshot, brief, design contract і локальні assets; агент сам пише код, сам ганяє `pnpm install`/`pnpm build`, сам фіксить помилки. QA-issues повертаються в той самий workspace.
-- **codex**: те саме через Codex CLI по підписці ChatGPT; вибирається глобально або на окремий етап (`AGENT_RUNTIME_BUILDER=codex`).
+- **codex**: те саме через Codex CLI по підписці ChatGPT; один вибір у UI застосовується до всіх агентних етапів.
 
 `ANTHROPIC_API_KEY` не потрібен ніде.
 
@@ -147,7 +147,7 @@ pnpm tsx scripts/phaseB-sample-evidence.ts <businessId>
 
 1. **n8n немає**: оркестрація — власний код (state machine + pg-boss). Причина: тестованість, версіонування, один стек.
 2. **Redis немає**: pg-boss живе в Postgres. Queue mode «вмикається» кількістю процесів workers.
-3. **Builder = Claude Code агент (Agent SDK) з Next.js-шаблоном**, стек як у спеці (Next.js + TS, static export). Одношотного API-fallback немає: всі рантайми по підписці (рішення №10), альтернатива — `AGENT_RUNTIME_BUILDER=codex`.
+3. **Builder = workspace-агент з Next.js-шаблоном**, стек як у спеці (Next.js + TS, static export). Одношотного API-fallback немає: вибраний у UI підписковий runtime (Claude Code або Codex) застосовується до всіх агентних етапів.
 4. **Deploy v1 = вбудований static server** з noindex і неугадуваними URL; Dokploy-адаптер є як опція.
 
 Все інше (модель даних, статуси, gates, правила evidence, межі автоматизації) відповідає специфікації.

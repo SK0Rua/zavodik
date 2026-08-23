@@ -128,11 +128,13 @@ export const SETTINGS: SettingDef[] = [
   },
   {
     key: 'AGENT_MODEL', label: 'Модель для звичайних етапів', group: 'agents', kind: 'text',
-    default: 'claude-sonnet-5', hint: 'Бріф, контент, перевірки — усе, крім дизайну і збірки сайту.',
+    default: 'claude-sonnet-5',
+    hint: 'Бріф, контент, перевірки — усе, крім дизайну і збірки сайту. Назва передається у вибраний вище CLI; для Codex без збереженого значення діє його власна типова модель.',
   },
   {
     key: 'AGENT_MODEL_HEAVY', label: 'Модель для дизайну і збірки', group: 'agents', kind: 'text',
-    default: 'claude-opus-5', hint: 'Найдорожчі етапи, де якість помітна в результаті.',
+    default: 'claude-opus-5',
+    hint: 'Найдорожчі етапи, де якість помітна в результаті. Назва передається у вибраний вище CLI; якщо поле Codex не задане, використовується звичайна модель або типова модель Codex CLI.',
   },
   {
     key: 'AGENT_FIX_LIGHT', label: 'Фікс-ітерації легкою моделлю', group: 'agents',

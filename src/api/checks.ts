@@ -354,13 +354,25 @@ export async function runCheck(kind: CheckKind): Promise<CheckResult> {
  * Secrets are reported as booleans only.
  */
 export function effectiveConfig(): Record<string, unknown> {
+  const agentRuntime = config.agents.runtime;
+  const normalModel = agentRuntime === 'codex' ? config.agents.codexModel : config.agents.model;
+  const heavyModel = agentRuntime === 'codex' ? config.agents.codexModelHeavy : config.agents.modelHeavy;
+  const shownModel = (model: string): string => model || 'типова модель Codex CLI';
+  const agentKinds = [
+    'enrichment', 'qa', 'content', 'design', 'outreach', 'builder', 'visual-critique',
+  ] as const;
+
   return {
     pid: process.pid,
     mode: config.mode,
     outreachDailyLimit: config.outreachDailyLimit,
     followupDays: config.followupDays,
-    agentRuntime: config.agents.runtime,
-    agentModel: config.agents.model,
+    agentRuntime,
+    agentModel: shownModel(normalModel),
+    agentModelHeavy: shownModel(heavyModel),
+    agentRuntimeByStage: Object.fromEntries(
+      agentKinds.map((kind) => [kind, config.agents.runtimeFor(kind)]),
+    ),
     agentConcurrency: config.agents.concurrency,
     claudeTokenPresent: Boolean(config.agents.oauthToken),
     telegramConfigured: Boolean(config.telegram.botToken && config.telegram.chatId),

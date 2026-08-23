@@ -15,7 +15,7 @@ import { fetchEffectiveConfig } from '@/lib/settingsActions';
  *
  * Secrets are reported as booleans by the factory; nothing sensitive is echoed.
  */
-export function EffectiveConfigPanel() {
+export function EffectiveConfigPanel({ agentsOnly = false }: { agentsOnly?: boolean }) {
   const [data, setData] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -28,13 +28,17 @@ export function EffectiveConfigPanel() {
     });
   }
 
+  const visibleData = data && agentsOnly
+    ? Object.fromEntries(Object.entries(data).filter(([key]) => key.startsWith('agent')))
+    : data;
+
   return (
     <details className="card p-5 group">
       {/* globals.css hides the native marker, so the triangle is explicit —
           otherwise this is a heading that happens to be clickable. */}
       <summary className="flex items-baseline gap-2 text-sm font-medium text-ink">
         <span aria-hidden className="text-ink-mute transition-transform group-open:rotate-90">›</span>
-        Ефективна конфігурація (JSON)
+        {agentsOnly ? 'Фактичний runtime і моделі' : 'Ефективна конфігурація (JSON)'}
         <span className="text-ink-mute font-normal">що бачить процес factory просто зараз</span>
       </summary>
 
@@ -47,10 +51,10 @@ export function EffectiveConfigPanel() {
           {pending ? 'Питаю…' : 'Запитати процес factory'}
         </button>
         {error && <p className="text-sm text-dot-stop">{error}</p>}
-        {data && (
+        {visibleData && (
           <div className="overflow-x-auto">
             <dl className="grid grid-cols-[minmax(0,14rem)_1fr] gap-x-4 gap-y-1 text-sm">
-              {Object.entries(data).map(([k, v]) => (
+              {Object.entries(visibleData).map(([k, v]) => (
                 <div key={k} className="contents">
                   <dt className="text-ink-mute truncate">{k}</dt>
                   <dd className="text-ink break-all font-mono">{JSON.stringify(v)}</dd>

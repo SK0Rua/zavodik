@@ -5,9 +5,12 @@
  *   pnpm tsx scripts/test-agent-parsing.ts
  */
 import { extractJson, zodToJsonSchema } from '../src/agents/schema.js';
-import { codexLooksRateLimited } from '../src/agents/codexRuntime.js';
+import { codexLooksRateLimited, codexModelArgs } from '../src/agents/codexRuntime.js';
 import { withAgentSlot, agentSlotStats } from '../src/agents/semaphore.js';
 import { RateLimitedError, isRateLimitedError } from '../src/agents/types.js';
+import { getRuntime } from '../src/agents/runtime.js';
+import { config } from '../src/config.js';
+import { primeSettings } from '../src/lib/settings.js';
 import { z } from 'zod';
 
 let failures = 0;
@@ -50,6 +53,59 @@ check('detects "rate limit"', codexLooksRateLimited('Error: rate limit exceeded'
 check('detects "usage limit"', codexLooksRateLimited("You've hit your usage limit"));
 check('detects 429', codexLooksRateLimited('HTTP 429 Too Many Requests'));
 check('ignores normal output', !codexLooksRateLimited('Created hello.txt successfully'));
+
+// ── settings → selected runtime CLI ────────────────────────────────────────
+// The model fields in /settings are provider-neutral: when Codex is selected,
+// those exact values must reach `codex exec`. A hidden stage env override must
+// not defeat the global choice displayed in the UI.
+const savedEnv = new Map([
+  ['AGENT_RUNTIME', process.env.AGENT_RUNTIME],
+  ['AGENT_RUNTIME_DESIGN', process.env.AGENT_RUNTIME_DESIGN],
+  ['AGENT_MODEL', process.env.AGENT_MODEL],
+  ['AGENT_MODEL_HEAVY', process.env.AGENT_MODEL_HEAVY],
+  ['CODEX_MODEL', process.env.CODEX_MODEL],
+  ['CODEX_MODEL_HEAVY', process.env.CODEX_MODEL_HEAVY],
+]);
+delete process.env.AGENT_RUNTIME;
+process.env.AGENT_RUNTIME_DESIGN = 'claude-code';
+delete process.env.AGENT_MODEL;
+delete process.env.AGENT_MODEL_HEAVY;
+delete process.env.CODEX_MODEL;
+delete process.env.CODEX_MODEL_HEAVY;
+primeSettings(new Map([
+  ['AGENT_RUNTIME', 'codex'],
+  ['AGENT_MODEL', 'gpt-5.6-terra'],
+  ['AGENT_MODEL_HEAVY', 'gpt-5.6-sol'],
+]));
+
+check('global UI runtime applies to design despite legacy stage env',
+  config.agents.runtimeFor('design') === 'codex', config.agents.runtimeFor('design'));
+check('every agent kind resolves to the runtime selected in the UI',
+  (['enrichment', 'qa', 'content', 'design', 'outreach', 'builder', 'visual-critique'] as const)
+    .every((kind) => getRuntime(kind).id === 'codex'));
+check('Codex normal call receives AGENT_MODEL',
+  eq(codexModelArgs(false), ['--model', 'gpt-5.6-terra']), codexModelArgs(false));
+check('Codex heavy call receives AGENT_MODEL_HEAVY',
+  eq(codexModelArgs(true), ['--model', 'gpt-5.6-sol']), codexModelArgs(true));
+
+primeSettings(new Map([
+  ['AGENT_RUNTIME', 'codex'],
+  ['AGENT_MODEL', 'gpt-5.6-terra'],
+]));
+check('Codex heavy calls inherit the normal model when heavy is unset',
+  eq(codexModelArgs(true), ['--model', 'gpt-5.6-terra']), codexModelArgs(true));
+
+primeSettings(new Map([['AGENT_RUNTIME', 'codex']]));
+check('untouched Claude defaults are never passed to Codex',
+  eq(codexModelArgs(false), []) && eq(codexModelArgs(true), []), {
+    normal: codexModelArgs(false), heavy: codexModelArgs(true),
+  });
+
+for (const [key, value] of savedEnv) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
+primeSettings(new Map());
 
 const rl = new RateLimitedError('window exhausted', {
   retryAfterMs: 900_000, rateLimitType: 'five_hour', runtime: 'codex',

@@ -23,7 +23,7 @@ export interface AgentUsage {
   durationMs: number;
 }
 
-/** Which agent kind is running; used for per-kind runtime overrides + model tier. */
+/** Which agent kind is running; retained for routing diagnostics and model-tier call sites. */
 export type AgentKind =
   | 'enrichment'
   | 'qa'

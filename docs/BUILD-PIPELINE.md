@@ -330,8 +330,9 @@ WORKER_GROUPS=build pnpm workers  # те саме через env (docker-compose
 `factory` (core+enrich, плюс API і демо-сервер) і `factory-build` (build,
 `command: pnpm workers`). Обидва монтують спільні `sites/` і `deploys/`.
 
-Альтернативний важіль лишається доступним: `AGENT_RUNTIME_BUILDER=codex` кладе
-білд на підписку ChatGPT і повністю звільняє вікно Claude для enrichment.
+Перемикання `AGENT_RUNTIME=codex` у UI кладе всі агентні етапи, включно з
+білдом, на підписку ChatGPT. Прихованих per-stage runtime override немає: UI є
+джерелом істини.
 
 `scripts/phaseC-run.ts` попереджає, якщо для бізнесу вже є queued/running jobs.
 

@@ -25,6 +25,7 @@
 import 'dotenv/config';
 import {
   getSetting, getSettingBool, getSettingEnum, getSettingNumber,
+  settingSource,
 } from './lib/settings.js';
 
 function req(name: string, fallback?: string): string {
@@ -33,7 +34,7 @@ function req(name: string, fallback?: string): string {
   return v;
 }
 
-/** Agent kinds that can carry their own runtime override (AGENT_RUNTIME_BUILDER=codex, ...). */
+/** Agent kinds share the single runtime selected in the settings UI. */
 type AgentRuntimeKind =
   | 'enrichment' | 'qa' | 'content' | 'design' | 'outreach' | 'builder' | 'visual-critique';
 
@@ -75,9 +76,19 @@ export const config = {
     get modelHeavy(): string { return getSetting('AGENT_MODEL_HEAVY'); },
     /** CLI binaries stay in env: they are properties of the image, not of the operator. */
     get codexBin(): string { return process.env.CODEX_BIN ?? 'codex'; },
-    /** Empty = let the Codex CLI pick its configured default. */
-    get codexModel(): string { return process.env.CODEX_MODEL ?? ''; },
-    get codexModelHeavy(): string { return process.env.CODEX_MODEL_HEAVY ?? process.env.CODEX_MODEL ?? ''; },
+    /**
+     * The two model fields in the UI belong to whichever runtime is selected.
+     * When they have never been configured, Codex keeps its own CLI default;
+     * the registry's Claude defaults must never be passed to `codex exec`.
+     */
+    get codexModel(): string {
+      return settingSource('AGENT_MODEL') === 'default' ? '' : getSetting('AGENT_MODEL');
+    },
+    get codexModelHeavy(): string {
+      return settingSource('AGENT_MODEL_HEAVY') === 'default'
+        ? this.codexModel
+        : getSetting('AGENT_MODEL_HEAVY');
+    },
     /** Concurrent agent calls; subscription windows are shared, so keep it low. */
     get concurrency(): number { return getSettingNumber('AGENT_CONCURRENCY', 1); },
     /**
@@ -106,13 +117,12 @@ export const config = {
     get rateLimitMaxWaitMs(): number {
       return Number(process.env.AGENT_RATE_LIMIT_MAX_WAIT_MINUTES ?? 6 * 60) * 60_000;
     },
-    /** Global runtime; `AGENT_RUNTIME_<KIND>` overrides it per agent kind. */
+    /** One runtime for every agent stage; the settings UI is authoritative. */
     get runtime(): 'claude-code' | 'codex' {
       return normalizeRuntime(getSetting('AGENT_RUNTIME'), 'claude-code');
     },
-    runtimeFor(kind?: AgentRuntimeKind): 'claude-code' | 'codex' {
-      const override = kind ? process.env[`AGENT_RUNTIME_${kind.toUpperCase().replace(/-/g, '_')}`] : undefined;
-      return normalizeRuntime(override, this.runtime);
+    runtimeFor(_kind?: AgentRuntimeKind): 'claude-code' | 'codex' {
+      return this.runtime;
     },
   },
   // gosom/google-maps-scraper REST API — the single discovery source (spec §3).

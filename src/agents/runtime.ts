@@ -5,9 +5,9 @@
  * `claude-code` (Claude Pro/Max via OAuth) and `codex` (ChatGPT subscription).
  * There is no API-key runtime, by construction.
  *
- * Selection: `AGENT_RUNTIME` globally, optionally overridden per agent kind
- * (`AGENT_RUNTIME_BUILDER`, `AGENT_RUNTIME_ENRICHMENT`, ...) — see
- * `config.agents.runtimeFor(kind)`.
+ * Selection: the single `AGENT_RUNTIME` value from the settings UI applies to
+ * every kind. `config.agents.runtimeFor(kind)` keeps the kind argument only so
+ * callers retain a typed, inspectable routing point.
  */
 import { z, type ZodType } from 'zod';
 import { config } from '../config.js';
