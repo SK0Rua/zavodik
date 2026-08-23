@@ -157,6 +157,16 @@ export function cardActionBar(input: CardActionInput): CardActionBar {
   }
 
   if (projectState === 'failed') {
+    // The failed row can be the previous attempt while its automatic
+    // replacement is already queued/running/retry_wait. In that overlap there
+    // is nothing to restart: a button (even disabled) makes an automatic
+    // recovery look like Roman's unresolved task.
+    if (build.availability === 'busy') {
+      return {
+        waiting: `${build.hint}. Фабрика продовжить сама; нічого натискати не треба.`,
+        actions: [],
+      };
+    }
     return {
       waiting: null,
       actions: [{

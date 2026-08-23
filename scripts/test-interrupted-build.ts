@@ -49,6 +49,13 @@ console.log('\nA live build is never interrupted');
     active: true, jobStatus: 'retry_wait', projectState: 'building',
   }));
 
+  // A replacement run may already be parked on the subscription limit after
+  // the old project was closed. The project says `failed`, but the newest job
+  // is alive and scheduled — this must not ask Roman to restart it again.
+  check('failed old project with a paused replacement', !isInterruptedBuild({
+    active: false, jobStatus: 'retry_wait', projectState: 'failed',
+  }));
+
   // The one non-live status that must NOT draw the banner. A build waiting its
   // turn behind another has not started, so it cannot have stopped.
   check('queued behind another build', !isInterruptedBuild({

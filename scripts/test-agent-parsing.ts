@@ -51,11 +51,14 @@ check('detects "usage limit"', codexLooksRateLimited("You've hit your usage limi
 check('detects 429', codexLooksRateLimited('HTTP 429 Too Many Requests'));
 check('ignores normal output', !codexLooksRateLimited('Created hello.txt successfully'));
 
-const rl = new RateLimitedError('window exhausted', { retryAfterMs: 900_000, rateLimitType: 'five_hour' });
+const rl = new RateLimitedError('window exhausted', {
+  retryAfterMs: 900_000, rateLimitType: 'five_hour', runtime: 'codex',
+});
 check('RateLimitedError code', rl.code === 'RATE_LIMITED');
 check('isRateLimitedError true', isRateLimitedError(rl));
 check('isRateLimitedError false for plain', !isRateLimitedError(new Error('boom')));
 check('retryAfterMs preserved', rl.retryAfterMs === 900_000);
+check('rate-limit runtime preserved', rl.runtime === 'codex');
 
 // ── semaphore (AGENT_CONCURRENCY defaults to 1) ─────────────────────────────
 const order: string[] = [];

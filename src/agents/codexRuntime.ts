@@ -75,6 +75,7 @@ function assertNotRateLimited(res: ExecResult): void {
     throw new RateLimitedError(`codex subscription limit reached: ${blob.slice(-300)}`, {
       retryAfterMs: config.agents.rateLimitDefaultWaitMs,
       resetsAt: new Date(Date.now() + config.agents.rateLimitDefaultWaitMs),
+      runtime: 'codex',
     });
   }
 }

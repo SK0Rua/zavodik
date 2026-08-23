@@ -31,6 +31,7 @@ async function main(): Promise<void> {
       throw new RateLimitedError('5-hour window exhausted', {
         retryAfterMs: 60_000, rateLimitType: 'five_hour',
         resetsAt: new Date(Date.now() + 60_000),
+        runtime: 'codex',
       });
     }
   });

@@ -7,6 +7,8 @@
  */
 import type { ZodType } from 'zod';
 
+export type AgentRuntimeId = 'claude-code' | 'codex';
+
 /**
  * What a single agent session actually consumed. Spec §9 wants "QA-ітерації"
  * and "cost per demo" as metrics, so callers can record this per invocation.
@@ -14,7 +16,7 @@ import type { ZodType } from 'zod';
  * nothing here is pay-per-token (§2.3).
  */
 export interface AgentUsage {
-  runtime: 'claude-code' | 'codex';
+  runtime: AgentRuntimeId;
   model?: string;
   numTurns?: number;
   costUsd?: number;
@@ -141,7 +143,7 @@ export interface CodeAgentOptions {
  * Both operations are subscription-authenticated and return validated data.
  */
 export interface AgentRuntime {
-  readonly id: 'claude-code' | 'codex';
+  readonly id: AgentRuntimeId;
   /** Headless single-shot, no tools, output validated against `schema`. */
   structured<T>(
     name: string,
@@ -164,13 +166,21 @@ export class RateLimitedError extends Error {
   readonly retryAfterMs: number;
   readonly rateLimitType?: string;
   readonly resetsAt?: Date;
+  /** Runtime whose subscription window was exhausted. */
+  readonly runtime: AgentRuntimeId;
 
-  constructor(message: string, opts: { retryAfterMs: number; rateLimitType?: string; resetsAt?: Date }) {
+  constructor(message: string, opts: {
+    retryAfterMs: number;
+    rateLimitType?: string;
+    resetsAt?: Date;
+    runtime: AgentRuntimeId;
+  }) {
     super(message);
     this.name = 'RateLimitedError';
     this.retryAfterMs = opts.retryAfterMs;
     this.rateLimitType = opts.rateLimitType;
     this.resetsAt = opts.resetsAt;
+    this.runtime = opts.runtime;
   }
 }
 

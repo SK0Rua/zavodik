@@ -72,6 +72,7 @@ function rateLimitedFromInfo(
     retryAfterMs,
     rateLimitType: info?.rateLimitType,
     resetsAt: resetMs ? new Date(resetMs) : new Date(nowMs + retryAfterMs),
+    runtime: 'claude-code',
   });
 }
 
@@ -79,6 +80,7 @@ function rateLimitedFromText(text: string): RateLimitedError {
   return new RateLimitedError(`subscription limit reached: ${text.slice(0, 300)}`, {
     retryAfterMs: config.agents.rateLimitDefaultWaitMs,
     resetsAt: new Date(Date.now() + config.agents.rateLimitDefaultWaitMs),
+    runtime: 'claude-code',
   });
 }
 

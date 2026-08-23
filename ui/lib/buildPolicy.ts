@@ -67,8 +67,8 @@ const ACTIVE_PROJECT_STATES: ReadonlySet<string> = new Set([
  *
  * All four conditions are load-bearing:
  *  - `active === false`, because a running job is never interrupted;
- *  - not `queued`, because a build waiting its turn has not started, let alone
- *    stopped — that is the one non-live status that must NOT show the banner;
+ *  - no active queue state: queued/running/retry_wait all mean another attempt
+ *    exists and must NOT show the banner;
  *  - and then either the reconciler's fingerprint (`stale`), a job row that no
  *    longer exists at all, or a project the reconciler failed.
  *
@@ -83,7 +83,10 @@ export function isInterruptedBuild(input: {
   projectState: string | null | undefined;
 }): boolean {
   if (input.active !== false) return false;
-  if (input.jobStatus === 'queued') return false;
+  // A replacement attempt may already be queued, running, or deliberately
+  // parked until a subscription window resets. The old project can be `failed`
+  // at the same time; the live job is the newer fact and needs no human restart.
+  if (isActiveJobStatus(input.jobStatus)) return false;
   return input.jobStatus === 'stale'
     || input.jobStatus == null
     || input.projectState === 'failed';
@@ -196,7 +199,9 @@ export function buildButtonState(input: {
   if (isActiveJobStatus(input.activeJobStatus)) {
     return {
       enabled: false, needsConfirm: false, availability: 'busy',
-      hint: 'Збірка вже стоїть у черзі',
+      hint: input.activeJobStatus === 'retry_wait'
+        ? 'Збірка на паузі через ліміт підписки'
+        : 'Збірка вже стоїть у черзі',
     };
   }
 

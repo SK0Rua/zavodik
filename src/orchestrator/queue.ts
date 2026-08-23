@@ -147,6 +147,7 @@ export async function register(name: JobName, handler: Handler): Promise<void> {
           });
           await notifySubscriptionPause({
             jobType: name, businessId: payload.businessId, resumesAt: nextAttemptAt,
+            runtime: err.runtime,
           }).catch(() => {});
           continue; // resolved for pg-boss: no failure, no auto-retry storm
         }

@@ -59,15 +59,24 @@ export function humanStatus(status: string): HumanStatus {
  *   independently checked it) — the ask is «прочитай факти і винеси вердикт».
  * - `materials`: the readiness gate found gaps — the ask is «дай матеріали
  *   або збудуй попри пропуски», and there can be many of these at once.
- * - `verdict`: every other parked reason (not qualified, contradiction, no
- *   evidence, fast-qualify doubts) — the ask is a yes/no about the business.
+ * - `no_action`: the audit confidently found no opportunity (for example, the
+ *   business already has a good modern site). That is history, not Roman's task.
+ * - `verdict`: every other parked reason (contradiction, no evidence,
+ *   fast-qualify doubts) — the ask is a yes/no about the business.
  */
-export type ReviewAsk = 'fact_check' | 'materials' | 'verdict';
+export type ReviewAsk = 'fact_check' | 'materials' | 'no_action' | 'verdict';
 
 export function reviewAsk(statusReason: string | null | undefined): ReviewAsk {
   const r = (statusReason ?? '').trim();
   if (/^QA (failed|agent unavailable)/i.test(r)) return 'fact_check';
   if (/^gaps?:/i.test(r)) return 'materials';
+  const notQualified = /^not qualified:\s*(.+)$/i.exec(r);
+  const reasons = notQualified
+    ? notQualified[1]!.split(',').map((reason) => reason.trim().toLowerCase())
+    : [r.toLowerCase()];
+  if (reasons.includes('already_has_a_good_modern_site_no_opportunity')) {
+    return 'no_action';
+  }
   return 'verdict';
 }
 

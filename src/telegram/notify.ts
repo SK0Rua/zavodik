@@ -6,6 +6,7 @@
  * Token/chat absent => no-op with a warn, so the pipeline never depends on it.
  */
 import { config } from '../config.js';
+import type { AgentRuntimeId } from '../agents/types.js';
 import { log } from '../lib/logger.js';
 
 /**
@@ -173,13 +174,27 @@ export async function notifyJobProblem(input: {
 }
 
 /** Subscription window exhausted — a pause, not an error (SPEC §2.3б). */
+export function subscriptionPauseText(input: {
+  jobType: string;
+  resumesAt: Date;
+  runtime?: AgentRuntimeId;
+}): string {
+  const subscription = input.runtime === 'codex'
+    ? 'Codex'
+    : input.runtime === 'claude-code' ? 'Claude Code' : 'агентної моделі';
+  return `⏸ Пауза: вичерпано ліміт підписки ${subscription}.\n` +
+    `Крок «${esc(stageLabel(input.jobType))}» продовжиться сам о ` +
+    `${input.resumesAt.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: process.env.TZ || 'Europe/Athens' })}. Це не помилка.`;
+}
+
 export async function notifySubscriptionPause(input: {
-  jobType: string; businessId?: string | null; resumesAt: Date;
+  jobType: string;
+  businessId?: string | null;
+  resumesAt: Date;
+  runtime: AgentRuntimeId;
 }): Promise<number | null> {
   return notifyTelegram(
-    `⏸ Пауза: вичерпано ліміт підписки Claude.\n` +
-    `Крок «${esc(stageLabel(input.jobType))}» продовжиться сам о ` +
-    `${input.resumesAt.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: process.env.TZ || 'Europe/Athens' })}. Це не помилка.` +
+    subscriptionPauseText(input) +
     noButtonHint(),
     withButton('Подивитись у системі', uiLinks.jobs('retry_wait')),
   );

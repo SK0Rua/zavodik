@@ -239,18 +239,19 @@ async function loadInterruptedBuilds(): Promise<InterruptedBuildItem[]> {
     projectId: number; businessId: string; name: string; status: string;
     at: Date | string; busy: boolean; superseded: boolean;
   }>)
-    // A newer project that is building or already shipped means this failure is
-    // history, not a to-do — someone already pressed the button.
-    .filter((r) => !r.superseded)
+    // A newer project that is building/already shipped, or an active replacement
+    // job for the failed project, means this failure is history rather than a
+    // to-do. In particular, `retry_wait` resumes itself after the subscription
+    // window resets; showing a disabled restart card only tells Roman to solve
+    // something the factory has already solved.
+    .filter((r) => !r.superseded && !r.busy)
     .map((r) => ({
       projectId: r.projectId,
       businessId: r.businessId,
       name: r.name,
       at: r.at instanceof Date ? r.at : new Date(r.at),
-      canRestart: !r.busy,
-      hint: r.busy
-        ? 'Збірка вже стоїть у черзі — зачекай, поки вона візьметься.'
-        : 'Збірка почнеться з нуля; усе зібране про бізнес лишається на місці.',
+      canRestart: true,
+      hint: 'Збірка почнеться з нуля; усе зібране про бізнес лишається на місці.',
     }));
 }
 
@@ -416,6 +417,11 @@ async function loadBusinessReviews(excludeBusinessIds: Set<string>): Promise<{
       materialsWaiting += 1;
       continue;
     }
+    // A confident "their current site is already good" verdict is a completed
+    // machine decision, not a task for Roman. Keep the verdict and evidence on
+    // the business, including the rare manual build override, but do not turn
+    // every sensible no-op into inbox work.
+    if (ask === 'no_action') continue;
 
     const build = buildButtonState({
       status: r.status,
