@@ -350,6 +350,11 @@ async function loadJobProblems(excludeBusinessIds: Set<string>): Promise<JobProb
 
   const seen = new Set<string>();
   const jobs = all.filter((j) => {
+    // NEEDS_HUMAN from visual QA is represented only by BuildReviewCard while
+    // its project waits in `needs_human_review`. After SHIP / ITERATE / DROP the
+    // project advances, so this row is resolved history — never a retryable job.
+    // Keeping it here produced the fake «чекає рішення» card from the screenshot.
+    if (j.jobType === 'visual-qa' && j.status === 'needs_human') return false;
     if (!isActionableJob(j.jobType) && j.createdAt < since) return false;
     if (j.businessId && excludeBusinessIds.has(j.businessId)) return false;
     const key = `${j.jobType}:${j.businessId ?? j.campaignId ?? 'global'}`;

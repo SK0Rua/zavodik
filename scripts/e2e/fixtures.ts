@@ -216,6 +216,25 @@ export async function createFailedJob(biz: FixtureBusiness, jobType = 'enrich'):
   return row!.id;
 }
 
+/** The workflow-journal half of a build waiting for Roman's QA decision. */
+export async function createNeedsHumanVisualQaJob(
+  biz: FixtureBusiness,
+  projectId: number,
+): Promise<number> {
+  assertFixtureId(biz.id);
+  const row = await sqlOne<{ id: number }>(
+    `insert into workflow_jobs
+       (job_type, business_id, campaign_id, idempotency_key, payload, status,
+        attempts, error_code, error_detail, created_at, finished_at)
+     values ('visual-qa', $1, $2, $3, $4::jsonb, 'needs_human', 1,
+       'NEEDS_HUMAN', 'e2e visual QA verdict', now(), now())
+     returning id`,
+    [biz.id, FIXTURE_CAMPAIGN, `${FIXTURE_PREFIX}visual-qa:${biz.id}:${projectId}`,
+      JSON.stringify({ projectId, iteration: 2 })],
+  );
+  return row!.id;
+}
+
 /**
  * Teardown, in foreign-key order, by prefix only.
  *

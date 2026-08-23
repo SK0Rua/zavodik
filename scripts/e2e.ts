@@ -42,7 +42,8 @@ import {
 } from './e2e/browser.js';
 import {
   FIXTURE_CAMPAIGN, ROOT, createCampaign, createBusiness, createSiteProject,
-  createApproval, createFailedJob, destroyFixtures, leftoverFixtures,
+  createApproval, createFailedJob, createNeedsHumanVisualQaJob,
+  destroyFixtures, leftoverFixtures,
 } from './e2e/fixtures.js';
 
 const execFileAsync = promisify(execFile);
@@ -677,6 +678,7 @@ async function checkFunnel(browser: import('playwright').Browser): Promise<void>
   });
   const retryProj = await createSiteProject(retryBiz, 'needs_human_review',
     { qaIterations: 3, withWorkspace: true });
+  const retryVerdictJob = await createNeedsHumanVisualQaJob(retryBiz, retryProj.projectId!);
   await checking('«Ще спроба» enqueues exactly 1 build-site', async () => {
     const before = await count(`select count(*)::int n from pgboss.job where name = 'build-site'`);
     await page.goto(`${BASE}/businesses/${retryBiz.id}`, { waitUntil: 'networkidle' });
@@ -699,8 +701,13 @@ async function checkFunnel(browser: import('playwright').Browser): Promise<void>
       `select count(*)::int n from pgboss.job where name = 'build-site' and data->>'projectId' = $1`,
       [String(retryProj.projectId)]);
     if (mine !== 1) throw new Error(`${mine} build-site jobs for the fixture project`);
+    const verdict = await sqlOne<{ status: string }>(
+      `select status from workflow_jobs where id = $1`, [retryVerdictJob]);
+    if (verdict?.status !== 'cancelled') {
+      throw new Error(`resolved visual-qa verdict stayed ${verdict?.status}`);
+    }
     await sql(`update site_projects set state = 'needs_human_review' where id = $1`, [retryProj.projectId]);
-    return '+1, cancelled';
+    return '+1, queued build cancelled, QA verdict closed';
   });
 
   const deployBiz = await createBusiness({

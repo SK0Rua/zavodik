@@ -20,6 +20,7 @@ import { enqueueJob } from './queue';
 import { factoryFetch } from './factoryApi';
 import { transitionBusiness } from './actions';
 import type { ActionResult } from './types';
+import { closeVisualQaVerdict } from './visualQaDecision';
 
 type SiteProject = typeof schema.siteProjects.$inferSelect;
 
@@ -96,6 +97,7 @@ export async function deployBuildAsIs(projectId: number): Promise<ActionResult> 
   if (!updated.length) {
     return { ok: false, message: 'Цю збірку щойно вже відправили — другий деплой не створено.' };
   }
+  await closeVisualQaVerdict(projectId, 'задеплоїти як є');
 
   // The business is in `needs_review`; the deploy worker will move it to
   // site_ready itself. Recording the human decision here keeps the audit trail
@@ -174,6 +176,7 @@ export async function requestAnotherIteration(input: {
   if (!updated.length) {
     return { ok: false, message: 'Цю збірку щойно вже відправили в роботу.' };
   }
+  await closeVisualQaVerdict(input.projectId, 'ще одна ітерація');
 
   // The business goes BACK to `site_in_progress`, not just into the audit log.
   // Leaving it in `needs_review` kept the «Потрібна твоя увага» badge and the
@@ -224,6 +227,7 @@ export async function rejectBuild(input: {
   await db.update(schema.siteProjects)
     .set({ state: 'failed' })
     .where(eq(schema.siteProjects.id, input.projectId));
+  await closeVisualQaVerdict(input.projectId, 'відхилити бізнес');
 
   const moved = await transitionBusiness(project.businessId, 'rejected', reason);
   revalidatePath('/inbox');
