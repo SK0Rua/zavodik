@@ -175,13 +175,18 @@ export async function requestAnotherIteration(input: {
     return { ok: false, message: 'Цю збірку щойно вже відправили в роботу.' };
   }
 
-  await db.insert(schema.statusHistory).values({
-    businessId: project.businessId,
-    fromStatus: biz.status,
-    toStatus: biz.status,
-    reason: `Роман замовив ще одну ітерацію: ${note.slice(0, 200)}`,
-    actor: 'roman',
-  });
+  // The business goes BACK to `site_in_progress`, not just into the audit log.
+  // Leaving it in `needs_review` kept the «Потрібна твоя увага» badge and the
+  // stale «критик не прийняв за 3 спроби» header lit for the whole hour-long
+  // rebuild (Roman, 2026-08-23: «Де тут мені шо робить?» — ніде, збірка йшла).
+  // transitionBusiness also rewrites status_reason, so the header now says
+  // what is actually happening. When the new run's QA fails again, visual-qa
+  // moves it back to needs_review with a fresh reason, exactly as before.
+  await transitionBusiness(
+    project.businessId,
+    'site_in_progress',
+    `Роман замовив ще одну ітерацію: ${note.slice(0, 200)}`,
+  );
 
   // `iteration: 1` marks this as a FIX run, so the builder edits the existing
   // workspace instead of wiping it and rebuilding from the design contract —

@@ -6,7 +6,10 @@ import { Status } from './Status';
 import { retryJobAction, startDemoBuild } from '@/lib/actions';
 import { runWithToast } from '@/lib/toast';
 import { stageName } from '@/lib/stageNames';
-import type { InterruptedBuildItem, JobProblemItem, ReplyItem } from '@/lib/inbox';
+import type {
+  BusinessReviewItem, InterruptedBuildItem, JobProblemItem, ReplyItem,
+} from '@/lib/inbox';
+import { CardActionButtons } from './CardActionBar';
 
 /**
  * A build the server restart killed.
@@ -22,6 +25,53 @@ import type { InterruptedBuildItem, JobProblemItem, ReplyItem } from '@/lib/inbo
  * is what «Запустити заново» has always meant on the business card, and this is
  * the same action behind a second door.
  */
+/**
+ * A business the pipeline parked for Roman's verdict (`business_review`).
+ *
+ * The card answers his exact question — «де тут мені шо робить?» — in three
+ * lines: why the factory stopped, what the decision means, and the buttons.
+ * The buttons are `CardActionButtons`, the same component (same confirms, same
+ * server actions) the business card's header band presses — one behaviour,
+ * two hosts. The name links to the card, which opens on the tab holding the
+ * evidence for exactly this reason.
+ */
+export function BusinessReviewCard({ item }: { item: BusinessReviewItem }) {
+  return (
+    <article className="card p-5 sm:p-6">
+      <Status tone="wait" title={item.status}>
+        {item.ask === 'fact_check' ? 'Факти не пройшли перевірку' : 'Фабрика чекає твого вердикту'}
+      </Status>
+
+      <h2 className="text-lg font-semibold mt-2">
+        <Link href={`/businesses/${item.businessId}`} className="link">{item.name}</Link>
+        {item.score !== null && (
+          <span className="text-sm font-normal text-ink-mute ml-2 tabular-nums">бал {item.score}</span>
+        )}
+      </h2>
+
+      {item.reason && (
+        <p className="text-sm text-ink-soft mt-1.5 max-w-[70ch]">{item.reason}</p>
+      )}
+
+      {item.bar.hint && (
+        <p className="text-sm text-ink-mute mt-2 max-w-[70ch]">{item.bar.hint}</p>
+      )}
+
+      <div className="mt-4 flex flex-wrap gap-2.5 items-center">
+        <CardActionButtons
+          actions={item.bar.actions}
+          businessId={item.businessId}
+          name={item.name}
+          status={item.status}
+        />
+        <Link href={`/businesses/${item.businessId}`} className="link text-sm">
+          Відкрити бізнес →
+        </Link>
+      </div>
+    </article>
+  );
+}
+
 export function InterruptedBuildCard({ item }: { item: InterruptedBuildItem }) {
   const [started, setStarted] = useState(false);
   const [pending, startTransition] = useTransition();

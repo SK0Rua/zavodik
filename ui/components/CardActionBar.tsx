@@ -40,22 +40,21 @@ const KIND_CLASS: Record<CardAction['kind'], string> = {
   link: 'link text-sm',
 };
 
-export function CardActionBar({ bar, businessId, name, status, other }: {
-  bar: Bar;
+/**
+ * The action row itself — the buttons with their confirms and pending state.
+ *
+ * Separate from the band because the band is one PLACE these actions render;
+ * the inbox's business-review card is another. Both must press identically
+ * (same confirms, same server actions), so the behaviour lives once, here,
+ * and the two hosts only decide the framing around it.
+ */
+export function CardActionButtons({ actions, businessId, name, status }: {
+  actions: CardAction[];
   businessId: string;
   name: string;
   status: string;
-  /** The «Інше…» link, rendered by the server component that owns the forms. */
-  other: React.ReactNode;
 }) {
   const [pending, startTransition] = useTransition();
-  // While a decision form is open the general "here are your three options"
-  // sentence is stale advice — you have already picked one.
-  const [formOpen, setFormOpen] = useState(false);
-
-  // The hint shown under the band belongs to the primary action — the one whose
-  // consequence a person needs spelled out before pressing.
-  const lead = bar.actions.find((a) => a.kind === 'primary') ?? bar.actions[0];
 
   const runBuild = (action: CardAction) => {
     // Overriding a disqualification is a different decision from clearing the
@@ -88,6 +87,37 @@ export function CardActionBar({ bar, businessId, name, status, other }: {
   const runSocials = () => startTransition(() => {
     void runWithToast(() => startSocialsDiscovery(businessId));
   });
+
+  return (
+    <>
+      {actions.map((action, i) => (
+        <ActionControl
+          key={`${action.label}-${i}`}
+          action={action}
+          pending={pending}
+          onBuild={() => runBuild(action)}
+          onSocials={runSocials}
+        />
+      ))}
+    </>
+  );
+}
+
+export function CardActionBar({ bar, businessId, name, status, other }: {
+  bar: Bar;
+  businessId: string;
+  name: string;
+  status: string;
+  /** The «Інше…» link, rendered by the server component that owns the forms. */
+  other: React.ReactNode;
+}) {
+  // While a decision form is open the general "here are your three options"
+  // sentence is stale advice — you have already picked one.
+  const [formOpen, setFormOpen] = useState(false);
+
+  // The hint shown under the band belongs to the primary action — the one whose
+  // consequence a person needs spelled out before pressing.
+  const lead = bar.actions.find((a) => a.kind === 'primary') ?? bar.actions[0];
 
 
   // Shown next to the actions on arrival, and (on a phone) dropped once the band
@@ -130,15 +160,14 @@ export function CardActionBar({ bar, businessId, name, status, other }: {
                   onModeChange={setFormOpen}
                 />
               )
-              : bar.actions.map((action, i) => (
-                <ActionControl
-                  key={`${action.label}-${i}`}
-                  action={action}
-                  pending={pending}
-                  onBuild={() => runBuild(action)}
-                  onSocials={runSocials}
+              : (
+                <CardActionButtons
+                  actions={bar.actions}
+                  businessId={businessId}
+                  name={name}
+                  status={status}
                 />
-              ))}
+              )}
 
             {!bar.decision && bar.actions.length === 0 && bar.waiting && (
               <p className="text-sm text-ink-soft max-w-[62ch] py-1">{bar.waiting}</p>

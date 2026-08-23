@@ -19,7 +19,7 @@ import { parseAuditNotes } from '@/lib/auditNotes';
 import { FactValue } from '@/components/FactValue';
 import { factLabel, groupFacts } from '@/lib/factLabels';
 import { buildButtonState } from '@/lib/buildPolicy';
-import { cardActionBar } from '@/lib/cardActions';
+import { cardActionBar, isFactCheckAttention } from '@/lib/cardActions';
 import { FindSocialsButton } from '@/components/FindSocialsButton';
 import { HeroVideoPanel } from '@/components/HeroVideoPanel';
 import { readRawJson } from '@/lib/objectStore';
@@ -215,7 +215,13 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
     openGaps,
     socialsGap: gaps.some((g) => !g.resolved && g.gap === 'socials_unresolved'),
     hasPendingApproval: Boolean(pendingApproval),
+    statusReason: biz.statusReason,
   });
+
+  // «Потрібна твоя увага» через фактчек означає «прочитай звіт критика», тож
+  // картка відкривається одразу на тій вкладці, з розгорнутим звітом — а не на
+  // «Демо», де про причину уваги нема ні слова (Роман, 2026-08-23).
+  const factCheckAttention = isFactCheckAttention(biz.status, biz.statusReason);
 
   // ── Демо ──────────────────────────────────────────────────────────────────
   // States in which a build is (or should be) moving. A build takes an hour, so
@@ -521,7 +527,9 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
         <Panel title="Перевірка фактів">
           <p className="text-sm text-ink-soft">{criticNotes.summary}</p>
           {criticNotes.findings.length > 0 && (
-            <details className="mt-3">
+            // Unfolded when this report is WHY the business is waiting on Roman
+            // — folding the thing the status asks him to read defeats the badge.
+            <details className="mt-3" open={factCheckAttention}>
               <summary className="disclosure">
                 звіт критика — {criticNotes.findings.length} зауваж.
               </summary>
@@ -879,7 +887,7 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
         )}
       />
 
-      <Tabs tabs={tabs} />
+      <Tabs tabs={tabs} initial={factCheckAttention ? 'facts' : undefined} />
     </div>
   );
 }

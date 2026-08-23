@@ -13,8 +13,14 @@
 import { desc, eq, inArray, sql } from 'drizzle-orm';
 import { db, schema } from './db';
 import { loadApprovalQueue, type ApprovalItem } from './approvals';
+import { queryBusinesses } from './businessQuery';
+import { buildButtonState } from './buildPolicy';
+import { socialsButtonState } from './socials';
+import { cardActionBar, type CardActionBar as ActionBarData } from './cardActions';
+import { humanReasonForHeader, reviewAsk } from './humanStatus';
 
-export type InboxKind = 'approval' | 'build_review' | 'interrupted_build' | 'job' | 'reply';
+export type InboxKind =
+  | 'approval' | 'build_review' | 'business_review' | 'interrupted_build' | 'job' | 'reply';
 
 /**
  * A build the server restart killed, waiting to be started again.
@@ -74,6 +80,36 @@ export interface JobProblemItem {
   actionable: boolean;
 }
 
+/**
+ * A business the PIPELINE parked in `needs_review` for a verdict — the fourth
+ * kind of «Потрібна твоя увага» and the one that used to be invisible here.
+ *
+ * The build the critic rejected has its card (`build_review`); a dead job has
+ * its card; but a business the fact-check refused, or one the qualifier judged
+ * «no opportunity», existed only as an amber dot in the /businesses list —
+ * Roman had to trawl the list, open each card and hunt the tabs to learn what
+ * was being asked (2026-08-23, HUSTLE: «Де тут мені шо робить?»).
+ *
+ * The item deliberately invents nothing: the row comes from `queryBusinesses`
+ * (the same query the /businesses list renders) and the actions come from
+ * `cardActionBar` (the ONLY copy of «what can be done with this business»).
+ * A business whose bar has nothing pressable — a build already running, a
+ * closed status — is not a to-do and never becomes an item.
+ */
+export interface BusinessReviewItem {
+  businessId: string;
+  name: string;
+  campaignId: string;
+  score: number | null;
+  status: string;
+  /** Header-ready translation of status_reason, or null when it is plumbing. */
+  reason: string | null;
+  /** What kind of ask this is — decides the card's one-line explanation. */
+  ask: 'fact_check' | 'verdict';
+  bar: ActionBarData;
+  updatedAt: Date;
+}
+
 export interface ReplyItem {
   businessId: string;
   name: string;
@@ -85,6 +121,16 @@ export interface ReplyItem {
 export interface InboxData {
   approvals: ApprovalItem[];
   buildReviews: BuildReviewItem[];
+  businessReviews: BusinessReviewItem[];
+  /**
+   * `needs_review` businesses whose ask is MATERIALS (readiness gaps) — shown
+   * as one aggregate line, not a card each: a fresh campaign parks dozens at
+   * once, and thirty near-identical cards is the noise this page removes. The
+   * line links to /businesses filtered to exactly these rows.
+   */
+  materialsWaiting: number;
+  /** Individual review items beyond the render cap — also behind the link. */
+  businessReviewsMore: number;
   interruptedBuilds: InterruptedBuildItem[];
   jobs: JobProblemItem[];
   replies: ReplyItem[];
@@ -339,6 +385,91 @@ async function loadJobProblems(excludeBusinessIds: Set<string>): Promise<JobProb
   }));
 }
 
+/** Render cap for individual business-review cards; the rest go behind the link. */
+const BUSINESS_REVIEW_CAP = 12;
+
+/**
+ * Businesses the pipeline parked for a verdict — see `BusinessReviewItem`.
+ *
+ * Everything here is derived, not invented: rows via `queryBusinesses`,
+ * actions via `cardActionBar`, the ask via `reviewAsk` — the same three
+ * modules the /businesses list and the business card already use, so the
+ * inbox can never disagree with them about what a business needs.
+ */
+async function loadBusinessReviews(excludeBusinessIds: Set<string>): Promise<{
+  items: BusinessReviewItem[];
+  materialsWaiting: number;
+  more: number;
+}> {
+  const rows = await queryBusinesses({
+    campaign: null, statuses: ['needs_review'], verdicts: [], contacts: [],
+    minScore: null, q: null, sort: 'updated_at', dir: 'desc',
+  }, 300);
+
+  let materialsWaiting = 0;
+  const candidates: BusinessReviewItem[] = [];
+  for (const r of rows) {
+    if (excludeBusinessIds.has(r.id)) continue;
+
+    const ask = reviewAsk(r.statusReason);
+    if (ask === 'materials') {
+      materialsWaiting += 1;
+      continue;
+    }
+
+    const build = buildButtonState({
+      status: r.status,
+      openGaps: r.openGaps,
+      activeProjectState: r.projectState,
+      activeJobStatus: r.buildJobStatus,
+      statusReason: r.statusReason,
+      verdict: r.verdict,
+      hasEvidence: r.hasEvidence,
+    });
+    const socials = socialsButtonState({
+      verifiedPlatforms: r.verifiedSocials,
+      activeJobStatus: r.socialsJobStatus,
+      status: r.status,
+    });
+    const bar = cardActionBar({
+      businessId: r.id,
+      status: r.status,
+      projectState: r.projectState,
+      projectId: null,
+      deployUrl: r.deployUrl,
+      build,
+      socials,
+      openGaps: r.openGaps,
+      socialsGap: r.openGaps.includes('socials_unresolved'),
+      hasPendingApproval: false,
+      statusReason: r.statusReason,
+    });
+
+    // Nothing pressable means nothing is being asked RIGHT NOW: a rebuild is
+    // already running, or the row is mid-flight. The status badge may lag the
+    // pipeline; the bar never does — so the bar decides membership.
+    if (!bar.decision && bar.actions.length === 0) continue;
+
+    candidates.push({
+      businessId: r.id,
+      name: r.name,
+      campaignId: r.campaignId,
+      score: r.score,
+      status: r.status,
+      reason: humanReasonForHeader(r.statusReason),
+      ask,
+      bar,
+      updatedAt: r.updatedAt,
+    });
+  }
+
+  return {
+    items: candidates.slice(0, BUSINESS_REVIEW_CAP),
+    materialsWaiting,
+    more: Math.max(0, candidates.length - BUSINESS_REVIEW_CAP),
+  };
+}
+
 /** Businesses that answered. The only inbound item, and the most valuable one. */
 async function loadReplies(): Promise<ReplyItem[]> {
   const events = await db.select().from(schema.outreachEvents)
@@ -424,7 +555,20 @@ export async function loadInbox(): Promise<InboxData> {
     ...interruptedBuilds.map((b) => b.businessId),
   ]);
   const jobs = await loadJobProblems(covered);
-  return { approvals, buildReviews, interruptedBuilds, jobs, replies, counts };
+  // Business reviews come LAST in the dedup chain: any richer card about the
+  // same business (a rejected build, a broken job, an approval) already says
+  // more than «пайплайн чекає вердикту», so this one yields to all of them.
+  const businessReviews = await loadBusinessReviews(new Set([
+    ...covered,
+    ...jobs.map((j) => j.businessId).filter((x): x is string => Boolean(x)),
+  ]));
+  return {
+    approvals, buildReviews,
+    businessReviews: businessReviews.items,
+    materialsWaiting: businessReviews.materialsWaiting,
+    businessReviewsMore: businessReviews.more,
+    interruptedBuilds, jobs, replies, counts,
+  };
 }
 
 /** How many items are waiting overall — the number next to «Вхідні» in the nav. */
@@ -432,9 +576,15 @@ export async function inboxCount(): Promise<number> {
   try {
     // Counted the same way the page filters, or the badge promises work that
     // is not there — the fastest way to make Roman stop trusting the number.
-    const { approvals, buildReviews, interruptedBuilds, jobs, replies } = await loadInbox();
-    return approvals.length + buildReviews.length + interruptedBuilds.length
-      + jobs.length + replies.length;
+    const {
+      approvals, buildReviews, businessReviews, businessReviewsMore,
+      materialsWaiting, interruptedBuilds, jobs, replies,
+    } = await loadInbox();
+    return approvals.length + buildReviews.length
+      + businessReviews.length + businessReviewsMore
+      // The materials pile counts as ONE decision («йди розбери список»), not N.
+      + (materialsWaiting > 0 ? 1 : 0)
+      + interruptedBuilds.length + jobs.length + replies.length;
   } catch {
     return 0;
   }

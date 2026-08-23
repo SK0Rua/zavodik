@@ -2,7 +2,9 @@ import Link from 'next/link';
 import { loadInbox } from '@/lib/inbox';
 import { ApprovalCard } from '@/components/ApprovalCard';
 import { BuildReviewCard } from '@/components/BuildReviewCard';
-import { InterruptedBuildCard, JobProblemCard, ReplyCard } from '@/components/InboxSmallCards';
+import {
+  BusinessReviewCard, InterruptedBuildCard, JobProblemCard, ReplyCard,
+} from '@/components/InboxSmallCards';
 import { Metric } from '@/components/Status';
 
 export const dynamic = 'force-dynamic';
@@ -21,23 +23,34 @@ export default async function InboxPage({
   searchParams,
 }: { searchParams: Promise<{ business?: string }> }) {
   const { business } = await searchParams;
-  const { approvals, buildReviews, interruptedBuilds, jobs, replies, counts } = await loadInbox();
+  const {
+    approvals, buildReviews, businessReviews, businessReviewsMore, materialsWaiting,
+    interruptedBuilds, jobs, replies, counts,
+  } = await loadInbox();
 
   // Telegram links carry ?business=<id> so a push lands on that one card.
   const focus = business
     ? {
         approvals: approvals.filter((a) => a.businessId === business),
         buildReviews: buildReviews.filter((b) => b.businessId === business),
+        businessReviews: businessReviews.filter((b) => b.businessId === business),
         interruptedBuilds: interruptedBuilds.filter((b) => b.businessId === business),
         jobs: jobs.filter((j) => j.businessId === business),
         replies: replies.filter((r) => r.businessId === business),
       }
-    : { approvals, buildReviews, interruptedBuilds, jobs, replies };
+    : { approvals, buildReviews, businessReviews, interruptedBuilds, jobs, replies };
+
+  // The materials pile is campaign-wide by nature, so it hides in focus mode.
+  const showMaterials = !business && materialsWaiting > 0;
+  const showMore = !business && businessReviewsMore > 0;
 
   const total = focus.approvals.length + focus.buildReviews.length
+    + focus.businessReviews.length + (showMaterials ? 1 : 0) + (showMore ? 1 : 0)
     + focus.interruptedBuilds.length + focus.jobs.length + focus.replies.length;
-  const allTotal = approvals.length + buildReviews.length + interruptedBuilds.length
-    + jobs.length + replies.length;
+  const allTotal = approvals.length + buildReviews.length
+    + businessReviews.length + (materialsWaiting > 0 ? 1 : 0)
+    + (businessReviewsMore > 0 ? 1 : 0)
+    + interruptedBuilds.length + jobs.length + replies.length;
 
   return (
     <div>
@@ -68,6 +81,26 @@ export default async function InboxPage({
           {focus.buildReviews.map((b) => (
             <BuildReviewCard key={`build-${b.projectId}`} item={b} />
           ))}
+          {/* Businesses the pipeline parked for a verdict (fact-check said no,
+              qualifier doubts) — below builds, because a finished demo waiting
+              on a decision is worth more than a lead that might become one. */}
+          {focus.businessReviews.map((b) => (
+            <BusinessReviewCard key={`bizreview-${b.businessId}`} item={b} />
+          ))}
+          {(showMaterials || showMore) && (
+            <div className="card p-5 sm:p-6">
+              <p className="text-sm text-ink-soft max-w-[70ch]">
+                {showMaterials && (
+                  <>Ще {materialsWaiting} бізнес(ів) чекають матеріалів — бракує фото,
+                  соцмереж чи фактів для демо. </>
+                )}
+                {showMore && <>І ще {businessReviewsMore} чекають вердикту. </>}
+                <Link href="/businesses?status=needs_review" className="link">
+                  Відкрити список →
+                </Link>
+              </p>
+            </div>
+          )}
           {/* Above the broken steps: this one is a single button away from
               being resolved, and it is the newest thing that went wrong. */}
           {focus.interruptedBuilds.map((b) => (

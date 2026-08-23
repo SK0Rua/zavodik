@@ -49,6 +49,29 @@ export function humanStatus(status: string): HumanStatus {
 }
 
 /**
+ * WHAT a `needs_review` business is asking of Roman — the missing half of the
+ * badge. «Потрібна твоя увага» covers three different requests, and every
+ * surface (the inbox, the card header, the action band) must agree on which
+ * one this is, so the classification lives here with the rest of the
+ * status_reason semantics and nowhere else.
+ *
+ * - `fact_check`: the stage-8 critic refused the evidence package (or nobody
+ *   independently checked it) — the ask is «прочитай факти і винеси вердикт».
+ * - `materials`: the readiness gate found gaps — the ask is «дай матеріали
+ *   або збудуй попри пропуски», and there can be many of these at once.
+ * - `verdict`: every other parked reason (not qualified, contradiction, no
+ *   evidence, fast-qualify doubts) — the ask is a yes/no about the business.
+ */
+export type ReviewAsk = 'fact_check' | 'materials' | 'verdict';
+
+export function reviewAsk(statusReason: string | null | undefined): ReviewAsk {
+  const r = (statusReason ?? '').trim();
+  if (/^QA (failed|agent unavailable)/i.test(r)) return 'fact_check';
+  if (/^gaps?:/i.test(r)) return 'materials';
+  return 'verdict';
+}
+
+/**
  * Reasons the pipeline writes for itself, translated for the person reading them.
  *
  * `status_reason` is written by workers in English and in their own vocabulary

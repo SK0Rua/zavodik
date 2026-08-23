@@ -23,6 +23,7 @@
 
 import type { BuildButtonState } from './buildPolicy';
 import type { SocialsButtonState } from './socials';
+import { reviewAsk } from './humanStatus';
 
 /**
  * How an action looks, which is also what it means.
@@ -93,6 +94,26 @@ export interface CardActionInput {
   socialsGap: boolean;
   /** True when this business has a row waiting in Вхідні. */
   hasPendingApproval: boolean;
+  /**
+   * `businesses.status_reason` — the same string `humanReasonForHeader` prints.
+   * `needs_review` is a catch-all, and WHICH review is being asked for lives
+   * only here; without it the band offers «Побудувати демо» with no hint of
+   * what the person is supposed to have reviewed first (Roman, 2026-08-23:
+   * «Де моя увага треба?» — на картці, що чекала рішення по фактчеку).
+   */
+  statusReason: string | null | undefined;
+}
+
+/**
+ * Is this `needs_review` specifically the stage-8 fact-check saying no?
+ *
+ * Exported so the business page can open on the «Факти й джерела» tab with the
+ * critic's report unfolded — the thing this status is asking a person to read.
+ * The reason classification itself lives in `humanStatus.reviewAsk`, next to
+ * the rest of the status_reason semantics.
+ */
+export function isFactCheckAttention(status: string, statusReason: string | null | undefined): boolean {
+  return status === 'needs_review' && reviewAsk(statusReason) === 'fact_check';
 }
 
 /**
@@ -218,6 +239,20 @@ export function cardActionBar(input: CardActionInput): CardActionBar {
   if (status === 'needs_review') {
     const actions: CardAction[] = [];
 
+    // The fact-check said no. The decision being asked for is «прочитай звіт
+    // критика і вирішуй», so the band SAYS that — otherwise the only visible
+    // action is a build button and the review this status asks for is a
+    // folded panel two tabs away.
+    const factCheckHint = isFactCheckAttention(status, input.statusReason)
+      ? (/unavailable/i.test(input.statusReason ?? '')
+        ? 'Факти ніхто незалежно не перевірив — перевіряльник був недоступний. '
+          + 'Переглянь «Факти й джерела» сам: якщо все чесно — «Побудувати демо», '
+          + 'якщо ні — закрий бізнес через «Інше…».'
+        : 'Критик не прийняв факти — його звіт відкритий у «Факти й джерела» нижче. '
+          + 'Якщо зауваження дріб’язкові — «Побудувати демо» і є твоє «ок» попри вердикт; '
+          + 'якщо бізнес не вартий роботи — закрий його через «Інше…».')
+      : undefined;
+
     // A missing social profile is the gap Roman can close with one click, so it
     // leads. Every other gap needs a person to go and find something.
     if (socialsGap || (openGaps.length > 0 && socials.enabled)) {
@@ -238,7 +273,7 @@ export function cardActionBar(input: CardActionInput): CardActionBar {
       disabledReason: build.enabled ? undefined : build.hint,
     });
 
-    return { waiting: null, actions };
+    return { waiting: null, hint: factCheckHint, actions };
   }
 
   // ── after the send: the demo, if there is one, and nothing else ───────────
