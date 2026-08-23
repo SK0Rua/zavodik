@@ -1,16 +1,16 @@
 /**
- * Interactive Claude Code inside tmux — the runtime Roman can ATTACH to.
+ * The selected code-agent CLI inside tmux — the runtime Roman can ATTACH to.
  *
  * Why this exists, in his words: «Я питав про можливість підключення до
  * термінальної сесії». The ndjson build log (src/build/buildLog.ts) answers
  * "чи воно живе", but it is a *summary* — three hundred characters per turn,
  * no scrollback, nothing to type into. Watching a build had to mean the same
- * thing as watching `claude` in your own terminal, and the only way to get the
- * real TUI is to run the real TUI.
+ * thing as watching the selected CLI in your own terminal. Claude runs its
+ * interactive TUI; Codex streams its non-interactive `codex exec` session.
  *
  * So a build can run one of two ways (`config.build.mode`):
- *   `sdk`  — `claudeCodeRuntime.codeAgent()`, the headless SDK session.
- *   `tmux` — this file: a detached tmux session running the interactive CLI,
+ *   `sdk`  — the selected runtime's headless session.
+ *   `tmux` — this file: a detached tmux session running the selected CLI,
  *            which `ttyd` then serves over HTTP so the console can attach.
  *
  * The two are deliberately interchangeable: same `CodeAgentOptions`, same
@@ -55,8 +55,13 @@ import { zodToJsonSchema } from './schema.js';
 import { withAgentSlot } from './semaphore.js';
 import { codeAgentEnv } from './sandbox.js';
 import { readAndValidateResult } from './claudeCodeRuntime.js';
+import { codexLooksRateLimited, codexModelArgs } from './codexRuntime.js';
 import { startTerminalServer, stopTerminalServer } from './terminalServer.js';
-import type { CodeAgentOptions } from './types.js';
+import {
+  RateLimitedError,
+  type AgentRuntimeId,
+  type CodeAgentOptions,
+} from './types.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -218,6 +223,8 @@ export interface TerminalMarker {
   session: string;
   /** Whether a web terminal is actually being served, or it is SSH-only. */
   served: boolean;
+  /** Effective value for this session; Codex exec is always spectator-only. */
+  writable?: boolean;
   startedAt: string;
   /** Refreshed each poll tick; how the reader tells live from leftover. */
   heartbeatAt: string;
@@ -370,11 +377,73 @@ export function kickoffLine(promptFile: string): string {
   return `Read ${promptFile} in the workspace root and do everything it says.`;
 }
 
+/** The CLI process tmux should launch for the selected subscription runtime. */
+export interface TerminalLaunch {
+  command: string;
+  args: string[];
+  /** Claude's TUI needs the prompt typed after first paint; Codex exec does not. */
+  needsKickoff: boolean;
+  /** Whether browser keystrokes can meaningfully reach the running agent. */
+  interactive: boolean;
+}
+
+export function terminalLaunch(
+  runtimeId: AgentRuntimeId,
+  opts: CodeAgentOptions,
+  settingsPath: string,
+): TerminalLaunch {
+  if (runtimeId === 'codex') {
+    return {
+      command: config.agents.codexBin,
+      args: [
+        'exec',
+        '--sandbox', 'workspace-write',
+        '--skip-git-repo-check',
+        '--cd', opts.cwd,
+        ...codexModelArgs(opts.heavy),
+        kickoffLine(PROMPT_FILE),
+      ],
+      needsKickoff: false,
+      interactive: false,
+    };
+  }
+
+  const args = [
+    '--dangerously-skip-permissions',
+    '--model', opts.heavy ? config.agents.modelHeavy : config.agents.model,
+    '--settings', settingsPath,
+    '--setting-sources', 'project',
+    '--name', opts.name,
+  ];
+  if (opts.allowedTools?.length) args.push('--allowedTools', ...opts.allowedTools);
+  return { command: 'claude', args, needsKickoff: true, interactive: true };
+}
+
 export interface TmuxRunOutcome {
   /** `result` — result.json appeared. `idle`/`timeout`/`gone` — it did not. */
   reason: 'result' | 'idle' | 'timeout' | 'gone';
   scrollback: string;
   elapsedMs: number;
+}
+
+/** Map a terminal run with no result artifact to the queue-visible error type. */
+export function terminalFailureError(
+  runtimeId: AgentRuntimeId,
+  outcome: TmuxRunOutcome,
+  agentName: string,
+): Error {
+  const tail = clip(outcome.scrollback.split('\n').slice(-25).join(' '), 400);
+  if (runtimeId === 'codex' && codexLooksRateLimited(outcome.scrollback)) {
+    return new RateLimitedError(`codex subscription limit reached: ${tail}`, {
+      retryAfterMs: config.agents.rateLimitDefaultWaitMs,
+      resetsAt: new Date(Date.now() + config.agents.rateLimitDefaultWaitMs),
+      runtime: 'codex',
+    });
+  }
+  return new Error(
+    `tmux code agent "${agentName}" produced no result.json (${outcome.reason} after ` +
+    `${Math.round(outcome.elapsedMs / 1000)}s). Pane tail: ${tail}`,
+  );
 }
 
 /**
@@ -445,6 +514,8 @@ export async function runCodeAgentTmux<T>(
   resultSchema: ZodType<T>,
   /** Session name; defaults to one derived from the workspace. Tests override it. */
   session = sessionName(path.basename(opts.cwd)),
+  /** Selected subscription CLI. Kept after session so existing test callers remain compatible. */
+  runtimeId: AgentRuntimeId = 'claude-code',
 ): Promise<T> {
   const resultPath = path.join(opts.cwd, 'result.json');
   const promptPath = path.join(opts.cwd, PROMPT_FILE);
@@ -463,17 +534,19 @@ export async function runCodeAgentTmux<T>(
     // The prompt file carries the same text the SDK path sends as the prompt,
     // including the mandatory result.json instruction — the contract is
     // identical, only the delivery differs.
+    const prompt = `${opts.appendSystemPrompt ? `${opts.appendSystemPrompt}\n\n---\n\n` : ''}${opts.prompt}`;
     await writeFile(
       promptPath,
-      `${opts.prompt}\n\n` +
+      `${prompt}\n\n` +
       `MANDATORY FINAL STEP: write a file named result.json in the workspace root (${opts.cwd}) ` +
       `matching this JSON Schema, then stop:\n${JSON.stringify(zodToJsonSchema(resultSchema), null, 2)}\n`,
       'utf8',
     );
-    await writeFile(settingsPath, JSON.stringify(guardSettings(opts.cwd, tsxBinary()), null, 2), 'utf8');
-
-    // See preTrustWorkspace — without it the TUI never reaches its input box.
-    await preTrustWorkspace(opts.cwd);
+    if (runtimeId === 'claude-code') {
+      await writeFile(settingsPath, JSON.stringify(guardSettings(opts.cwd, tsxBinary()), null, 2), 'utf8');
+      // See preTrustWorkspace — without it the TUI never reaches its input box.
+      await preTrustWorkspace(opts.cwd);
+    }
 
     // A leftover session under the same name would swallow our send-keys and
     // never write a result. Names are per project, so this is a stale one.
@@ -482,24 +555,16 @@ export async function runCodeAgentTmux<T>(
       await killSession(session);
     }
 
+    const launch = terminalLaunch(runtimeId, opts, settingsPath);
     const args = [
       'new-session', '-d', '-s', session, '-c', opts.cwd,
       // Sizing matters: tmux defaults a detached session to 80x24, and the CLI
       // renders its TUI to that width forever after. 200x50 makes the attached
       // view readable instead of a column of wrapped fragments.
       '-x', '200', '-y', '50',
-      'claude',
-      '--dangerously-skip-permissions',
-      '--model', opts.heavy ? config.agents.modelHeavy : config.agents.model,
-      // Guard parity with the SDK path.
-      '--settings', settingsPath,
-      // Same asymmetry as the SDK path: the workspace's own `.claude/` (skills)
-      // loads, the operator's personal ~/.claude does not.
-      '--setting-sources', 'project',
-      // Shown in the pane title, so an attached terminal says which build it is.
-      '--name', opts.name,
+      launch.command,
+      ...launch.args,
     ];
-    if (opts.allowedTools?.length) args.push('--allowedTools', ...opts.allowedTools);
     // Chained into the SAME tmux invocation (`;` is tmux's command separator,
     // not the shell's — exec() spawns without a shell): a dying CLI keeps its
     // pane, output and exit status around for `paneDeath` to quote, instead of
@@ -508,7 +573,7 @@ export async function runCodeAgentTmux<T>(
     // beats the option.
     args.push(';', 'set-option', '-w', '-t', session, 'remain-on-exit', 'on');
 
-    const env = codeAgentEnv(config.agents.oauthToken);
+    const env = codeAgentEnv(runtimeId === 'claude-code' ? config.agents.oauthToken : '');
     const started = await exec('tmux', args, { env, timeoutMs: 30_000 });
     if (started.code !== 0) {
       throw new Error(
@@ -518,12 +583,17 @@ export async function runCodeAgentTmux<T>(
 
     // The spectator seat. Best-effort by construction: a build must not fail
     // because ttyd is missing or its port is busy.
-    const served = await startTerminalServer(session).catch(() => false);
+    const writable = config.build.terminalWritable && launch.interactive;
+    const served = await startTerminalServer(session, { writable }).catch(() => false);
     const markerPath = path.join(opts.cwd, TERMINAL_MARKER);
     const startedAtIso = new Date().toISOString();
     const writeMarker = async (): Promise<void> => {
       const marker: TerminalMarker = {
-        session, served, startedAt: startedAtIso, heartbeatAt: new Date().toISOString(),
+        session,
+        served,
+        writable,
+        startedAt: startedAtIso,
+        heartbeatAt: new Date().toISOString(),
       };
       await writeFile(markerPath, JSON.stringify(marker), 'utf8').catch(() => undefined);
     };
@@ -538,12 +608,11 @@ export async function runCodeAgentTmux<T>(
 
     let outcome: TmuxRunOutcome;
     try {
-      // Keys sent while the CLI is still painting its welcome screen are
-      // silently swallowed — a fixed sleep is a race we lost in practice (the
-      // pane sat at an empty input box for the whole timeout). So: wait for the
-      // input box to actually render, send, then VERIFY the text landed in the
-      // pane and resend if it did not.
-      await sendKickoffVerified(session, kickoffLine(PROMPT_FILE), env);
+      if (launch.needsKickoff) {
+        // Keys sent while Claude is still painting its welcome screen are
+        // silently swallowed, so wait for the input box and verify delivery.
+        await sendKickoffVerified(session, kickoffLine(PROMPT_FILE), env);
+      }
 
       outcome = await waitForResult(session, resultPath, timeoutMs, env, () => { void writeMarker(); });
     } finally {
@@ -570,15 +639,11 @@ export async function runCodeAgentTmux<T>(
     }
 
     if (outcome.reason !== 'result') {
-      const tail = clip(outcome.scrollback.split('\n').slice(-25).join(' '), 400);
       await appendBuildLog(opts.buildLogPath, {
         t: new Date().toISOString(), type: 'error', agent: opts.name,
         summary: `Термінальна сесія закінчилась без result.json (${outcome.reason})`,
       });
-      throw new Error(
-        `tmux code agent "${opts.name}" produced no result.json (${outcome.reason} after ` +
-        `${Math.round(outcome.elapsedMs / 1000)}s). Pane tail: ${tail}`,
-      );
+      throw terminalFailureError(runtimeId, outcome, opts.name);
     }
 
     await appendBuildLog(opts.buildLogPath, {

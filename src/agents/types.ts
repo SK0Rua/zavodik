@@ -120,8 +120,8 @@ export interface CodeAgentOptions {
    *
    * Set `false` for agents nobody would ever watch (the social finder, the brand
    * agent): they are short, they have no workspace worth attaching to, and a
-   * tmux session per call would be pure overhead. Ignored by the Codex adapter,
-   * and ignored on a host with no tmux — see `runCodeAgent()`.
+   * tmux session per call would be pure overhead. Supported by both Claude Code
+   * and Codex, and ignored on a host with no tmux — see `runCodeAgent()`.
    */
   terminal?: boolean;
   /**
@@ -131,9 +131,9 @@ export interface CodeAgentOptions {
    * «Виконується». The builder and the QA critic supply it; agents with no
    * project (brand, social finder) leave it unset and produce no trace.
    *
-   * Claude Code only. The Codex adapter drives a CLI over stdout rather than a
-   * typed message stream, so it ignores this — the worker's own stage markers
-   * are still written and the timeline stays honest, just without agent chatter.
+   * Claude's headless adapter adds typed-message summaries. Codex headless has
+   * no equivalent typed stream, but terminal mode exposes its raw CLI output;
+   * the worker's own stage markers keep the timeline honest in either mode.
    */
   buildLogPath?: string;
 }

@@ -113,7 +113,10 @@ export function ttydArgs(session: string, opts: {
  *
  * Returns whether a server is now running for that session.
  */
-export async function startTerminalServer(session: string): Promise<boolean> {
+export async function startTerminalServer(
+  session: string,
+  opts: { writable?: boolean } = {},
+): Promise<boolean> {
   if (!config.build.terminalWeb) return false;
   if (current?.session === session && current.proc.exitCode === null) return true;
 
@@ -131,7 +134,7 @@ export async function startTerminalServer(session: string): Promise<boolean> {
     return false;
   }
 
-  const writable = config.build.terminalWritable;
+  const writable = opts.writable ?? config.build.terminalWritable;
   const proc = spawn('ttyd', ttydArgs(session, { port: config.build.terminalPort, password, writable }), {
     stdio: 'ignore',
     // Detached false: the ttyd must die with the worker, or a restarted worker

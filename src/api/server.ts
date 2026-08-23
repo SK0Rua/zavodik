@@ -354,7 +354,10 @@ ${previous || '(попередніх автоматичних зауважень
             // otherwise the UI says how to attach over SSH instead of offering
             // a link that would 404.
             url: marker.served ? config.build.terminalBaseUrl || null : null,
-            writable: config.build.terminalWritable,
+            // New markers record the effective value per runtime. Codex runs a
+            // non-interactive `exec`, so even a globally writable terminal must
+            // stay a spectator view. Old Claude markers fall back to config.
+            writable: marker.writable ?? config.build.terminalWritable,
             startedAt: marker.startedAt,
             // ttyd's basic-auth pair, ONLY when a terminal is actually being
             // served. Roman opened the link and hit a browser password prompt
