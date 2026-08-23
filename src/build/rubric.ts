@@ -56,6 +56,8 @@ export interface RubricVerdict {
     name: string;
     score: number;
     vetoes: string[];
+    /** Evidence/contract violations that building cannot repair. */
+    unrepairableVetoes: string[];
     /** Per-axis contribution, so a decision can be re-read months later. */
     breakdown: Record<string, number>;
     /** Estimated wow for this direction: total /18, ambition /15, and the gate. */
@@ -171,6 +173,20 @@ function normFont(name: string): string {
 }
 
 /**
+ * A hard veto, classified (Roman's review 2026-08-23): `repairable` vetoes are
+ * defects the BUILDER can legitimately fix in the workspace (swap a font, drop
+ * a component, add motion); the rest are EVIDENCE/CONTRACT violations —
+ * invented reviews, a hero asset that does not exist, an AI image passed off
+ * as real, a false brand claim — and no amount of building repairs those.
+ * After the design gate's one retry, unrepairable vetoes go to NeedsHuman
+ * instead of into a 40-90 minute build.
+ */
+export interface DirectionVeto {
+  reason: string;
+  repairable: boolean;
+}
+
+/**
  * Hard vetoes applied by code regardless of what the critic thought.
  * A vetoed direction can still win if every direction is vetoed — but the veto
  * text travels into the build task so the agent fixes it rather than shipping it.
@@ -184,21 +200,23 @@ export function vetoesFor(
    * slug check, which is what the unit tests and any caller without the pack want.
    */
   knownReferenceSlugs: readonly string[] = [],
-): string[] {
-  const vetoes: string[] = [];
+): DirectionVeto[] {
+  const vetoes: DirectionVeto[] = [];
+  const repairable = (reason: string) => vetoes.push({ reason, repairable: true });
+  const invalid = (reason: string) => vetoes.push({ reason, repairable: false });
   const isGreek = snapshot.language.toLowerCase().startsWith('el');
 
   if (isGreek) {
     const safeDisplay = GREEK_SAFE_DISPLAY.map(normFont);
     const safeBody = GREEK_SAFE_BODY.map(normFont);
     if (!safeDisplay.includes(normFont(direction.typography.displayFont))) {
-      vetoes.push(
+      repairable(
         `display font "${direction.typography.displayFont}" is not on the verified Greek-subset list ` +
         `(${GREEK_SAFE_DISPLAY.join(', ')}); next/font would fail the build`,
       );
     }
     if (!safeBody.includes(normFont(direction.typography.bodyFont))) {
-      vetoes.push(
+      repairable(
         `body font "${direction.typography.bodyFont}" is not on the verified Greek-subset list ` +
         `(${GREEK_SAFE_BODY.join(', ')}); next/font would fail the build`,
       );
@@ -206,7 +224,7 @@ export function vetoesFor(
   }
 
   if (BANNED_DISPLAY_FONTS.includes(direction.typography.displayFont.toLowerCase().replace(/[_-]/g, ' '))) {
-    vetoes.push(`display font "${direction.typography.displayFont}" is on the anti-slop ban-list`);
+    repairable(`display font "${direction.typography.displayFont}" is on the anti-slop ban-list`);
   }
 
   // Hero promises a photo: the file must actually exist in the snapshot.
@@ -214,47 +232,47 @@ export function vetoesFor(
     const known = snapshot.assets.some((a) => a.file === direction.heroTreatment.assetFile
       || a.file.endsWith(`/${direction.heroTreatment.assetFile}`));
     if (!known) {
-      vetoes.push(`hero asset "${direction.heroTreatment.assetFile}" is not in the snapshot assets`);
+      invalid(`hero asset "${direction.heroTreatment.assetFile}" is not in the snapshot assets`);
     } else {
       const asset = snapshot.assets.find((a) => a.file === direction.heroTreatment.assetFile
         || a.file.endsWith(`/${direction.heroTreatment.assetFile}`))!;
       if (asset.aiGenerated && direction.heroTreatment.kind.startsWith('real-photo')) {
-        vetoes.push(
+        invalid(
           `hero asset "${asset.file}" is ai_generated and cannot be presented as a real photo of the business`,
         );
       }
     }
   } else if (direction.heroTreatment.kind.startsWith('real-photo')) {
-    vetoes.push(`hero kind "${direction.heroTreatment.kind}" promises a real photo but names no asset file`);
+    invalid(`hero kind "${direction.heroTreatment.kind}" promises a real photo but names no asset file`);
   }
 
   // The video brief must start from a REAL photo that exists — an imagined
   // start frame sends Roman hunting for a picture that is not there.
   const realFiles = snapshot.assets.filter((a) => !a.aiGenerated).map((a) => a.file);
   if (direction.heroVideoBrief && !direction.heroVideoStartFrame) {
-    vetoes.push('heroVideoBrief is set but heroVideoStartFrame names no file');
+    repairable('heroVideoBrief is set but heroVideoStartFrame names no file');
   }
   if (direction.heroVideoStartFrame) {
     const known = realFiles.some((f) => f === direction.heroVideoStartFrame
       || f.endsWith(`/${direction.heroVideoStartFrame}`));
     if (!known) {
-      vetoes.push(
+      invalid(
         `heroVideoStartFrame "${direction.heroVideoStartFrame}" is not a real (non-AI) photo in the snapshot`,
       );
     }
   }
   if (!direction.heroVideoBrief && realFiles.length > 0) {
-    vetoes.push('the snapshot has real photographs but heroVideoBrief is null — write the brief');
+    repairable('the snapshot has real photographs but heroVideoBrief is null — write the brief');
   }
 
   if (direction.poolComponents.length > 4) {
-    vetoes.push(`uses ${direction.poolComponents.length} pool components; the cap is 4 (component-demo look)`);
+    repairable(`uses ${direction.poolComponents.length} pool components; the cap is 4 (component-demo look)`);
   }
 
   // Reviews section planned with no reviews in evidence.
   const plansReviews = direction.layoutSkeleton.some((s) => /review|testimonial|μαρτυρ|κριτικ/i.test(s.sectionId));
   if (plansReviews && snapshot.reviews.length === 0) {
-    vetoes.push('layout includes a reviews/testimonials section but the snapshot has no verified reviews');
+    invalid('layout includes a reviews/testimonials section but the snapshot has no verified reviews');
   }
 
   // ── brand palette ─────────────────────────────────────────────────────────
@@ -269,12 +287,12 @@ export function vetoesFor(
   // existed; an old contract cannot be judged against a rule it predates.
   if (direction.palette.paletteSource === 'brand') {
     if (brandHexes.length === 0) {
-      vetoes.push(
+      invalid(
         'palette claims paletteSource "brand" but the snapshot carries no measured brand colours; '
         + 'use "photos" or "reference-fallback" and say so honestly',
       );
     } else if (!paletteEchoesBrand(direction.palette, brandHexes)) {
-      vetoes.push(
+      invalid(
         `palette claims paletteSource "brand" but none of its colours (bg ${direction.palette.background}, `
         + `fg ${direction.palette.foreground}, accent ${direction.palette.accent}) is within reach of any `
         + `measured brand colour (${brandHexes.join(', ')})`,
@@ -287,7 +305,7 @@ export function vetoesFor(
   // the visual critic compares the built page against them. An invented slug
   // would silently leave the critic with no bar to judge against.
   if (knownReferenceSlugs.length && !knownReferenceSlugs.includes(direction.referenceSlug)) {
-    vetoes.push(
+    repairable(
       `motion reference slug "${direction.referenceSlug}" is not in references/motion/ ` +
       `(available: ${knownReferenceSlugs.join(', ')})`,
     );
@@ -296,14 +314,14 @@ export function vetoesFor(
   // A static hero is the defect Roman rejected. It is still allowed — some
   // businesses have one usable photo and no clip — but only stated out loud.
   if (direction.heroMotion === 'none' && !direction.heroMotionJustification?.trim()) {
-    vetoes.push('heroMotion is "none" with no justification: a first screen that does not move fails the wow gate');
+    repairable('heroMotion is "none" with no justification: a first screen that does not move fails the wow gate');
   }
 
   // A video hero with no video is a promise the builder cannot keep.
   if (direction.heroMotion === 'video') {
     const hasClip = snapshot.assets.some((a) => /\.(mp4|webm|mov)$/i.test(a.file));
     if (!hasClip) {
-      vetoes.push('heroMotion is "video" but the snapshot contains no video asset; use "kenburns" over a real photo instead');
+      repairable('heroMotion is "video" but the snapshot contains no video asset; use "kenburns" over a real photo instead');
     }
   }
 
@@ -311,7 +329,7 @@ export function vetoesFor(
   // to a moving colour block, which is decoration rather than content reveal.
   if ((direction.heroMotion === 'kenburns' || direction.heroMotion === 'mask' || direction.heroMotion === 'split')
     && !snapshot.assets.some((a) => !a.aiGenerated)) {
-    vetoes.push(
+    invalid(
       `heroMotion "${direction.heroMotion}" animates a photograph, but the snapshot has no real (non-AI) photo`,
     );
   }
@@ -424,6 +442,40 @@ export function scoreDirection(
 }
 
 /**
+ * What the design gate does with a chosen contract — deterministic code, in the
+ * same module as the vetoes it reads, so the worker only executes the routing
+ * (spec: the LLM never decides transitions).
+ *
+ * - `retry`: the gate failed on the FIRST attempt — one more run of stage 9
+ *   with the gate's reasons as feedback.
+ * - `needs_human`: the retry also failed the wow floor, or the winner carries
+ *   an unrepairable evidence/contract violation — building cannot fix either,
+ *   only burn 40-90 minutes proving it (Roman's review, 2026-08-23).
+ * - `build`: proceed; `openVetoes` (all repairable by now) ride into BUILD-TASK
+ *   as «Open vetoes you MUST resolve».
+ */
+export type GateRoute =
+  | { action: 'retry'; reasons: string[] }
+  | { action: 'needs_human'; reasons: string[] }
+  | { action: 'build'; openVetoes: string[] };
+
+export function routeDesignGate(verdict: RubricVerdict, designAttempt: number): GateRoute {
+  const winner = verdict.ranking[0];
+  const vetoes = winner?.vetoes ?? [];
+  const unrepairable = winner?.unrepairableVetoes ?? [];
+  const wowReasons = verdict.chosenWow.passed ? [] : verdict.chosenWow.reasons;
+
+  const gateReasons = [...wowReasons, ...vetoes];
+  if (gateReasons.length > 0 && designAttempt === 1) {
+    return { action: 'retry', reasons: gateReasons };
+  }
+  if (designAttempt > 1 && (wowReasons.length > 0 || unrepairable.length > 0)) {
+    return { action: 'needs_human', reasons: [...wowReasons, ...unrepairable] };
+  }
+  return { action: 'build', openVetoes: vetoes };
+}
+
+/**
  * Pick the winning direction. Ties break on structuralDistinctiveness, then on
  * the order the art director produced them — never randomly, so a rerun of the
  * same inputs reproduces the same site.
@@ -441,11 +493,13 @@ export function chooseDirection(
     const score = scores.find((s) => s.name.trim().toLowerCase() === direction.name.trim().toLowerCase())
       ?? scores[index];
     if (!score) throw new Error(`chooseDirection: no critique score for direction "${direction.name}"`);
-    const vetoes = vetoesFor(direction, snapshot, knownReferenceSlugs);
+    const classified = vetoesFor(direction, snapshot, knownReferenceSlugs);
+    const vetoes = classified.map((v) => v.reason);
+    const unrepairable = classified.filter((v) => !v.repairable).map((v) => v.reason);
     const neglect = brandNeglect(direction, snapshot);
     const repeat = repeatPenalty(direction, campaignUsage);
     const { total, breakdown } = scoreDirection(score, vetoes.length, neglect !== null, repeat.total);
-    return { direction, score, vetoes, neglect, repeat, total, breakdown, index };
+    return { direction, score, vetoes, unrepairable, neglect, repeat, total, breakdown, index };
   });
 
   const ranked = [...rows].sort((a, b) =>
@@ -483,6 +537,7 @@ export function chooseDirection(
       name: r.direction.name,
       score: r.total,
       vetoes: r.vetoes,
+      unrepairableVetoes: r.unrepairable,
       breakdown: r.breakdown,
       wow: wowVerdict(r.score.wow),
       brandNeglect: r.neglect,

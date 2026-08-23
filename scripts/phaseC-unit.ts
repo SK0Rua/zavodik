@@ -9,7 +9,9 @@
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { brandNeglect, chooseDirection, scoreDirection, vetoesFor } from '../src/build/rubric.js';
+import {
+  brandNeglect, chooseDirection, routeDesignGate, scoreDirection, vetoesFor,
+} from '../src/build/rubric.js';
 import { checkProvenance } from '../src/build/provenance.js';
 import { unusableContactReason } from '../src/build/snapshot.js';
 import {
@@ -164,36 +166,36 @@ check('greek-safe font pair passes', vetoesFor(direction(), snapshot).length ===
 check('non-greek display font vetoed on a Greek site',
   vetoesFor(direction({
     typography: { displayFont: 'Fraunces', bodyFont: 'Manrope', hierarchyRule: 'x', microLabelTreatment: 'y' },
-  }), snapshot).some((v) => v.includes('Fraunces')));
+  }), snapshot).some((v) => v.reason.includes('Fraunces')));
 
 check('non-greek body font vetoed on a Greek site',
   vetoesFor(direction({
     typography: { displayFont: 'GFS_Didot', bodyFont: 'Outfit', hierarchyRule: 'x', microLabelTreatment: 'y' },
-  }), snapshot).some((v) => v.includes('Outfit')));
+  }), snapshot).some((v) => v.reason.includes('Outfit')));
 
 check('banned display font vetoed',
   vetoesFor(direction({
     typography: { displayFont: 'Inter', bodyFont: 'Manrope', hierarchyRule: 'x', microLabelTreatment: 'y' },
-  }), { ...snapshot, language: 'en' }).some((v) => v.includes('ban-list')));
+  }), { ...snapshot, language: 'en' }).some((v) => v.reason.includes('ban-list')));
 
 check('hero asset that does not exist is vetoed',
   vetoesFor(direction({
     heroTreatment: { kind: 'real-photo-full-bleed', assetFile: 'assets/nope.jpg', description: 'x' },
-  }), snapshot).some((v) => v.includes('not in the snapshot')));
+  }), snapshot).some((v) => v.reason.includes('not in the snapshot')));
 
 check('AI image used as a real-photo hero is vetoed',
   vetoesFor(direction({
     heroTreatment: { kind: 'real-photo-full-bleed', assetFile: 'generated/background-def.png', description: 'x' },
-  }), snapshot).some((v) => v.includes('ai_generated')));
+  }), snapshot).some((v) => v.reason.includes('ai_generated')));
 
 check('real-photo hero with no asset named is vetoed',
   vetoesFor(direction({
     heroTreatment: { kind: 'real-photo-split', assetFile: null, description: 'x' },
-  }), snapshot).some((v) => v.includes('names no asset')));
+  }), snapshot).some((v) => v.reason.includes('names no asset')));
 
 check('more than 4 pool components vetoed',
   vetoesFor(direction({ poolComponents: ['a', 'b', 'c', 'd', 'e'] }), snapshot)
-    .some((v) => v.includes('cap is 4')));
+    .some((v) => v.reason.includes('cap is 4')));
 
 check('reviews section without verified reviews is vetoed',
   vetoesFor(direction({
@@ -202,7 +204,7 @@ check('reviews section without verified reviews is vetoed',
       { sectionId: 'reviews', composition: 'x', heightFeel: 'medium' },
       { sectionId: 'contact', composition: 'x', heightFeel: 'tight' },
     ],
-  }), snapshot).some((v) => v.includes('no verified reviews')));
+  }), snapshot).some((v) => v.reason.includes('no verified reviews')));
 
 check('reviews section IS allowed when reviews exist',
   vetoesFor(direction({
@@ -213,6 +215,91 @@ check('reviews section IS allowed when reviews exist',
     ],
   }), { ...snapshot, reviews: [{ value: { text: 'great', rating: 5, author: null }, sourceIds: [1], confidence: 0.9 }] })
     .length === 0);
+
+// ── veto classification: what building can and cannot repair ────────────────
+// The gate's routing hangs off `repairable`, so the flag itself is asserted per
+// veto family — not just the reason text (code review 2026-08-23, finding #1).
+
+check('a font veto is REPAIRABLE (the builder swaps the font)',
+  vetoesFor(direction({
+    typography: { displayFont: 'Fraunces', bodyFont: 'Manrope', hierarchyRule: 'x', microLabelTreatment: 'y' },
+  }), snapshot).every((v) => v.repairable));
+
+check('a pool-component overflow is REPAIRABLE (the builder drops components)',
+  vetoesFor(direction({ poolComponents: ['a', 'b', 'c', 'd', 'e'] }), snapshot)
+    .every((v) => v.repairable));
+
+check('a hero asset that does not exist is UNREPAIRABLE (evidence violation)',
+  vetoesFor(direction({
+    heroTreatment: { kind: 'real-photo-full-bleed', assetFile: 'assets/nope.jpg', description: 'x' },
+  }), snapshot).some((v) => !v.repairable && v.reason.includes('not in the snapshot')));
+
+check('an AI image passed off as a real photo is UNREPAIRABLE',
+  vetoesFor(direction({
+    heroTreatment: { kind: 'real-photo-full-bleed', assetFile: 'generated/background-def.png', description: 'x' },
+  }), snapshot).some((v) => !v.repairable && v.reason.includes('ai_generated')));
+
+check('a reviews section without verified reviews is UNREPAIRABLE',
+  vetoesFor(direction({
+    layoutSkeleton: [
+      { sectionId: 'hero', composition: 'x', heightFeel: 'tall' },
+      { sectionId: 'reviews', composition: 'x', heightFeel: 'medium' },
+      { sectionId: 'contact', composition: 'x', heightFeel: 'tight' },
+    ],
+  }), snapshot).some((v) => !v.repairable && v.reason.includes('no verified reviews')));
+
+check('a false brand claim is UNREPAIRABLE',
+  vetoesFor(direction({
+    palette: {
+      background: '#fff', foreground: '#111', accent: '#2244ff',
+      accentUsage: 'buttons', derivedFrom: 'the reference', paletteSource: 'brand',
+      brandAlignment: 'took the reference blue',
+    },
+  }), snapshot, KNOWN_SLUGS).some((v) => !v.repairable && v.reason.includes('within reach of any')));
+
+// ── the design gate's routing: retry once, then build or escalate ───────────
+{
+  const clean = chooseDirection([direction()], [score()], snapshot, KNOWN_SLUGS);
+  check('clean contract on attempt 1 goes straight to build',
+    routeDesignGate(clean, 1).action === 'build');
+  check('clean contract on attempt 2 also builds',
+    routeDesignGate(clean, 2).action === 'build');
+
+  // Repairable-only defect: a banned display font on a non-Greek site.
+  const repairableOnly = chooseDirection(
+    [direction({ typography: { displayFont: 'Inter', bodyFont: 'Manrope', hierarchyRule: 'x', microLabelTreatment: 'y' } })],
+    [score()], { ...snapshot, language: 'en' }, KNOWN_SLUGS,
+  );
+  const r1 = routeDesignGate(repairableOnly, 1);
+  check('repairable veto on attempt 1 → retry stage 9, with the veto as feedback',
+    r1.action === 'retry' && r1.reasons.some((x) => x.includes('ban-list')));
+  const r2 = routeDesignGate(repairableOnly, 2);
+  check('repairable veto on attempt 2 → STILL BUILDS (the builder resolves it)',
+    r2.action === 'build' && r2.openVetoes.some((x) => x.includes('ban-list')),
+    JSON.stringify(r2));
+
+  // Unrepairable defect: the hero names an asset the snapshot does not have.
+  const evidenceViolation = chooseDirection(
+    [direction({ heroTreatment: { kind: 'real-photo-full-bleed', assetFile: 'assets/nope.jpg', description: 'x' } })],
+    [score()], snapshot, KNOWN_SLUGS,
+  );
+  check('unrepairable veto on attempt 1 → retry first (one retry is always owed)',
+    routeDesignGate(evidenceViolation, 1).action === 'retry');
+  const e2 = routeDesignGate(evidenceViolation, 2);
+  check('unrepairable veto on attempt 2 → NeedsHuman, never a 40-90 min build',
+    e2.action === 'needs_human' && e2.reasons.some((x) => x.includes('not in the snapshot')),
+    JSON.stringify(e2));
+
+  // A wow floor missed twice escalates even with zero vetoes.
+  const weak = chooseDirection(
+    [direction()],
+    [score({ wow: wow({ heroMotion: 1, scrollChoreography: 1, typeAsDesign: 1, photoTreatment: 1, microInteraction: 1, performanceReducedMotion: 1 }) })],
+    snapshot, KNOWN_SLUGS,
+  );
+  check('wow floor missed on attempt 1 → retry', routeDesignGate(weak, 1).action === 'retry');
+  check('wow floor missed on attempt 2 → NeedsHuman',
+    routeDesignGate(weak, 2).action === 'needs_human');
+}
 
 // ── rubric: scoring and choice ──────────────────────────────────────────────
 
@@ -318,7 +405,7 @@ check('genuinely striking work passes both conditions',
 // Vetoes specific to the motion pack.
 check('an unknown reference slug is vetoed',
   vetoesFor(direction({ referenceSlug: 'not-a-real-site' }), snapshot, KNOWN_SLUGS)
-    .some((v) => v.includes('not in references/motion')));
+    .some((v) => v.reason.includes('not in references/motion')));
 
 check('a known slug passes',
   vetoesFor(direction(), snapshot, KNOWN_SLUGS).length === 0);
@@ -343,14 +430,14 @@ check('claiming "brand" with colours unrelated to any measured one is vetoed',
       accentUsage: 'buttons', derivedFrom: 'the reference', paletteSource: 'brand',
       brandAlignment: 'took the reference blue',
     },
-  }), snapshot, KNOWN_SLUGS).some((v) => v.includes('within reach of any')),
+  }), snapshot, KNOWN_SLUGS).some((v) => v.reason.includes('within reach of any')),
   'a generic blue must not pass as this business\'s terracotta');
 
 check('claiming "brand" when nothing was measured is vetoed',
   vetoesFor(direction(), {
     ...snapshot,
     brand: { ...snapshot.brand, paletteSource: 'none', primary: null, accent: null, logoColors: null },
-  }, KNOWN_SLUGS).some((v) => v.includes('no measured brand colours')));
+  }, KNOWN_SLUGS).some((v) => v.reason.includes('no measured brand colours')));
 
 check('a contrast-corrected brand accent still counts as brand-derived',
   vetoesFor(direction({
@@ -432,7 +519,7 @@ check('a missing critic axis scores 0 rather than poisoning the whole sum',
 
 check('heroMotion "none" without a justification is vetoed',
   vetoesFor(direction({ heroMotion: 'none', heroMotionJustification: null }), snapshot, KNOWN_SLUGS)
-    .some((v) => v.includes('does not move')));
+    .some((v) => v.reason.includes('does not move')));
 
 check('heroMotion "none" WITH a justification is allowed',
   vetoesFor(direction({ heroMotion: 'none', heroMotionJustification: 'the only photo is a 400px logo' }), snapshot, KNOWN_SLUGS)
@@ -440,12 +527,12 @@ check('heroMotion "none" WITH a justification is allowed',
 
 check('heroMotion "video" with no video asset is vetoed',
   vetoesFor(direction({ heroMotion: 'video' }), snapshot, KNOWN_SLUGS)
-    .some((v) => v.includes('no video asset')));
+    .some((v) => v.reason.includes('no video asset')));
 
 check('heroMotion "kenburns" with no real photo is vetoed',
   vetoesFor(direction({ heroMotion: 'kenburns', heroTreatment: { kind: 'typographic', assetFile: null, description: 'type only' } }),
     { ...snapshot, assets: snapshot.assets.filter((a) => a.aiGenerated) }, KNOWN_SLUGS)
-    .some((v) => v.includes('no real (non-AI) photo')));
+    .some((v) => v.reason.includes('no real (non-AI) photo')));
 
 {
   // The gate must have teeth in the ranking, not just in the report: a direction

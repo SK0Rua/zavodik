@@ -31,7 +31,7 @@ import {
   ArtDirectionsSchema, ContentBriefSchema, DESIGN_CONTRACT_VERSION, DirectionCritiqueSchema,
   GREEK_SAFE_BODY, GREEK_SAFE_DISPLAY, GREEK_UNSAFE_NOTE,
 } from '../build/schemas.js';
-import { chooseDirection } from '../build/rubric.js';
+import { chooseDirection, routeDesignGate } from '../build/rubric.js';
 import { buildLogPath, logStage } from '../build/buildLog.js';
 import type { ArtDirection, ContentBrief, DirectionScore } from '../build/schemas.js';
 import {
@@ -818,37 +818,37 @@ export async function contentDesignHandler(payload: JobPayload): Promise<void> {
     wowPassed: verdict.chosenWow.passed,
   });
   // ── The design gate (Roman's review, 2026-08-23): a contract that fails
-  // here must NOT ride into a 40-90 minute build. One retry of stage 9 with
-  // the gate's own reasons as feedback; a second failure is a fact about this
-  // business's material, and a human should look before more money burns.
-  const winnerVetoes = verdict.ranking[0]?.vetoes ?? [];
-  const gateReasons = [
-    ...(!verdict.chosenWow.passed ? verdict.chosenWow.reasons : []),
-    ...winnerVetoes,
-  ];
-  if (gateReasons.length > 0 && designAttempt === 1) {
+  // here must NOT ride into a 40-90 minute build. The DECISION lives in
+  // `routeDesignGate` (rubric.ts, unit-tested next to the vetoes it reads);
+  // this worker only executes it: retry once, escalate, or build.
+  const route = routeDesignGate(verdict, designAttempt);
+  if (route.action === 'retry') {
     log.warn('design gate rejected the winning direction; retrying stage 9 once', {
-      businessId, chosen: verdict.chosen.name, reasons: gateReasons,
+      businessId, chosen: verdict.chosen.name, reasons: route.reasons,
     });
     await logStage(
       buildLogPath(businessId),
-      `Дизайн-гейт відхилив «${verdict.chosen.name}» (${gateReasons.length} причин) — арт-директор пробує ще раз`,
+      `Дизайн-гейт відхилив «${verdict.chosen.name}» (${route.reasons.length} причин) — арт-директор пробує ще раз`,
       'content-design',
     );
     await enqueue('content-and-design', {
       businessId, campaignId: biz.campaignId,
       designAttempt: 2,
-      designFeedback: gateReasons.map((r) => `- ${r}`).join('\n'),
-      idempotencyKey: `content-and-design:${businessId}:gate-retry:${Date.now()}`,
+      designFeedback: route.reasons.map((r) => `- ${r}`).join('\n'),
+      // STABLE key (Roman's review 2026-08-23): Date.now() here meant a
+      // re-executed parent job could enqueue a duplicate retry. One retry per
+      // business per contract version is exactly the gate's semantics.
+      idempotencyKey: `content-and-design:${businessId}:gate-retry:v${DESIGN_CONTRACT_VERSION}`,
     });
     return;
   }
-  if (!verdict.chosenWow.passed && designAttempt > 1) {
-    // Vetoes alone still build (the builder resolves them, and BUILD-TASK
-    // carries them as «Open vetoes you MUST resolve»); a wow floor missed
-    // TWICE does not — that concept costs a full build to repair.
+  if (route.action === 'needs_human') {
+    // Repairable vetoes still build after the retry (the builder swaps a font
+    // or drops a component, and BUILD-TASK carries them explicitly). A wow
+    // floor missed twice, or an evidence/contract violation, does not — see
+    // routeDesignGate for the reasoning.
     throw new NeedsHumanError(
-      `Дизайн-гейт відхилив обидві спроби: ${verdict.chosenWow.reasons.join('; ')}. `
+      `Дизайн-гейт відхилив обидві спроби: ${route.reasons.join('; ')}. `
       + 'Подивись на матеріал бізнесу — можливо, бракує фото або айдентики для сильного напрямку.',
     );
   }
