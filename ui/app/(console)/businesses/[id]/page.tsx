@@ -10,7 +10,7 @@ import { BuildReviewCard } from '@/components/BuildReviewCard';
 import { DealStageForm } from '@/components/DealStageForm';
 import { BUSINESS_STATUSES, fmtDate, truncate, safeHttpUrl, linkLabel } from '@/lib/format';
 import {
-  humanStatus, humanProjectState, humanReasonForHeader, humanVerdict,
+  humanBusinessStatus, humanStatus, humanProjectState, humanReasonForHeader, humanVerdict,
   humanActor, humanReason, gapName,
   humanChannel, humanMessageState, humanOutreachEvent,
 } from '@/lib/humanStatus';
@@ -143,7 +143,11 @@ export default async function BusinessPage({ params }: { params: Promise<{ id: s
   const criticNotesOriginal = quals[0]?.qaNotesUk ? parseCriticNotes(quals[0]?.qaNotes) : null;
   const auditNotes = parseAuditNotes(audit?.notes);
   const verdict = humanVerdict(audit?.verdict);
-  const status = humanStatus(biz.status);
+  const status = humanBusinessStatus({
+    status: biz.status,
+    statusReason: biz.statusReason,
+    websiteVerdict: audit?.verdict,
+  });
   const headerReason = humanReasonForHeader(biz.statusReason);
 
   const matchByUrl = new Map<string, Record<string, unknown>>();

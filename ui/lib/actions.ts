@@ -23,9 +23,10 @@ import {
   isActiveProjectState, normalizeBuildPolicy,
 } from './buildPolicy';
 import { CLOSED_STATUSES, isSocialChannel, socialsButtonState } from './socials';
-import { humanStatus } from './humanStatus';
+import { humanStatus, reviewAsk } from './humanStatus';
 import { stageName } from './stageNames';
 import type { ActionResult } from './types';
+import { retryFailedJob, stopFailedBuild } from './buildFailureDecision';
 
 // ─── Approvals ───────────────────────────────────────────────────────────────
 
@@ -193,6 +194,41 @@ export async function transitionBusiness(
 }
 
 /**
+ * Claim one operator decision from an exact current state.
+ *
+ * Review cards can be open in two tabs. A plain read followed by the forced
+ * transition above lets both buttons win; this conditional transition makes
+ * Build, Recollect, and Close mutually exclusive without inventing a lock row.
+ */
+async function transitionBusinessFrom(
+  businessId: string,
+  from: string,
+  to: string,
+  reason: string,
+): Promise<ActionResult> {
+  const moved = await db.transaction(async (tx) => {
+    const changed = await tx.update(schema.businesses)
+      .set({ status: to, statusReason: reason, updatedAt: new Date() })
+      .where(and(
+        eq(schema.businesses.id, businessId),
+        eq(schema.businesses.status, from),
+      ))
+      .returning({ id: schema.businesses.id });
+    if (!changed.length) return false;
+    await tx.insert(schema.statusHistory).values({
+      businessId, fromStatus: from, toStatus: to, reason, actor: 'roman',
+    });
+    return true;
+  });
+
+  revalidatePath(`/businesses/${businessId}`);
+  revalidatePath('/businesses');
+  return moved
+    ? { ok: true, message: `${from} → ${to}` }
+    : { ok: false, message: 'Це рішення щойно вже прийняли в іншій вкладці.' };
+}
+
+/**
  * Форма-обгортка для manual transition (щоб не передавати обʼєкт з клієнта).
  *
  * Returns a result rather than void: every action in the console reports what
@@ -287,62 +323,17 @@ export async function reenqueueStage(formData: FormData): Promise<ActionResult> 
 export async function retryJob(formData: FormData): Promise<ActionResult> {
   const id = Number(formData.get('jobId'));
   if (!id) return { ok: false, message: 'Не вибрано крок' };
-  const enqueued = await retryWorkflowJob(id);
+  const outcome = await retryFailedJob(id);
   revalidatePath('/settings', 'layout');
   revalidatePath('/inbox');
-  if (enqueued === null) return { ok: false, message: 'Цей крок уже не знайти.' };
+  if (outcome === 'missing') return { ok: false, message: 'Цей крок уже не знайти.' };
+  if (outcome === 'resolved') return { ok: false, message: 'Цей крок щойно вже вирішили.' };
   return {
     ok: true,
-    message: enqueued
+    message: outcome === 'queued'
       ? 'Поставлено в чергу — фабрика спробує ще раз.'
       : 'Цей крок уже стоїть у черзі.',
   };
-}
-
-/**
- * The shared retry mechanic behind both entry points.
- *
- * Returns null when there is nothing to retry, otherwise whether a NEW queue
- * entry was actually created (pg-boss returns null when one is already active
- * under this singleton key).
- */
-async function retryWorkflowJob(jobId: number): Promise<boolean | null> {
-  const [row] = await db.select().from(schema.workflowJobs).where(eq(schema.workflowJobs.id, jobId));
-  if (!row) return null;
-
-  // Re-run the job VERBATIM: the stored payload carries the fields the mirror
-  // columns don't (projectId, iteration, issues…). Reconstructing the payload
-  // from columns alone is what used to crash retried build jobs with
-  // "site project not found: undefined".
-  const stored = (row.payload ?? {}) as Record<string, unknown>;
-  const { businessId: _b, campaignId: _c, idempotencyKey: _k, ...rest } = stored;
-  const enqueued = await enqueueJob({
-    name: row.jobType as JobName,
-    businessId: row.businessId,
-    campaignId: row.campaignId,
-    idempotencyKey: row.idempotencyKey ?? `${row.jobType}:${row.businessId ?? 'global'}:retry:${Date.now()}`,
-    data: rest,
-  });
-
-  // The attempt Roman retried is over either way: either its successor is now
-  // queued, or one was already in flight. Both make this row history.
-  //
-  // `cancelled` rather than a new `superseded` state: it is already in the
-  // spec's status list (schema.ts), already reads as «Скасовано» in the
-  // console, and is already excluded from every queue count. A new state would
-  // render raw everywhere until each map was found and updated — the exact
-  // failure the `stale` state hit when the reconciler introduced it.
-  await db.update(schema.workflowJobs)
-    .set({
-      status: 'cancelled',
-      finishedAt: new Date(),
-      errorDetail: enqueued
-        ? 'Роман перезапустив цей крок — далі працює нова спроба'
-        : 'Роман перезапустив цей крок; він уже стояв у черзі',
-    })
-    .where(eq(schema.workflowJobs.id, jobId));
-
-  return Boolean(enqueued);
 }
 
 /**
@@ -356,17 +347,34 @@ async function retryWorkflowJob(jobId: number): Promise<boolean | null> {
  * "there is nothing here to retry" — as a string both were success-green.
  */
 export async function retryJobAction(jobId: number): Promise<ActionResult> {
-  const enqueued = await retryWorkflowJob(jobId);
-  if (enqueued === null) return { ok: false, message: 'Цей крок уже не знайти.' };
+  const outcome = await retryFailedJob(jobId);
+  if (outcome === 'missing') return { ok: false, message: 'Цей крок уже не знайти.' };
+  if (outcome === 'resolved') return { ok: false, message: 'Цей крок щойно вже вирішили.' };
 
   revalidatePath('/inbox');
   revalidatePath('/settings', 'layout');
   return {
     ok: true,
-    message: enqueued
+    message: outcome === 'queued'
       ? 'Поставлено в чергу — фабрика спробує ще раз.'
       : 'Цей крок уже стоїть у черзі.',
   };
+}
+
+/**
+ * Stop a dead build without rejecting its business.
+ *
+ * The failed attempt is history, the half-built project becomes `failed`, and
+ * the business returns to `production_ready` so Roman may build it again later.
+ * This is the second honest ending of a failed-build card; dismissing only the
+ * job row would leave the business stuck in `site_in_progress` forever.
+ */
+export async function stopFailedBuildAction(jobId: number): Promise<ActionResult> {
+  const result = await stopFailedBuild(jobId);
+  revalidatePath('/inbox');
+  if (result.businessId) revalidatePath(`/businesses/${result.businessId}`);
+  revalidatePath('/businesses');
+  return { ok: result.ok, message: result.message };
 }
 
 // ─── Campaigns ───────────────────────────────────────────────────────────────
@@ -505,8 +513,9 @@ export async function startDemoBuild(businessId: string): Promise<ActionResult> 
     if (openGaps > 0) {
       return { ok: false, message: `${biz.name}: ${openGaps} незакритих gaps — спершу закрий їх` };
     }
-    const moved = await transitionBusiness(
-      businessId, 'production_ready', 'ручний запуск збірки з UI: gaps закриті',
+    const moved = await transitionBusinessFrom(
+      businessId, 'needs_review', 'production_ready',
+      'ручний запуск збірки з UI: gaps закриті',
     );
     if (!moved.ok) return moved;
   }
@@ -568,6 +577,86 @@ export async function startDemoBuildBulk(businessIds: string[]): Promise<ActionR
     ok: queued > 0,
     message: `Поставлено в чергу: ${queued} з ${ids.length}.${detail}`,
   };
+}
+
+/** Finish a `needs_review` fact/verdict card without hiding the alternatives. */
+export async function resolveBusinessReviewAction(input: {
+  businessId: string;
+  decision: 'recollect_facts' | 'close';
+}): Promise<ActionResult> {
+  const [biz] = await db.select({
+    id: schema.businesses.id,
+    name: schema.businesses.name,
+    status: schema.businesses.status,
+    statusReason: schema.businesses.statusReason,
+    campaignId: schema.businesses.campaignId,
+  }).from(schema.businesses)
+    .where(eq(schema.businesses.id, input.businessId));
+  if (!biz) return { ok: false, message: 'Бізнес не знайдено' };
+  if (biz.status !== 'needs_review') {
+    return { ok: false, message: `${biz.name}: це рішення вже не актуальне (${humanStatus(biz.status).text})` };
+  }
+
+  let ask = reviewAsk(biz.statusReason);
+  if (ask === 'verdict') ask = reviewAsk(biz.statusReason, await latestVerdict(biz.id));
+  if (ask !== 'fact_check' && ask !== 'verdict') {
+    return { ok: false, message: `${biz.name}: ця картка не просить такого рішення` };
+  }
+
+  if (input.decision === 'close') {
+    const moved = await transitionBusinessFrom(
+      biz.id, 'needs_review', 'closed',
+      'Роман вирішив не брати бізнес у роботу після перевірки',
+    );
+    revalidatePath('/inbox');
+    if (!moved.ok) return moved;
+    return { ok: true, message: `${biz.name}: закрито без статусу «Відхилено» і без контакту` };
+  }
+
+  const [latest] = await db.select({ status: schema.workflowJobs.status })
+    .from(schema.workflowJobs)
+    .where(and(
+      eq(schema.workflowJobs.businessId, biz.id),
+      eq(schema.workflowJobs.jobType, 'enrich'),
+    ))
+    .orderBy(desc(schema.workflowJobs.createdAt))
+    .limit(1);
+  if (isActiveJobStatus(latest?.status)) {
+    const moved = await transitionBusinessFrom(
+      biz.id, 'needs_review', 'enriching', 'повторний збір фактів уже запущено Романом',
+    );
+    revalidatePath('/inbox');
+    if (!moved.ok) return moved;
+    return { ok: true, message: `${biz.name}: факти вже перезбираються` };
+  }
+
+  const claimReason = 'Роман попросив заново зібрати й перевірити факти';
+  const moved = await transitionBusinessFrom(
+    biz.id, 'needs_review', 'enriching', claimReason,
+  );
+  if (!moved.ok) return moved;
+
+  let jobId: string | null;
+  try {
+    jobId = await enqueueJob({
+      name: 'enrich',
+      businessId: biz.id,
+      campaignId: biz.campaignId,
+      idempotencyKey: `enrich:${biz.id}:roman`,
+    });
+  } catch (error) {
+    await transitionBusinessFrom(
+      biz.id,
+      'enriching',
+      'needs_review',
+      biz.statusReason ?? 'повторний збір фактів не вдалося запустити',
+    );
+    throw error;
+  }
+
+  revalidatePath('/inbox');
+  if (!jobId) return { ok: true, message: `${biz.name}: повторний збір уже стоїть у черзі` };
+  return { ok: true, message: `${biz.name}: заново збираю факти й джерела` };
 }
 
 /** Change a campaign's build policy. Affects future transitions only. */

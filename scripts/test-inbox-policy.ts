@@ -7,7 +7,8 @@
  */
 import { buildButtonState } from '../ui/lib/buildPolicy.js';
 import { cardActionBar } from '../ui/lib/cardActions.js';
-import { reviewAsk } from '../ui/lib/humanStatus.js';
+import { filtersToQuery, parseFilters } from '../ui/lib/businessQuery.js';
+import { humanBusinessStatus, humanReasonForHeader, reviewAsk } from '../ui/lib/humanStatus.js';
 
 let failures = 0;
 function check(label: string, condition: boolean, detail?: unknown): void {
@@ -29,6 +30,82 @@ check(
 check('failed fact QA still needs a decision', reviewAsk('QA failed: unsupported claim') === 'fact_check');
 check('material gaps stay out of individual decision cards', reviewAsk('gaps: hero_or_logo') === 'materials');
 check('an ambiguous qualifier verdict still needs a decision', reviewAsk('contradiction: phone mismatch') === 'verdict');
+
+// The audit verdict is the stronger fact for this precise contradiction: the
+// current site rendered well, so missing extracted services may make the
+// evidence package sparse, but it does not create a sales opportunity or a
+// decision for Roman.
+check(
+  'working-good + zero extracted services is a completed no-action verdict',
+  reviewAsk(
+    'contradiction: owned website renders well but enrichment extracted zero services from it',
+    'working_good',
+  ) === 'no_action',
+);
+const goodSiteStatus = humanBusinessStatus({
+  status: 'needs_review',
+  statusReason: 'contradiction: owned website renders well but enrichment extracted zero services from it',
+  websiteVerdict: 'working_good',
+});
+check(
+  'a completed good-site verdict is not labelled as needing attention',
+  goodSiteStatus.text === 'Демо не потрібне' && !goodSiteStatus.needsRoman,
+  goodSiteStatus,
+);
+check(
+  'the good-site contradiction is translated for the business card',
+  humanReasonForHeader(
+    'contradiction: owned website renders well but enrichment extracted zero services from it',
+  ) === 'сайт працює нормально; список послуг з нього не витягнувся',
+);
+const attentionFilter = parseFilters({ attention: '1' });
+check(
+  'the semantic attention preset survives URL parsing and serialization',
+  attentionFilter.attention
+    && filtersToQuery({ attention: true }).includes('attention=1'),
+  attentionFilter,
+);
+
+const failedFactReview = cardActionBar({
+  businessId: 'fixture-fact-review',
+  status: 'needs_review',
+  projectState: null,
+  projectId: null,
+  deployUrl: null,
+  build: {
+    enabled: true,
+    needsConfirm: true,
+    availability: 'eligible',
+    hint: 'Пропусків немає',
+  },
+  socials: { enabled: true, hint: 'Дошукати соцмережі' },
+  openGaps: [],
+  socialsGap: false,
+  hasPendingApproval: false,
+  statusReason: 'QA failed: unsupported service claim',
+});
+check(
+  'failed fact review offers every way to finish the decision',
+  failedFactReview.actions.map((action) => action.label).join('|')
+    === 'Факти правильні — будувати|Перезібрати факти|Не брати в роботу',
+  failedFactReview.actions.map((action) => action.label),
+);
+
+const goodSiteBuild = buildButtonState({
+  status: 'needs_review',
+  openGaps: [],
+  activeProjectState: null,
+  activeJobStatus: null,
+  statusReason: 'contradiction: owned website renders well but enrichment extracted zero services from it',
+  verdict: 'working_good',
+  hasEvidence: true,
+});
+check(
+  'working-good stays a no-demo verdict on the business card too',
+  goodSiteBuild.availability === 'disqualified'
+    && goodSiteBuild.disqualifiedText === 'У бізнесу вже нормальний сайт — демо не потрібне',
+  goodSiteBuild,
+);
 
 const pausedBuild = buildButtonState({
   status: 'production_ready',

@@ -66,10 +66,20 @@ export function humanStatus(status: string): HumanStatus {
  */
 export type ReviewAsk = 'fact_check' | 'materials' | 'no_action' | 'verdict';
 
-export function reviewAsk(statusReason: string | null | undefined): ReviewAsk {
+export function reviewAsk(
+  statusReason: string | null | undefined,
+  websiteVerdict?: string | null,
+): ReviewAsk {
   const r = (statusReason ?? '').trim();
   if (/^QA (failed|agent unavailable)/i.test(r)) return 'fact_check';
   if (/^gaps?:/i.test(r)) return 'materials';
+  // The audit already proved the current site renders well. Failing to extract
+  // its service list makes the evidence package sparse, but cannot turn a
+  // no-op sales lead into a human decision or a reason to spend on a demo.
+  if (websiteVerdict === 'working_good'
+    && /owned website renders well but enrichment extracted zero services/i.test(r)) {
+    return 'no_action';
+  }
   const notQualified = /^not qualified:\s*(.+)$/i.exec(r);
   const reasons = notQualified
     ? notQualified[1]!.split(',').map((reason) => reason.trim().toLowerCase())
@@ -78,6 +88,25 @@ export function reviewAsk(statusReason: string | null | undefined): ReviewAsk {
     return 'no_action';
   }
   return 'verdict';
+}
+
+/**
+ * Business status with the audit context needed to avoid a fake human task.
+ *
+ * The database keeps `needs_review` as the pipeline checkpoint, while the
+ * owned-site audit can already prove that no demo is needed. On operator
+ * surfaces that combination is a completed no-op, not «Потрібна твоя увага».
+ */
+export function humanBusinessStatus(input: {
+  status: string;
+  statusReason: string | null | undefined;
+  websiteVerdict: string | null | undefined;
+}): HumanStatus {
+  if (input.status === 'needs_review'
+    && reviewAsk(input.statusReason, input.websiteVerdict) === 'no_action') {
+    return { text: 'Демо не потрібне', tone: 'idle', needsRoman: false };
+  }
+  return humanStatus(input.status);
 }
 
 /**
@@ -100,6 +129,8 @@ const REASON_PATTERNS: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
   // The QA agent writes a paragraph of its own reasoning. Useful in the record,
   // unreadable in a header — the verdict is the half a person needs here.
   [/^QA failed:/i, () => 'перевірка фактів не пройдена — дивись «Факти й джерела»'],
+  [/^contradiction: owned website renders well but enrichment extracted zero services from it$/i,
+    () => 'сайт працює нормально; список послуг з нього не витягнувся'],
   [/^legacy-import:/i, () => 'перенесено зі старої бази'],
   // Everything below was still rendering as raw English on the card header,
   // the Історія tab or the settings page (sweep P1-10, P1-14).

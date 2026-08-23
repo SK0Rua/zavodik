@@ -23,7 +23,9 @@
  */
 
 import { useState, useTransition } from 'react';
-import { startDemoBuild, startSocialsDiscovery } from '@/lib/actions';
+import {
+  resolveBusinessReviewAction, startDemoBuild, startSocialsDiscovery,
+} from '@/lib/actions';
 import { runWithToast } from '@/lib/toast';
 import { BuildDecisionActions } from './BuildDecisionActions';
 import type { CardAction, CardActionBar as Bar } from '@/lib/cardActions';
@@ -88,6 +90,29 @@ export function CardActionButtons({ actions, businessId, name, status }: {
     void runWithToast(() => startSocialsDiscovery(businessId));
   });
 
+  const runBusinessReview = (action: Extract<CardAction, { run: 'business-review' }>) => {
+    if (action.decision === 'close') {
+      const ok = window.confirm(
+        `Не брати «${name}» у роботу?\n\n`
+        + 'Бізнес буде закрито без статусу «Відхилено». '
+        + 'Фабрика не будуватиме демо і не контактуватиме з ним.',
+      );
+      if (!ok) return;
+    }
+    startTransition(() => {
+      void runWithToast(() => resolveBusinessReviewAction({
+        businessId,
+        decision: action.decision,
+      }));
+    });
+  };
+
+  const runAction = (action: CardAction) => {
+    if (action.run === 'build') runBuild(action);
+    else if (action.run === 'socials') runSocials();
+    else if (action.run === 'business-review') runBusinessReview(action);
+  };
+
   return (
     <>
       {actions.map((action, i) => (
@@ -95,8 +120,7 @@ export function CardActionButtons({ actions, businessId, name, status }: {
           key={`${action.label}-${i}`}
           action={action}
           pending={pending}
-          onBuild={() => runBuild(action)}
-          onSocials={runSocials}
+          onRun={() => runAction(action)}
         />
       ))}
     </>
@@ -197,14 +221,13 @@ export function CardActionBar({ bar, businessId, name, status, other }: {
   );
 }
 
-function ActionControl({ action, pending, onBuild, onSocials }: {
+function ActionControl({ action, pending, onRun }: {
   action: CardAction;
   pending: boolean;
-  onBuild: () => void;
-  onSocials: () => void;
+  onRun: () => void;
 }) {
   const disabled = Boolean(action.disabledReason) || pending;
-  const label = pending && action.run !== 'href' ? 'Ставлю в чергу…' : action.label;
+  const label = pending && action.run !== 'href' ? 'Виконую…' : action.label;
 
   if (action.run === 'href') {
     // Navigation is a link, and it says so. `external` opens the demo in its own
@@ -228,7 +251,7 @@ function ActionControl({ action, pending, onBuild, onSocials }: {
       className={KIND_CLASS[action.kind]}
       disabled={disabled}
       title={action.disabledReason ?? action.hint}
-      onClick={action.run === 'build' ? onBuild : onSocials}
+      onClick={onRun}
     >
       {label}
     </button>

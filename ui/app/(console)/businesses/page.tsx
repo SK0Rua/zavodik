@@ -6,7 +6,9 @@ import { BusinessList, type ListRow } from '@/components/BusinessList';
 import { buildButtonState } from '@/lib/buildPolicy';
 import { hasAnyFilter, parseFilters, queryBusinesses } from '@/lib/businessQuery';
 import { socialsButtonState } from '@/lib/socials';
-import { humanStatus, humanStatusLine, humanVerdict } from '@/lib/humanStatus';
+import {
+  humanBusinessStatus, humanStatus, humanStatusLine, humanVerdict,
+} from '@/lib/humanStatus';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,6 +43,12 @@ export default async function BusinessesPage({
     if (b.hasEmail) contacts.push('Email');
     if (b.hasPhone && contacts.length === 0) contacts.push('Телефон');
 
+    const displayStatus = humanBusinessStatus({
+      status: b.status,
+      statusReason: b.statusReason,
+      websiteVerdict: b.verdict,
+    });
+
     return {
       id: b.id,
       name: b.name,
@@ -48,8 +56,8 @@ export default async function BusinessesPage({
       // reason clause rather than a separate column of numbers.
       statusText: b.status === 'needs_review' && b.openGaps.length
         ? humanStatusLine(b.status, `${b.openGaps.length} незакритих пропусків`)
-        : humanStatus(b.status).text,
-      statusTone: humanStatus(b.status).tone,
+        : displayStatus.text,
+      statusTone: displayStatus.tone,
       rawStatus: b.status,
       score: b.score,
       verdictText: humanVerdict(b.verdict).text,

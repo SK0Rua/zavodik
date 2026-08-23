@@ -3,8 +3,8 @@
  *
  * A real Claude Code agent (subscription runtime) gets an isolated workspace with
  * the Next.js template, the frozen snapshot, the content brief, the chosen art
- * direction and the local assets. It writes the site, runs `pnpm install` and
- * `pnpm build` itself, and fixes its own build errors.
+ * direction and the local assets. The pipeline installs workspace dependencies;
+ * the agent writes the site, runs `pnpm build`, and fixes its own build errors.
  *
  * Then CODE verifies, because the agent's self-report is not evidence:
  *   1. `out/index.html` exists;
@@ -32,6 +32,9 @@ import { checkProvenance, type ProvenanceReport } from '../build/provenance.js';
 import { generateDecorativeBackground, planHeroMedia } from '../build/media.js';
 import { outputDir, prepareWorkspace, workspaceDir, SITES_ROOT } from '../build/workspace.js';
 import { buildLogPath, logStage } from '../build/buildLog.js';
+import {
+  ensureWorkspaceDependencies, workspaceDependenciesReady,
+} from '../build/dependencies.js';
 import { log } from '../lib/logger.js';
 import { resolveProject } from '../build/projectRef.js';
 
@@ -205,13 +208,28 @@ Replace \`app/page.tsx\`, the layout metadata and fonts, and \`app/globals.css\`
 site. Add components under \`components/\` as needed; the pool in \`components/ui/\` is
 copy-paste code you may edit freely.
 
-Then run \`pnpm install\` and \`pnpm build\`, fix any errors yourself, and confirm
+Dependencies are already installed by the pipeline. Run \`pnpm build\`, fix any errors
+yourself, and confirm
 \`out/index.html\` exists. The pipeline re-runs \`pnpm build\` independently afterwards and
 greps the exported HTML against the snapshot, so a self-report of success that does not hold
 up will simply come back to you as issues.
 
 FINAL STEP, do not skip it: write \`result.json\` in the workspace root as your very last
 action. Everything else can be perfect and the run still reports badly without it.`;
+  }
+
+  // Fresh workspaces never copy node_modules, and terminal-state GC removes it
+  // before a human can request another QA iteration. Installing dependencies is
+  // deterministic pipeline setup, not a prompt instruction the agent may skip.
+  if (!workspaceDependenciesReady(dir)) {
+    await logStage(logPath, 'Відновлюю залежності воркспейсу', 'site-builder');
+  }
+  const dependencies = await ensureWorkspaceDependencies(
+    dir,
+    (command, args, cwd) => run(command, args, cwd, config.build.verifyTimeoutMs),
+  );
+  if (dependencies.installed) {
+    await logStage(logPath, 'Залежності готові — передаю воркспейс агенту', 'site-builder');
   }
 
   // ── The agent works ───────────────────────────────────────────────────────
@@ -303,6 +321,12 @@ action. Everything else can be perfect and the run still reports badly without i
   }
 
   // ── CODE verifies (the agent is not trusted) ──────────────────────────────
+  // Re-check after the agent as well. It normally becomes a no-op, but keeps
+  // verification deterministic if an agent cleaned node_modules while editing.
+  await ensureWorkspaceDependencies(
+    dir,
+    (command, args, cwd) => run(command, args, cwd, config.build.verifyTimeoutMs),
+  );
   await logStage(logPath, 'Перевіряю збірку незалежно: pnpm build', 'site-builder');
   const verify = await run('pnpm', ['build'], dir, config.build.verifyTimeoutMs);
   if (verify.code !== 0) {

@@ -33,6 +33,8 @@ const ORDER_BY: Record<SortField, { asc: string; desc: string }> = {
 export interface BusinessFilters {
   campaign: string | null;
   statuses: string[];
+  /** Semantic preset: only rows whose current state really needs Roman. */
+  attention: boolean;
   verdicts: string[];
   /** 'instagram' | 'whatsapp' | 'email' — each requires at least one such contact. */
   contacts: string[];
@@ -110,6 +112,7 @@ export function parseFilters(
   return {
     campaign: one('campaign'),
     statuses: many('status'),
+    attention: one('attention') === '1',
     verdicts: many('verdict'),
     contacts: many('contact'),
     minScore,
@@ -121,7 +124,7 @@ export function parseFilters(
 
 /** Is any filter set at all? Used to tell "fresh visit" from "user cleared everything". */
 export function hasAnyFilter(params: Record<string, string | string[] | undefined>): boolean {
-  return ['campaign', 'status', 'verdict', 'contact', 'minScore', 'q', 'sort', 'dir']
+  return ['campaign', 'status', 'attention', 'verdict', 'contact', 'minScore', 'q', 'sort', 'dir']
     .some((k) => params[k] !== undefined);
 }
 
@@ -130,6 +133,7 @@ export function filtersToQuery(f: Partial<BusinessFilters>): string {
   const p = new URLSearchParams();
   if (f.campaign) p.set('campaign', f.campaign);
   for (const s of f.statuses ?? []) p.append('status', s);
+  if (f.attention) p.set('attention', '1');
   for (const v of f.verdicts ?? []) p.append('verdict', v);
   for (const c of f.contacts ?? []) p.append('contact', c);
   if (f.minScore !== null && f.minScore !== undefined) p.set('minScore', String(f.minScore));
@@ -165,6 +169,26 @@ export async function queryBusinesses(
   const where = [sql`true`];
   if (f.campaign) where.push(sql`b.campaign_id = ${f.campaign}`);
   if (f.statuses.length) where.push(inList(sql`b.status`, f.statuses));
+  if (f.attention) {
+    // `needs_review` is a pipeline checkpoint, not always a human task. A good
+    // owned-site audit is a completed no-op and must not reappear behind the
+    // «Чекають мене» shortcut after the Inbox has correctly retired it.
+    where.push(sql`(
+      b.status in ('site_ready', 'replied')
+      or (
+        b.status = 'needs_review'
+        and not (
+          lower(coalesce(b.status_reason, '')) like
+            '%already_has_a_good_modern_site_no_opportunity%'
+          or (
+            coalesce(a.verdict = 'working_good', false)
+            and lower(coalesce(b.status_reason, '')) like
+              '%owned website renders well but enrichment extracted zero services%'
+          )
+        )
+      )
+    )`);
+  }
   if (f.minScore !== null) where.push(sql`coalesce(b.score, 0) >= ${f.minScore}`);
   if (f.q) where.push(sql`(b.name ilike ${`%${f.q}%`} or b.id ilike ${`%${f.q}%`})`);
   // Filtering on the LATEST verdict, not "has ever had one of these verdicts":

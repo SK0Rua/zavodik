@@ -153,7 +153,13 @@ const DISQUALIFY_REASONS: Record<string, string> = {
 };
 
 /** Reads a disqualification out of `status_reason`, or null when there is none. */
-export function disqualification(statusReason: string | null | undefined): string | null {
+export function disqualification(
+  statusReason: string | null | undefined,
+  websiteVerdict?: string | null,
+): string | null {
+  if (websiteVerdict === 'working_good') {
+    return DISQUALIFY_REASONS.already_has_a_good_modern_site_no_opportunity;
+  }
   if (!statusReason) return null;
   const trimmed = statusReason.trim();
   const direct = DISQUALIFY_REASONS[trimmed];
@@ -207,7 +213,7 @@ export function buildButtonState(input: {
 
   // The factory already decided there is no opportunity here. Offering the
   // primary action anyway presents a refusal as readiness (sweep P1-1).
-  const disqualified = disqualification(input.statusReason);
+  const disqualified = disqualification(input.statusReason, input.verdict);
   if (disqualified && input.status !== 'production_ready') {
     return {
       enabled: false,

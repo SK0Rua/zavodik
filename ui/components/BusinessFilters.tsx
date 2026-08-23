@@ -27,9 +27,6 @@ const CONTACT_FILTERS = [
   { value: 'email', label: 'Email' },
 ];
 
-/** Statuses that mean "the factory is stuck on me". */
-const WAITING_STATUSES = ['needs_review', 'site_ready', 'replied'];
-
 function Chip({ active, children, onClick, title }: {
   active: boolean; children: React.ReactNode; onClick: () => void; title?: string;
 }) {
@@ -66,6 +63,7 @@ export function BusinessFilters({ campaigns }: { campaigns: Array<{ id: string }
 
   const toggle = useCallback((key: string, value: string) => {
     push((p) => {
+      if (key === 'status') p.delete('attention');
       const current = p.getAll(key);
       p.delete(key);
       for (const v of current.includes(value) ? current.filter((x) => x !== value) : [...current, value]) {
@@ -80,14 +78,17 @@ export function BusinessFilters({ campaigns }: { campaigns: Array<{ id: string }
 
   /** Replace a whole multi-value key at once (used by the three preset chips). */
   const setMany = useCallback((key: string, values: string[]) => {
-    push((p) => { p.delete(key); for (const v of values) p.append(key, v); });
+    push((p) => {
+      if (key === 'status') p.delete('attention');
+      p.delete(key);
+      for (const v of values) p.append(key, v);
+    });
   }, [push]);
 
   const noSiteOn = verdicts.length === NO_SITE_VERDICT_LIST.length
     && NO_SITE_VERDICT_LIST.every((v) => verdicts.includes(v));
   const readyOn = statuses.length === 1 && statuses[0] === 'production_ready';
-  const waitingOn = statuses.length === WAITING_STATUSES.length
-    && WAITING_STATUSES.every((s) => statuses.includes(s));
+  const waitingOn = params.get('attention') === '1';
 
   const extrasActive = Boolean(params.get('campaign')) || Boolean(params.get('minScore'))
     || contacts.length > 0
@@ -122,7 +123,11 @@ export function BusinessFilters({ campaigns }: { campaigns: Array<{ id: string }
         </Chip>
         <Chip
           active={waitingOn}
-          onClick={() => setMany('status', waitingOn ? [] : WAITING_STATUSES)}
+          onClick={() => push((p) => {
+            p.delete('status');
+            if (waitingOn) p.delete('attention');
+            else p.set('attention', '1');
+          })}
         >
           Чекають мене
         </Chip>

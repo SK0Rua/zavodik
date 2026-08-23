@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import { Status } from './Status';
-import { retryJobAction, startDemoBuild } from '@/lib/actions';
+import { retryJobAction, startDemoBuild, stopFailedBuildAction } from '@/lib/actions';
 import { runWithToast } from '@/lib/toast';
 import { stageName } from '@/lib/stageNames';
 import type {
@@ -126,6 +126,7 @@ export function JobProblemCard({ item }: { item: JobProblemItem }) {
   // retry is queued, offering the same button again would queue a second one.
   const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const isBuildFailure = ['content-and-design', 'build-site'].includes(item.jobType);
 
   const retry = () => startTransition(() => {
     void runWithToast(() => retryJobAction(item.jobId), {
@@ -134,6 +135,20 @@ export function JobProblemCard({ item }: { item: JobProblemItem }) {
       onResult: (res) => { if (res.ok) setMessage(res.message); },
     });
   });
+
+  const stopBuild = () => {
+    const ok = window.confirm(
+      `Зупинити збірку для «${item.businessName ?? item.businessId}»?\n\n`
+      + 'Невдалу спробу буде закрито, а бізнес повернеться у «Готово до демо». '
+      + 'Він не стане «Відхиленим» — збірку можна буде запустити пізніше.',
+    );
+    if (!ok) return;
+    startTransition(() => {
+      void runWithToast(() => stopFailedBuildAction(item.jobId), {
+        onResult: (res) => { if (res.ok) setMessage(res.message); },
+      });
+    });
+  };
 
   return (
     <article className="card p-5 sm:p-6">
@@ -164,11 +179,23 @@ export function JobProblemCard({ item }: { item: JobProblemItem }) {
         {item.attempts > 1 && <> · спроб: {item.attempts}</>}
       </p>
 
+      {isBuildFailure && (
+        <p className="text-sm text-ink-mute mt-2 max-w-[70ch]">
+          «Продовжити збірку» повторить цей крок. «Зупинити збірку» прибере його
+          з Вхідних і залишить бізнес готовим до нового запуску — без rejected.
+        </p>
+      )}
+
       {!message && (
         <div className="mt-4 flex flex-wrap gap-2 items-center">
           <button type="button" className="btn-outline btn-sm" onClick={retry} disabled={pending}>
-            {pending ? 'Ставлю в чергу…' : 'Повторити'}
+            {pending ? 'Виконую…' : isBuildFailure ? 'Продовжити збірку' : 'Повторити'}
           </button>
+          {isBuildFailure && (
+            <button type="button" className="btn-quiet btn-sm" onClick={stopBuild} disabled={pending}>
+              Зупинити збірку
+            </button>
+          )}
           {(item.errorCode || item.errorDetail) && (
             <button
               type="button"

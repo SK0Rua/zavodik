@@ -46,6 +46,7 @@ export type CardActionKind = 'primary' | 'secondary' | 'danger' | 'link';
 export type CardActionRun =
   | { run: 'build' }
   | { run: 'socials' }
+  | { run: 'business-review'; decision: 'recollect_facts' | 'close' }
   | { run: 'href'; href: string; external?: boolean };
 
 export type CardAction = CardActionRun & {
@@ -248,24 +249,24 @@ export function cardActionBar(input: CardActionInput): CardActionBar {
   // ── the gate refused, and the reason decides what to offer ────────────────
   if (status === 'needs_review') {
     const actions: CardAction[] = [];
+    const ask = reviewAsk(input.statusReason);
 
     // The fact-check said no. The decision being asked for is «прочитай звіт
     // критика і вирішуй», so the band SAYS that — otherwise the only visible
     // action is a build button and the review this status asks for is a
     // folded panel two tabs away.
-    const factCheckHint = isFactCheckAttention(status, input.statusReason)
+    const factCheckHint = ask === 'fact_check'
       ? (/unavailable/i.test(input.statusReason ?? '')
         ? 'Факти ніхто незалежно не перевірив — перевіряльник був недоступний. '
-          + 'Переглянь «Факти й джерела» сам: якщо все чесно — «Побудувати демо», '
-          + 'якщо ні — закрий бізнес через «Інше…».'
+          + 'Переглянь «Факти й джерела» і обери: прийняти їх, зібрати заново або не брати бізнес у роботу.'
         : 'Критик не прийняв факти — його звіт відкритий у «Факти й джерела» нижче. '
-          + 'Якщо зауваження дріб’язкові — «Побудувати демо» і є твоє «ок» попри вердикт; '
-          + 'якщо бізнес не вартий роботи — закрий його через «Інше…».')
+          + 'Обери: прийняти факти, зібрати їх заново або не брати бізнес у роботу.')
       : undefined;
 
     // A missing social profile is the gap Roman can close with one click, so it
     // leads. Every other gap needs a person to go and find something.
-    if (socialsGap || (openGaps.length > 0 && socials.enabled)) {
+    if (!['fact_check', 'verdict'].includes(ask)
+      && (socialsGap || (openGaps.length > 0 && socials.enabled))) {
       actions.push({
         run: 'socials',
         label: 'Дошукати соцмережі',
@@ -277,11 +278,31 @@ export function cardActionBar(input: CardActionInput): CardActionBar {
 
     actions.push({
       run: 'build',
-      label: 'Побудувати демо',
+      label: ask === 'fact_check' ? 'Факти правильні — будувати' : 'Побудувати демо',
       kind: actions.length ? 'secondary' : 'primary',
       hint: build.hint,
       disabledReason: build.enabled ? undefined : build.hint,
     });
+
+    // A review is only a decision when every outcome is reachable from the
+    // card. Previously “critic says facts are wrong” still offered only Build,
+    // so agreeing with the critic had no action and the item could never leave.
+    if (ask === 'fact_check' || ask === 'verdict') {
+      actions.push({
+        run: 'business-review',
+        decision: 'recollect_facts',
+        label: ask === 'fact_check' ? 'Перезібрати факти' : 'Перезібрати дані',
+        kind: 'secondary',
+        hint: 'Фабрика заново збере джерела, факти й перевірить їх.',
+      });
+      actions.push({
+        run: 'business-review',
+        decision: 'close',
+        label: 'Не брати в роботу',
+        kind: 'danger',
+        hint: 'Закриє цей бізнес без статусу «Відхилено» і без будь-якого контакту.',
+      });
+    }
 
     return { waiting: null, hint: factCheckHint, actions };
   }

@@ -408,7 +408,7 @@ async function loadBusinessReviews(excludeBusinessIds: Set<string>): Promise<{
   more: number;
 }> {
   const rows = await queryBusinesses({
-    campaign: null, statuses: ['needs_review'], verdicts: [], contacts: [],
+    campaign: null, statuses: ['needs_review'], attention: false, verdicts: [], contacts: [],
     minScore: null, q: null, sort: 'updated_at', dir: 'desc',
   }, 300);
 
@@ -417,7 +417,7 @@ async function loadBusinessReviews(excludeBusinessIds: Set<string>): Promise<{
   for (const r of rows) {
     if (excludeBusinessIds.has(r.id)) continue;
 
-    const ask = reviewAsk(r.statusReason);
+    const ask = reviewAsk(r.statusReason, r.verdict);
     if (ask === 'materials') {
       materialsWaiting += 1;
       continue;

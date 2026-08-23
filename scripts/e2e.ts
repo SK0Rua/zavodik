@@ -629,6 +629,103 @@ async function checkFunnel(browser: import('playwright').Browser): Promise<void>
     return row.status;
   });
 
+  // ── fact review: every verdict has an actual control ──
+  const factsCloseBiz = await createBusiness({
+    id: 'e2e-fixture-facts-close',
+    name: 'E2E Facts Close Salon',
+    status: 'needs_review',
+    statusReason: 'QA failed: unsupported service claim',
+  });
+  await checking('fact-review card offers accept, recollect, and close', async () => {
+    await page.goto(`${BASE}/inbox?business=${factsCloseBiz.id}`, { waitUntil: 'networkidle' });
+    await assertOnlyFixture(page, factsCloseBiz.name);
+    for (const label of [
+      'Факти правильні — будувати',
+      'Перезібрати факти',
+      'Не брати в роботу',
+    ]) {
+      const button = page.getByRole('button', { name: label });
+      if (await button.count() !== 1) throw new Error(`expected one «${label}» button`);
+    }
+    return 'all 3 decisions are reachable';
+  });
+
+  await checking('«Не брати в роботу» closes without rejected', async () => {
+    await page.goto(`${BASE}/inbox?business=${factsCloseBiz.id}`, { waitUntil: 'networkidle' });
+    await assertOnlyFixture(page, factsCloseBiz.name);
+    page.once('dialog', (d) => { void d.accept(); });
+    await page.getByRole('button', { name: 'Не брати в роботу' }).click();
+
+    const closed = await waitFor(async () => sqlOne<{ status: string }>(
+      `select status from businesses where id = $1 and status <> 'needs_review'`,
+      [factsCloseBiz.id],
+    ), { timeoutMs: 15_000 });
+    if (closed?.status !== 'closed') throw new Error(`status = ${closed?.status}`);
+    const decision = await sqlOne<{ to_status: string; actor: string }>(
+      `select to_status, actor from status_history where business_id = $1 order by id desc limit 1`,
+      [factsCloseBiz.id],
+    );
+    if (decision?.to_status !== 'closed' || decision.actor !== 'roman') {
+      throw new Error(`history = ${JSON.stringify(decision)}`);
+    }
+    return 'closed by roman, not rejected';
+  });
+
+  const factsRefreshBiz = await createBusiness({
+    id: 'e2e-fixture-facts-refresh',
+    name: 'E2E Facts Refresh Salon',
+    status: 'needs_review',
+    statusReason: 'QA failed: unsupported service claim',
+  });
+  // Model the already-enqueued branch so this browser check never starts an
+  // agent. The click still traverses the real client component and server
+  // action; it just finds work that is safe to represent as already queued.
+  await sql(
+    `insert into workflow_jobs
+       (job_type, business_id, campaign_id, idempotency_key, status, attempts, created_at)
+     values ('enrich', $1, $2, $3, 'queued', 0, now())`,
+    [factsRefreshBiz.id, FIXTURE_CAMPAIGN,
+      `${FIXTURE_PREFIX}facts-refresh:${factsRefreshBiz.id}:${Date.now()}`],
+  );
+  await checking('«Перезібрати факти» resumes enrichment and leaves Вхідні', async () => {
+    await page.goto(`${BASE}/inbox?business=${factsRefreshBiz.id}`, { waitUntil: 'networkidle' });
+    await assertOnlyFixture(page, factsRefreshBiz.name);
+    await page.getByRole('button', { name: 'Перезібрати факти' }).click();
+
+    const moved = await waitFor(async () => sqlOne<{ status: string }>(
+      `select status from businesses where id = $1 and status <> 'needs_review'`,
+      [factsRefreshBiz.id],
+    ), { timeoutMs: 15_000 });
+    if (moved?.status !== 'enriching') throw new Error(`status = ${moved?.status}`);
+    await page.goto(`${BASE}/inbox?business=${factsRefreshBiz.id}`, { waitUntil: 'networkidle' });
+    const stillThere = await page.getByText(factsRefreshBiz.name, { exact: true }).count();
+    if (stillThere) throw new Error('resolved fact review is still in Вхідні');
+    return 'enriching; review card retired';
+  });
+
+  const goodSiteBiz = await createBusiness({
+    id: 'e2e-fixture-good-site',
+    name: 'E2E Good Site Salon',
+    status: 'needs_review',
+    statusReason: 'contradiction: owned website renders well but enrichment extracted zero services from it',
+  });
+  await sql(`update website_audits set verdict = 'working_good' where business_id = $1`, [goodSiteBiz.id]);
+  await checking('a good existing site is not presented as an Inbox decision', async () => {
+    await page.goto(`${BASE}/inbox?business=${goodSiteBiz.id}`, { waitUntil: 'networkidle' });
+    const card = await page.getByText(goodSiteBiz.name, { exact: true }).count();
+    if (card) throw new Error('good-site contradiction still renders as a decision card');
+    return 'no card; no fake build-or-nothing choice';
+  });
+  await checking('a good existing site is not in «Чекають мене» either', async () => {
+    await page.goto(
+      `${BASE}/businesses?attention=1&q=${encodeURIComponent(goodSiteBiz.name)}`,
+      { waitUntil: 'networkidle' },
+    );
+    const row = await page.getByText(goodSiteBiz.name, { exact: true }).count();
+    if (row) throw new Error('good-site no-op still appears in the attention preset');
+    return 'semantic attention filter agrees with Inbox';
+  });
+
   // ── manual channel deep link ──
   const manualBiz = await createBusiness({
     id: 'e2e-fixture-manual', name: 'E2E Manual Salon', status: 'site_ready',
@@ -878,6 +975,55 @@ async function checkJobsUx(browser: import('playwright').Browser): Promise<void>
     await sql(`update workflow_jobs set status = 'cancelled'
                where business_id = $1 and status in ('queued','running')`, [jobBiz.id]);
     return `${attempts} attempt rows, ${live} live`;
+  });
+
+  const failedBuildBiz = await createBusiness({
+    id: 'e2e-fixture-failed-build',
+    name: 'E2E Failed Build Salon',
+    status: 'site_in_progress',
+    statusReason: 'e2e build in progress before failure',
+  });
+  const failedBuildProject = await createSiteProject(failedBuildBiz, 'building');
+  const failedBuildJob = await createFailedJob(failedBuildBiz, 'build-site');
+  await checking('failed build offers continue or stop', async () => {
+    await page.goto(`${BASE}/inbox?business=${failedBuildBiz.id}`, { waitUntil: 'networkidle' });
+    await assertOnlyFixture(page, failedBuildBiz.name);
+    for (const label of ['Продовжити збірку', 'Зупинити збірку']) {
+      if (await page.getByRole('button', { name: label }).count() !== 1) {
+        throw new Error(`expected one «${label}» button`);
+      }
+    }
+    return 'both decisions are reachable';
+  });
+
+  await checking('«Зупинити збірку» retires the failure without rejected', async () => {
+    await page.goto(`${BASE}/inbox?business=${failedBuildBiz.id}`, { waitUntil: 'networkidle' });
+    await assertOnlyFixture(page, failedBuildBiz.name);
+    page.once('dialog', (d) => { void d.accept(); });
+    await page.getByRole('button', { name: 'Зупинити збірку' }).click();
+
+    const stopped = await waitFor(async () => sqlOne<{
+      business_status: string;
+      job_status: string;
+      project_state: string;
+    }>(
+      `select b.status business_status, w.status job_status, p.state project_state
+       from businesses b
+       join workflow_jobs w on w.business_id = b.id and w.id = $2
+       join site_projects p on p.business_id = b.id and p.id = $3
+       where b.id = $1 and w.status <> 'failed'`,
+      [failedBuildBiz.id, failedBuildJob, failedBuildProject.projectId],
+    ), { timeoutMs: 15_000 });
+    if (stopped?.business_status !== 'production_ready'
+      || stopped.job_status !== 'cancelled'
+      || stopped.project_state !== 'failed') {
+      throw new Error(`stop result = ${JSON.stringify(stopped)}`);
+    }
+    await page.goto(`${BASE}/inbox?business=${failedBuildBiz.id}`, { waitUntil: 'networkidle' });
+    if (await page.getByText(failedBuildBiz.name, { exact: true }).count()) {
+      throw new Error('stopped failed build is still in Вхідні');
+    }
+    return 'production_ready; job cancelled; project failed';
   });
 
   await ctx.close();
