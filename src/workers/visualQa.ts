@@ -565,7 +565,10 @@ export async function deterministicChecks(
       issues.push({
         severity: 'high', category: 'layout', viewport: vp.name,
         issue: `Display text is clipped: ${c}. A headline cut mid-glyph reads as a rendering bug, not a deliberate crop.`,
-        fix: 'Either let the text bleed off the viewport edge so the crop is obviously intentional, or size it so the whole word fits. Check every breakpoint — a crop that works at 1440 cuts a different letter at 768.',
+        // This gate measures the BOX (viewport overflow OR scrollWidth under
+        // overflow:hidden), so it cannot accept an edge-bleed crop — do not
+        // promise one. The word must fit or wrap, at every breakpoint.
+        fix: 'Size and position the headline so the whole word fits inside the viewport at EVERY breakpoint — a clamp() font-size in vw units, or let it wrap by removing overflow:hidden/clip. A crop that works at 1440 cuts a different letter at 768, so verify in _shots/mobile.png too.',
       });
     }
 
@@ -841,6 +844,26 @@ export async function runVisualCritique(opts: {
   }
 }
 
+/**
+ * Merge issues that differ only by the viewport that measured them.
+ * Same text = same problem; the viewports it failed on are part of the answer,
+ * not extra problems. First severity/category wins (they are identical anyway).
+ */
+export function dedupeIssues(issues: QaIssue[]): QaIssue[] {
+  const byText = new Map<string, QaIssue>();
+  for (const issue of issues) {
+    const seen = byText.get(issue.issue);
+    if (!seen) {
+      byText.set(issue.issue, { ...issue });
+      continue;
+    }
+    if (!seen.viewport.split('+').includes(issue.viewport)) {
+      seen.viewport = `${seen.viewport}+${issue.viewport}`;
+    }
+  }
+  return [...byText.values()];
+}
+
 /** Render the issue list as the markdown the builder agent reads next iteration. */
 function renderQaIssues(issues: QaIssue[], iteration: number, snapshot: BuildSnapshot): string {
   const bySeverity = (s: QaIssue['severity']) => issues.filter((i) => i.severity === s);
@@ -928,10 +951,17 @@ export async function visualQaHandler(payload: JobPayload): Promise<void> {
 
   // Provenance issues found by the builder's code-side check ride along.
   for (const text of (payload.provenanceIssues as string[] | undefined) ?? []) {
+    // A hand-made derivative (e.g. gallery-…-crop.jpg written into public/
+    // assets/) is the one recurring unknown-asset case, and the generic
+    // "remove the fabrication" hint does not tell the agent what IS allowed:
+    // crop with CSS on the original file, never write new files into assets.
+    const isUnknownAsset = text.includes('not a snapshot asset');
     issues.push({
       severity: 'high', category: 'content', viewport: 'all',
       issue: text,
-      fix: 'Remove the fabricated detail. Only values present in `input/snapshot.json` may appear on the page.',
+      fix: isUnknownAsset
+        ? 'Reference the ORIGINAL snapshot asset (copy the exact filename from input/snapshot.json / public/assets/). If you need a cropped or tinted variant, produce it with CSS (object-fit, clip-path, filters) on the original — writing a new image file into public/assets/ will fail this check again.'
+        : 'Remove the fabricated detail. Only values present in `input/snapshot.json` may appear on the page.',
     });
   }
 
@@ -1087,6 +1117,16 @@ export async function visualQaHandler(payload: JobPayload): Promise<void> {
   }
 
   // ── report ────────────────────────────────────────────────────────────────
+
+  // The deterministic gates run per viewport, so one broken headline arrives
+  // three times with byte-identical text. Roman reads «8 зауважень» as eight
+  // different problems and the agent re-reads the same instruction three times
+  // in QA-ISSUES.md — neither is true. Merge identical texts, naming every
+  // viewport that saw it; the raw per-viewport rows stay in the JSON report.
+  const deduped = dedupeIssues(issues);
+  issues.length = 0;
+  issues.push(...deduped);
+
   const blocking = issues.filter((i) => i.severity === 'high' || i.severity === 'medium');
   const report = {
     iteration,
@@ -1131,7 +1171,9 @@ export async function visualQaHandler(payload: JobPayload): Promise<void> {
     qaReportKey,
     qaReportKeys: reportKeys,
     screenshotKeys,
-    openIssues: issues.map((i) => `[${i.severity}/${i.category}] ${i.issue}`),
+    openIssues: issues.map((i) =>
+      `[${i.severity}/${i.category}] ${i.issue}${i.viewport.includes('+') ? ` (on ${i.viewport})` : ''}`
+    ),
     // The design-side estimate is preserved; only the QA half is rewritten, so
     // the UI can show promised-vs-delivered rather than one number replacing another.
     wowScores: {

@@ -393,7 +393,13 @@ export const QaIssueSchema = z.object({
     'typographic-hierarchy', 'spacing-rhythm', 'photo-treatment',
     'motion-appropriateness', 'slop', 'layout', 'contrast', 'content', 'wow',
   ]),
-  viewport: z.enum(['mobile', 'tablet', 'desktop', 'all']),
+  /**
+   * Where the problem was measured. The critic emits one name
+   * (mobile/tablet/desktop/all); the QA worker's dedupe pass may merge
+   * identical findings into "desktop+mobile" so one broken headline seen on
+   * three screens reads as ONE issue, not three. Free string on purpose.
+   */
+  viewport: z.string().min(1),
   issue: z.string().min(1),
   /** Concrete instruction the builder can act on. Not "make it better". */
   fix: z.string().min(1),
