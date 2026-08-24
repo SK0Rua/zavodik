@@ -20,7 +20,7 @@ import { effectiveValue } from './settings';
 export type AccountReadiness = 'configured' | 'missing' | 'partial';
 
 export interface AccountStatus {
-  id: 'claude' | 'codex' | 'telegram' | 'whatsapp' | 'gmail';
+  id: 'claude' | 'codex' | 'opencode' | 'telegram' | 'whatsapp' | 'gmail';
   readiness: AccountReadiness;
   /** One line describing what IS set, or what is missing. */
   detail: string;
@@ -29,6 +29,7 @@ export interface AccountStatus {
 export interface AccountsSnapshot {
   claude: AccountStatus;
   codex: AccountStatus;
+  opencode: AccountStatus;
   telegram: AccountStatus;
   whatsapp: AccountStatus;
   gmail: AccountStatus;
@@ -85,6 +86,13 @@ export async function loadAccounts(): Promise<AccountsSnapshot> {
     detail: 'логін у volume codexhome — статус лише за перевіркою',
   };
 
+  // Same shape as Codex: OpenCode keeps its provider credentials in its own
+  // home (`~/.local/share/opencode/auth.json`), invisible from the database.
+  const opencode: AccountStatus = {
+    id: 'opencode', readiness: 'partial',
+    detail: 'логін у auth.json OpenCode — статус лише за перевіркою',
+  };
+
   const telegram: AccountStatus = tgToken && tgChat
     ? { id: 'telegram', readiness: 'configured', detail: `бот ${mask(tgToken)}, chat ${tgChat}` }
     : tgToken || tgChat
@@ -114,7 +122,7 @@ export async function loadAccounts(): Promise<AccountsSnapshot> {
   const { masterKeyConfigured } = await import('./settings');
 
   return {
-    claude, codex, telegram, whatsapp, gmail,
+    claude, codex, opencode, telegram, whatsapp, gmail,
     telegramChatId: tgChat || null,
     masterKey: masterKeyConfigured(),
   };

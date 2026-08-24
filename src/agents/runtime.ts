@@ -2,8 +2,23 @@
  * Runtime selection + the public agent API used by every worker.
  *
  * SPEC §2.3 / decision #10: only subscription-authenticated runtimes exist —
- * `claude-code` (Claude Pro/Max via OAuth) and `codex` (ChatGPT subscription).
- * There is no API-key runtime, by construction.
+ * `claude-code` (Claude Pro/Max via OAuth), `codex` (ChatGPT subscription) and
+ * `opencode` (whatever provider is logged into OpenCode). There is no API-key
+ * runtime, by construction.
+ *
+ * ── Adding a harness (the whole checklist) ───────────────────────────────────
+ *
+ *  1. Implement `AgentRuntime` in a new adapter file. Shared mechanics already
+ *     exist: result validation (`result.ts`), rate-limit signatures
+ *     (`ratelimit.ts`), the structured retry loop (`retry.ts`), model policy
+ *     (`modelPolicy.ts`), env allowlist (`sandbox.ts`).
+ *  2. Register it in RUNTIMES below and add its id to `AgentRuntimeId`
+ *     + RUNTIME_LABELS (`types.ts`).
+ *  3. Extend the AGENT_RUNTIME select options (`src/lib/settings.ts`) and
+ *     normalizeRuntime (`src/config.ts`).
+ *
+ * Nothing else branches on a runtime id: the tmux transport, the queue, the
+ * checks and the console all go through the interface's capability methods.
  *
  * Selection: the single `AGENT_RUNTIME` value from the settings UI applies to
  * every kind. `config.agents.runtimeFor(kind)` keeps the kind argument only so
@@ -14,15 +29,30 @@ import { config } from '../config.js';
 import { log } from '../lib/logger.js';
 import { claudeCodeRuntime } from './claudeCodeRuntime.js';
 import { codexRuntime } from './codexRuntime.js';
+import { opencodeRuntime } from './opencodeRuntime.js';
 import type {
   AgentKind,
   AgentRuntime,
+  AgentRuntimeId,
   CodeAgentOptions,
   StructuredOptions,
 } from './types.js';
 
+/** Every harness that exists. Selection happens only through config.agents.runtimeFor(). */
+const RUNTIMES: Record<AgentRuntimeId, AgentRuntime> = {
+  'claude-code': claudeCodeRuntime,
+  'codex': codexRuntime,
+  'opencode': opencodeRuntime,
+};
+
 export function getRuntime(kind?: AgentKind): AgentRuntime {
-  return config.agents.runtimeFor(kind) === 'codex' ? codexRuntime : claudeCodeRuntime;
+  return RUNTIMES[config.agents.runtimeFor(kind)];
+}
+
+/** A specific runtime by id, for paths that address one explicitly (account
+ * flows, per-provider checks, tests) rather than through the global selection. */
+export function getRuntimeById(id: AgentRuntimeId): AgentRuntime {
+  return RUNTIMES[id];
 }
 
 /**
@@ -55,8 +85,8 @@ export async function runAgent<T>(
  * The choice is **per call**, not global — a caller may pin `terminal: false`
  * for an agent nobody would ever watch (the social finder), and the fallback
  * below keeps a host without tmux building normally rather than failing every
- * job. Both subscription CLIs support the attachable path: Claude exposes its
- * interactive TUI, while Codex streams `codex exec` in the same terminal.
+ * job. Both subscription CLIs support the attachable path via their
+ * `terminalLaunch()` capability.
  */
 export function shouldUseAttachableTerminal(
   opts: Pick<CodeAgentOptions, 'terminal'>,
@@ -75,7 +105,7 @@ export async function runCodeAgent<T>(
   if (wantsTerminal) {
     const { runCodeAgentTmux, tmuxAvailable } = await import('./tmuxRuntime.js');
     if (await tmuxAvailable()) {
-      return runCodeAgentTmux(opts, resultSchema, undefined, runtime.id);
+      return runCodeAgentTmux(opts, resultSchema, undefined, runtime);
     }
     // Not an error: a dev box without tmux should still build. Warned rather
     // than silent, because "why can't I attach to the terminal" has exactly one
@@ -89,6 +119,6 @@ export async function runCodeAgent<T>(
 }
 
 export { z };
-export type { AgentKind, AgentRuntime, CodeAgentOptions, StructuredOptions } from './types.js';
+export type { AgentKind, AgentRuntime, AgentRuntimeId, CodeAgentOptions, StructuredOptions } from './types.js';
 export { RateLimitedError, isRateLimitedError, AgentSchemaError } from './types.js';
 export { agentSlotStats, withAgentSlot } from './semaphore.js';

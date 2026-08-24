@@ -835,6 +835,30 @@ export function ConnectedAccounts({ accounts, checks, checksError }: {
           )}
         />
 
+        {/*
+          OpenCode has NO browser-driven login flow here on purpose: its
+          `providers login` is an interactive TUI with per-provider steps we
+          cannot drive honestly from a button. The row is status + refresh;
+          the check's error message names the exact command when a login is
+          what is missing. If AGENT_RUNTIME=opencode, this card is the one to
+          watch — the ping goes through the same runtime the workers use.
+        */}
+        <AccountRow
+          {...row('opencode')}
+          title="OpenCode"
+          blurb="Агентні етапи через провайдерів, залогінених в opencode. Модель — у Налаштуваннях → Агенти, формат provider/model."
+          verdict={v('opencode', accounts.opencode)}
+          checkedAt={at('opencode')}
+          actions={<RefreshButton kind="opencode" onResult={set('opencode')} />}
+          how={(
+            <p>
+              Підключення вручну, один раз: <code>docker compose exec factory opencode providers login</code> —
+              вибери провайдера і заверши вхід. Список того, що вже залогінено: <code>opencode providers list</code>.
+              Перевірка тут робить справжній виклик тією моделлю, що записана в налаштуваннях.
+            </p>
+          )}
+        />
+
         {/* ── Telegram ── */}
         <AccountRow
           title="Telegram"

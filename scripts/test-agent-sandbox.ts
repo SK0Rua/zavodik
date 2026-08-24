@@ -29,7 +29,7 @@ process.env.S3_SECRET_KEY = 's3-secret';
 process.env.ANTHROPIC_API_KEY = 'sk-should-not-pass';
 process.env.NPM_CONFIG_REGISTRY = 'https://registry.npmjs.org/';
 
-const env = codeAgentEnv('oauth-token-value');
+const env = codeAgentEnv({ CLAUDE_CODE_OAUTH_TOKEN: 'oauth-token-value' });
 for (const leaked of ['SMTP_PASS', 'DATABASE_URL', 'TELEGRAM_BOT_TOKEN', 'S3_SECRET_KEY', 'ANTHROPIC_API_KEY']) {
   check(`env excludes ${leaked}`, env[leaked] === undefined, env[leaked]);
 }

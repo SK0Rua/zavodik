@@ -62,18 +62,24 @@ function isDenied(name: string): boolean {
 }
 
 /**
- * Environment for the CODE agent: allowlist only.
- * `oauthToken` is injected by the caller (it is the subscription credential).
+ * Environment for a CODE agent process: allowlisted parent env plus whatever
+ * subscription credentials the selected runtime injects via its
+ * `authEnv()` capability (Claude's OAuth token; Codex/OpenCode keep theirs on
+ * disk and inject nothing).
+ * @param injected per-runtime credentials, added verbatim on top of the allowlist.
  */
-export function codeAgentEnv(oauthToken: string): Record<string, string> {
+export function codeAgentEnv(injected?: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (v === undefined || isDenied(k)) continue;
     const allowed = ENV_ALLOWLIST_EXACT.has(k) || ENV_ALLOWLIST_PREFIXES.some((p) => k.startsWith(p));
     if (allowed) env[k] = v;
   }
-  // Never inherited from the parent; only the subscription token is injected.
-  if (oauthToken) env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
+  // Never inherited beyond what the runtime explicitly provides; only
+  // subscription credentials are ever injected here.
+  for (const [k, v] of Object.entries(injected ?? {})) {
+    if (v) env[k] = v;
+  }
   // A UTF-8 locale must always exist: without one, tmux send-keys mangles
   // multibyte input on its way into the agent TUI (measured), and tools inside
   // the workspace read/write UTF-8 files. Containers often ship with no LANG.

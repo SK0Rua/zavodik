@@ -125,6 +125,7 @@ services:
       # Codex CLI subscription login (`codex login` inside the container once).
       # A named volume, so the auth survives image rebuilds.
       - codexhome:/home/node/.codex
+      - opencodehome:/home/node/.local/share/opencode
     ports:
       - "127.0.0.1:8787:8787"   # internal API / webhooks
       - "127.0.0.1:8788:8788"   # demo static server
@@ -164,6 +165,7 @@ services:
       - deploysdata:/app/deploys
       # Shared with `factory`: gen-image runs in the build group too.
       - codexhome:/home/node/.codex
+      - opencodehome:/home/node/.local/share/opencode
     # The build terminal. Bound to 127.0.0.1 like every other port here: ttyd
     # serves a live agent session, so an exposed port is someone else watching
     # (and, with BUILD_TERMINAL_WRITABLE, typing into) a client's build. Reach it
@@ -325,6 +327,7 @@ services:
 
 volumes:
   codexhome:
+  opencodehome:
   pgdata:
   miniodata:
   gosomdata:

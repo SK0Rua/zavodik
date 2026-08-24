@@ -25,7 +25,7 @@ COPY ui/ ./
 # `ui/factory/schema.ts` arrives as the dev symlink (-> ../../src/db/schema.ts),
 # which dangles here because the copy is rooted at /app. Remove it first, then
 # copy the real file: a plain COPY would otherwise write THROUGH the symlink.
-RUN rm -f ./factory/schema.ts ./factory/buildPolicy.ts ./factory/settings.ts
+RUN rm -f ./factory/schema.ts ./factory/buildPolicy.ts ./factory/settings.ts ./factory/models.ts
 COPY src/db/schema.ts ./factory/schema.ts
 # Same reasoning as the schema: the build policy (who gets a demo built, in what
 # order) is ONE file shared with the workers, so the router and the UI's
@@ -36,6 +36,11 @@ COPY src/orchestrator/buildPolicy.ts ./factory/buildPolicy.ts
 # ONE definition. A drifting copy here would mean the UI writes a row the
 # factory cannot decrypt, or offers a key nothing reads.
 COPY src/lib/settings.ts ./factory/settings.ts
+# Fourth shared file, same rule: the MODEL-TIER policy (how AGENT_MODEL /
+# AGENT_MODEL_HEAVY map onto whichever harness is selected) is one definition —
+# the workers pass these ids to their CLIs and the settings page renders the
+# same rule as field fallbacks. Import-free by design (see its docblock).
+COPY src/agents/modelPolicy.ts ./factory/models.ts
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build
 

@@ -7,6 +7,7 @@
  */
 import { config } from '../config.js';
 import type { AgentRuntimeId } from '../agents/types.js';
+import { runtimeLabel } from '../agents/types.js';
 import { log } from '../lib/logger.js';
 
 /**
@@ -179,10 +180,7 @@ export function subscriptionPauseText(input: {
   resumesAt: Date;
   runtime?: AgentRuntimeId;
 }): string {
-  const subscription = input.runtime === 'codex'
-    ? 'Codex'
-    : input.runtime === 'claude-code' ? 'Claude Code' : 'агентної моделі';
-  return `⏸ Пауза: вичерпано ліміт підписки ${subscription}.\n` +
+  return `⏸ Пауза: вичерпано ліміт підписки ${runtimeLabel(input.runtime)}.\n` +
     `Крок «${esc(stageLabel(input.jobType))}» продовжиться сам о ` +
     `${input.resumesAt.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: process.env.TZ || 'Europe/Athens' })}. Це не помилка.`;
 }

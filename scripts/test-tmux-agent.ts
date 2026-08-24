@@ -32,10 +32,11 @@ import { z } from 'zod';
 import { evaluateToolCall } from '../src/agents/sandbox.js';
 import {
   PROMPT_FILE, STALE_MARKER_MS, TERMINAL_LOG, TERMINAL_MARKER,
-  guardSettings, kickoffLine, liveTerminal, runCodeAgentTmux,
-  sessionName, terminalFailureError, terminalLaunch, tmuxAvailable,
+  kickoffLine, liveTerminal, runCodeAgentTmux,
+  sessionName, terminalFailureError, tmuxAvailable,
 } from '../src/agents/tmuxRuntime.js';
-import { shouldUseAttachableTerminal } from '../src/agents/runtime.js';
+import { shouldUseAttachableTerminal, getRuntimeById } from '../src/agents/runtime.js';
+import { preTrustWorkspace, guardSettings } from '../src/agents/claudeCodeRuntime.js';
 import { TERMINAL_USER, terminalPassword, ttydArgs } from '../src/agents/terminalServer.js';
 import { RateLimitedError } from '../src/agents/types.js';
 
@@ -74,7 +75,7 @@ console.log('\nRuntime parity');
   );
 
   const opts = { name: 'terminal-parity', cwd: '/tmp/site-42', prompt: 'fixture', heavy: true };
-  const codex = terminalLaunch('codex', opts, '/tmp/claude-settings.json');
+  const codex = getRuntimeById('codex').terminalLaunch(opts, { settingsPath: '/tmp/factory-settings.json' });
   check('Codex terminal launches codex exec',
     codex.args[0] === 'exec' && codex.args.includes('workspace-write'), codex.args.join(' '));
   check('Codex starts work immediately instead of waiting for Claude TUI input', !codex.needsKickoff);
@@ -82,22 +83,28 @@ console.log('\nRuntime parity');
   check('Codex receives the short prompt-file instruction',
     codex.args.includes(kickoffLine(PROMPT_FILE)), codex.args.join(' '));
 
-  const claude = terminalLaunch('claude-code', opts, '/tmp/claude-settings.json');
+  const claude = getRuntimeById('claude-code').terminalLaunch(opts, { settingsPath: '/tmp/factory-settings.json' });
   check('Claude terminal still launches its interactive TUI',
     claude.command === 'claude' && claude.needsKickoff && claude.interactive,
     `${claude.command} ${claude.args.join(' ')}`);
 
-  const limited = terminalFailureError('codex', {
+  const limited = terminalFailureError(getRuntimeById('codex'), {
     reason: 'gone', scrollback: "You've hit your usage limit. Try again later.", elapsedMs: 1_000,
   }, 'terminal-parity');
   check('Codex terminal rate limits pause instead of failing the build',
     limited instanceof RateLimitedError && limited.runtime === 'codex');
 
-  const ordinary = terminalFailureError('codex', {
+  const ordinary = terminalFailureError(getRuntimeById('codex'), {
     reason: 'gone', scrollback: 'unexpected CLI exit', elapsedMs: 1_000,
   }, 'terminal-parity');
   check('ordinary Codex terminal failures remain ordinary errors',
     !(ordinary instanceof RateLimitedError) && ordinary.message.includes('produced no result.json'));
+
+  const claudeLimited = terminalFailureError(getRuntimeById('claude-code'), {
+    reason: 'idle', scrollback: 'Claude usage limit reached. Please try again later.', elapsedMs: 1_000,
+  }, 'terminal-parity');
+  check('a Claude TUI printing its subscription cap also pauses instead of failing',
+    claudeLimited instanceof RateLimitedError && claudeLimited.runtime === 'claude-code');
 }
 
 /** Run the guard hook exactly as the CLI would: JSON on stdin, JSON on stdout. */
@@ -278,9 +285,11 @@ console.log('\nSession bookkeeping');
 
 // ─── 5. Live: one real agent session in one real tmux ────────────────────────
 
-const liveRuntime = process.argv.includes('--live-codex') ? 'codex' : 'claude-code';
-const wantsLive = process.argv.includes('--live') || liveRuntime === 'codex';
-console.log(`\nLive tmux run${wantsLive ? ` (${liveRuntime})` : ' (skipped; pass --live or --live-codex)'}`);
+const liveRuntime = process.argv.includes('--live-codex') ? 'codex'
+  : process.argv.includes('--live-opencode') ? 'opencode'
+  : 'claude-code';
+const wantsLive = process.argv.includes('--live') || liveRuntime !== 'claude-code';
+console.log(`\nLive tmux run${wantsLive ? ` (${liveRuntime})` : ' (skipped; pass --live, --live-codex or --live-opencode)'}`);
 
 if (wantsLive) {
   const available = await tmuxAvailable();
@@ -306,7 +315,7 @@ if (wantsLive) {
         },
         schema,
         session,
-        liveRuntime,
+        getRuntimeById(liveRuntime),
       );
       const seconds = Math.round((Date.now() - startedAt) / 1000);
       check('the agent returned a schema-valid result', result.ok === true, JSON.stringify(result));

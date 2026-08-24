@@ -18,7 +18,8 @@
       "@/*": ["./*"],
       "@factory/schema": ["./factory/schema.ts"],
       "@factory/buildPolicy": ["./factory/buildPolicy.ts"],
-      "@factory/settings": ["./factory/settings.ts"]
+      "@factory/settings": ["./factory/settings.ts"],
+      "@factory/models": ["./factory/models.ts"]
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],

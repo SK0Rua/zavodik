@@ -40,9 +40,9 @@ const BAD_MODEL = 'no-such-model-for-this-test';
 const PREV = { model: '', heavy: '' };
 await initSettings({ poll: false });
 {
-  const { config } = await import('../src/config.js');
-  PREV.model = config.agents.model;
-  PREV.heavy = config.agents.modelHeavy;
+  const { getSetting } = await import('../src/lib/settings.js');
+  PREV.model = getSetting('AGENT_MODEL');
+  PREV.heavy = getSetting('AGENT_MODEL_HEAVY');
 }
 await writeSetting('AGENT_MODEL', BAD_MODEL, 'test-approval-fallback');
 await writeSetting('AGENT_MODEL_HEAVY', BAD_MODEL, 'test-approval-fallback');
@@ -83,8 +83,8 @@ try {
   await writeSetting('AGENT_MODEL', '', 'test-approval-fallback').catch(() => {});
   await writeSetting('AGENT_MODEL_HEAVY', '', 'test-approval-fallback').catch(() => {});
   await reloadSettings().catch(() => {});
-  const { config } = await import('../src/config.js');
-  console.log(`models restored: ${config.agents.model} / ${config.agents.modelHeavy} `
+  const { getSetting } = await import('../src/lib/settings.js');
+  console.log(`models restored: ${getSetting('AGENT_MODEL')} / ${getSetting('AGENT_MODEL_HEAVY')} `
     + `(were ${PREV.model} / ${PREV.heavy})`);
 }
 

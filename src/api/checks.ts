@@ -21,11 +21,14 @@ import { config } from '../config.js';
 import { getSetting, masterKeyConfigured, settingSource } from '../lib/settings.js';
 import * as waha from '../channels/waha.js';
 import { claudeCodeRuntime } from '../agents/claudeCodeRuntime.js';
+import { opencodeRuntime } from '../agents/opencodeRuntime.js';
+import { getRuntime } from '../agents/runtime.js';
+import { effectiveModel, effectiveModels } from '../agents/modelPolicy.js';
 import { z } from 'zod';
 import { readCodexAccountEmail } from './codexAccount.js';
 
 export type CheckKind =
-  | 'claude' | 'codex' | 'telegram' | 'telegram-send' | 'smtp' | 'imap' | 'waha';
+  | 'claude' | 'codex' | 'opencode' | 'telegram' | 'telegram-send' | 'smtp' | 'imap' | 'waha';
 
 export interface CheckResult {
   ok: boolean;
@@ -48,6 +51,7 @@ const short = (err: unknown, max = 300): string =>
  */
 async function checkClaude(): Promise<CheckResult> {
   const token = config.agents.oauthToken;
+  const model = effectiveModel('claude-code', false, config.agents.modelInputs());
   try {
     // The claude-code runtime explicitly, not `getRuntime()`: this button says
     // "Claude", and it must not silently pass when AGENT_RUNTIME is `codex`.
@@ -63,13 +67,13 @@ async function checkClaude(): Promise<CheckResult> {
       message: res?.pong === true
         ? 'Claude Code відповідає — підписка робоча.'
         : 'Виклик пройшов, але відповідь несподівана.',
-      detail: { token: token ? 'з налаштувань' : 'CLI-логін (токен не заданий)', model: config.agents.model },
+      detail: { token: token ? 'з налаштувань' : 'CLI-логін (токен не заданий)', model },
     };
   } catch (err) {
     return {
       ok: false,
       message: `Claude Code не відповів: ${short(err)}`,
-      detail: { token: token ? 'заданий' : 'НЕ заданий', model: config.agents.model },
+      detail: { token: token ? 'заданий' : 'НЕ заданий', model },
     };
   }
 }
@@ -124,6 +128,46 @@ async function checkCodex(): Promise<CheckResult> {
       : 'Codex не залогінений — натисни «Підключити».',
     detail: { accountEmail, bin, exit: code, output: text.slice(0, 300) },
   };
+}
+
+// ─── OpenCode ─────────────────────────────────────────────────────────────────
+
+/**
+ * Same philosophy as checkClaude: the cheapest real agent call proves both the
+ * login and the whole path, which no credential-file inspection could.
+ * The credential lives in OpenCode's own home (`auth.json`); if it is missing
+ * or its provider refuses, the remedy is `opencode providers login`.
+ */
+async function checkOpenCode(): Promise<CheckResult> {
+  const bin = config.agents.openCodeBin;
+  const model = effectiveModel('opencode', false, config.agents.modelInputs());
+  try {
+    // This runtime explicitly, not `getRuntime()`: the button says "OpenCode".
+    const res = await opencodeRuntime.structured(
+      'settings-ping',
+      'You answer with JSON only.',
+      'Reply with {"pong": true}. Nothing else.',
+      z.object({ pong: z.boolean() }),
+      { retries: 0, timeoutMs: 90_000 },
+    );
+    return {
+      ok: res?.pong === true,
+      message: res?.pong === true
+        ? 'OpenCode відповідає — провайдер робочий.'
+        : 'Виклик пройшов, але відповідь несподівана.',
+      detail: { bin, model: model || 'типова модель CLI' },
+    };
+  } catch (err) {
+    const text = short(err);
+    const needsLogin = /auth|credential|login|provider/i.test(text);
+    return {
+      ok: false,
+      message: needsLogin
+        ? 'OpenCode не залогінений — виконай `opencode providers login` у контейнері factory і залогінь потрібного провайдера.'
+        : `OpenCode не відповів: ${text}`,
+      detail: { bin, model: model || 'типова модель CLI' },
+    };
+  }
 }
 
 // ─── Telegram ────────────────────────────────────────────────────────────────
@@ -333,6 +377,7 @@ async function checkWaha(): Promise<CheckResult> {
 const CHECKS: Record<CheckKind, () => Promise<CheckResult>> = {
   claude: checkClaude,
   codex: checkCodex,
+  opencode: checkOpenCode,
   telegram: checkTelegram,
   'telegram-send': checkTelegramSend,
   smtp: checkSmtp,
@@ -356,12 +401,15 @@ export async function runCheck(kind: CheckKind): Promise<CheckResult> {
  * Effective configuration as this process sees it RIGHT NOW. The UI shows it so
  * "я змінив ліміт — чи бачить його фабрика?" is answerable without reading logs.
  * Secrets are reported as booleans only.
+ *
+ * Models come from the selected RUNTIME through the shared policy
+ * (`effectiveModels`) — no per-CLI branching here, so a new harness shows up
+ * correctly without touching this file.
  */
 export function effectiveConfig(): Record<string, unknown> {
-  const agentRuntime = config.agents.runtime;
-  const normalModel = agentRuntime === 'codex' ? config.agents.codexModel : config.agents.model;
-  const heavyModel = agentRuntime === 'codex' ? config.agents.codexModelHeavy : config.agents.modelHeavy;
-  const shownModel = (model: string): string => model || 'типова модель Codex CLI';
+  const runtime = getRuntime();
+  const models = effectiveModels(runtime.id, config.agents.modelInputs());
+  const shownModel = (model: string): string => model || 'типова модель CLI цього рантайму';
   const agentKinds = [
     'enrichment', 'qa', 'content', 'design', 'outreach', 'builder', 'visual-critique',
   ] as const;
@@ -371,9 +419,9 @@ export function effectiveConfig(): Record<string, unknown> {
     mode: config.mode,
     outreachDailyLimit: config.outreachDailyLimit,
     followupDays: config.followupDays,
-    agentRuntime,
-    agentModel: shownModel(normalModel),
-    agentModelHeavy: shownModel(heavyModel),
+    agentRuntime: runtime.id,
+    agentModel: shownModel(models.normal),
+    agentModelHeavy: shownModel(models.heavy),
     agentRuntimeByStage: Object.fromEntries(
       agentKinds.map((kind) => [kind, config.agents.runtimeFor(kind)]),
     ),

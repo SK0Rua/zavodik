@@ -2,18 +2,21 @@
 
 Реалізація спеки §2.3 і рішення №10. **`ANTHROPIC_API_KEY` не потрібен, не читається і не передається в жоден процес.** Пакет `@anthropic-ai/sdk` (pay-per-token) видалений з залежностей.
 
-## Два рантайми, один інтерфейс
+## Три рантайми, один інтерфейс
 
 | Рантайм | Оплата | Аутентифікація |
 |---|---|---|
-| `claude-code` (default) | підписка Claude Pro/Max Романа | сервер: `claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN` у `.env`; локально: власний логін CLI (нічого передавати не треба) |
+| `claude-code` (default) | підписка Claude Pro/Max Романа | сервер: `claude setup-token` → токен у налаштуваннях; локально: власний логін CLI |
 | `codex` | підписка ChatGPT | `codex login` (токен у `$CODEX_HOME`) |
+| `opencode` | підписка провайдера, залогіненого в opencode (Kimi, Zen, …) | `opencode providers login` (креденшели в `~/.local/share/opencode/auth.json`) |
 
-Обидва реалізують `AgentRuntime` (`src/agents/types.ts`):
+Усі реалізують `AgentRuntime` (`src/agents/types.ts`):
 
 ```ts
 structured(name, systemPrompt, userContent, zodSchema, opts) -> T   // headless, без інструментів
 codeAgent(opts, resultSchema) -> T                                  // workspace + інструменти, результат через result.json
+// + capability-методи для transports:
+label / rateLimitFromText() / terminalLaunch() / prepareTerminal?() / authEnv()
 ```
 
 Публічний API для воркерів не змінився:
@@ -23,18 +26,41 @@ import { runAgent, z } from '../agents/agent.js';        // structured
 import { runCodeAgent } from '../agents/codeAgent.js';   // workspace
 ```
 
-Обидва модулі тепер тонкі фасади над `src/agents/runtime.ts`.
+Обидва модулі — тонкі фасади над `src/agents/runtime.ts`, де живе реєстр
+`RUNTIMES`. Додавання нового harness'а — чекліст на початку того файлу.
 
 ## Файли
 
 | Файл | Що робить |
 |---|---|
-| `src/agents/types.ts` | інтерфейс `AgentRuntime`, `RateLimitedError`, `AgentSchemaError`, типи опцій |
-| `src/agents/runtime.ts` | вибір рантайму + публічні `runAgent` / `runCodeAgent` |
-| `src/agents/claudeCodeRuntime.ts` | адаптер Claude Code (Agent SDK) |
+| `src/agents/types.ts` | інтерфейс `AgentRuntime`, `RateLimitedError`, `AgentSchemaError`, типи опцій, `RUNTIME_LABELS` |
+| `src/agents/modelPolicy.ts` | політика моделей (`effectiveModels`) + союз `AgentRuntimeId`. Без жодного імпорту: копіюється в UI-образ разом із settings.ts |
+| `src/agents/runtime.ts` | реєстр рантаймів (`RUNTIMES`, `getRuntime`, `getRuntimeById`) + публічні `runAgent` / `runCodeAgent` |
+| `src/agents/claudeCodeRuntime.ts` | адаптер Claude Code (Agent SDK) + його термінальні потреби: guard через `--settings`, pre-trust workspace |
 | `src/agents/codexRuntime.ts` | адаптер Codex CLI (`codex exec`) |
+| `src/agents/opencodeRuntime.ts` | адаптер OpenCode CLI (`opencode run --format json`, NDJSON-події, guard через OPENCODE_CONFIG) |
+| `src/agents/result.ts` | контракт `result.json`: читання + валідація, спільний для всіх адаптерів і обох транспортів |
+| `src/agents/ratelimit.ts` | спільні сигнатури вичерпання підписки у вільному тексті + фабрики `RateLimitedError` |
+| `src/agents/retry.ts` | спільний retry-цикл `structured()` (rate-limit не витрачає спробу, фінал — `NEEDS_HUMAN`) |
 | `src/agents/schema.ts` | zod → JSON Schema, стійкий парсер JSON з відповіді |
 | `src/agents/semaphore.ts` | обмеження конкурентності агентних викликів |
+
+### Як додати новий harness (чекліст)
+
+1. Реалізуй `AgentRuntime` у новому файлі-адаптері. Спільна механіка вже є:
+   результат — `result.ts`, ліміти — `ratelimit.ts`, retry — `retry.ts`,
+   моделі — `modelPolicy.ts`, env-allowlist — `sandbox.ts`.
+2. Зареєструй його в `RUNTIMES` (`runtime.ts`) та додай id у союз
+   `AgentRuntimeId` (`modelPolicy.ts`) і `RUNTIME_LABELS` (`types.ts`).
+3. Розшир опції селекта `AGENT_RUNTIME` (`src/lib/settings.ts`) та
+   `normalizeRuntime` (`src/config.ts`).
+4. Якщо CLI має інтерактивний логін — додай флоу в `src/api/accounts.ts`
+   (PTY через `script -q`, як у claude; plain spawn, як у codex) і картку в
+   `ui/components/ConnectedAccounts.tsx`.
+
+Більше ніщо не гілкується за id рантайму: tmux-транспорт, черга, перевірки й
+консоль ідуть через capability-методи інтерфейсу (`terminalLaunch`,
+`prepareTerminal?`, `authEnv`, `rateLimitFromText`, `label`).
 
 ## Як зроблено structured output
 
@@ -42,26 +68,34 @@ import { runCodeAgent } from '../agents/codeAgent.js';   // workspace
 
 **Codex:** `codex exec --output-schema <file> --output-last-message <file> --sandbox read-only --ephemeral`; JSON береться з останнього повідомлення агента і валідується тією ж zod-схемою.
 
+**OpenCode:** `opencode run --format json` без нативного schema-прапора — контракт JSON вкладається в промпт (`jsonOnlyInstruction`), відповідь — останній `text`-івент, парситься тим самим `extractJson`. Помилки стріму класифікуються в `errorFromEvents`: statusCode 401/402/429 чи "payment required" → `RateLimitedError` (пауза), інше → звичайна помилка.
+
 **Мультимодальність (visual QA):** скриншоти пишуться у тимчасову теку, агенту дозволяється лише `Read` і передаються шляхи до файлів — картинки читає він сам. Жодних base64-payload'ів в API.
 
 ## Моделі
 
-Два поля моделей у UI належать вибраному runtime. Для Claude перевірено
-емпірично на `claude` CLI 2.1.233 — обидва id приймаються:
+Два поля моделей у UI належать вибраному runtime. Правило відображення/передачі
+— одна функція `effectiveModels()` (`src/agents/modelPolicy.ts`), яку читають і
+адаптери, і `/api/checks`, і сторінка налаштувань (копія файлу в UI-образі):
+
+- дефолтний рантайм (`claude-code`) отримує поля як є, з реєстровими
+  дефолтами;
+- будь-який інший рантайм трактує "значення прийшло з дефолту реєстру" як
+  НЕЗАДАНЕ: Claude-типові дефолти ніколи не потрапляють у чужий CLI, а одне
+  збережене звичайне значення покриває і heavy-рівень, поки heavy не заданий.
 
 ```
 AGENT_MODEL=claude-sonnet-5        # enrichment, QA, content, outreach
 AGENT_MODEL_HEAVY=claude-opus-5    # builder, design, visual critique
 ```
 
-Для Codex значення з тих самих полів передаються як `codex exec --model …`.
-Якщо модель ще не була збережена, `--model` не передається і діє типова модель
-Codex CLI; Claude-типові значення з реєстру в Codex не просочуються.
+Для Codex ці самі поля передаються як `codex exec --model …`; якщо нічого не
+збережено, `--model` не передається і діє типова модель Codex CLI.
 
 ## Вибір рантайму
 
 ```bash
-AGENT_RUNTIME=claude-code      # глобально: claude-code | codex
+AGENT_RUNTIME=claude-code      # глобально: claude-code | codex | opencode
 ```
 
 Вибір один і застосовується до `enrichment`, `qa`, `content`, `design`,
@@ -130,7 +164,7 @@ Builder працює з `bypassPermissions` (він мусить сам став
 
 ## Ліміти підписки як частина дизайну (§2.3)
 
-**Детекція.** Agent SDK віддає окреме повідомлення `rate_limit_event` з `rate_limit_info: { status, resetsAt, rateLimitType }`. `status === 'rejected'` = вікно вичерпане. Додатково ловляться typed-помилки асистента (`rate_limit`, `overloaded`), HTTP 429 і текстові сигнатури ("rate limit", "usage limit", "you've hit your limit"). У Codex — тільки текстові сигнатури зі stdout/stderr.
+**Детекція.** Agent SDK віддає окреме повідомлення `rate_limit_event` з `rate_limit_info: { status, resetsAt, rateLimitType }`. `status === 'rejected'` = вікно вичерпане. Додатково ловляться typed-помилки асистента (`rate_limit`, `overloaded`), HTTP 429 і текстові сигнатури ("rate limit", "usage limit", "you've hit your limit") — тепер ОДИН спільний список у `src/agents/ratelimit.ts` для всіх адаптерів і для tmux-скролбека (через `runtime.rateLimitFromText()`; раніше списки були продубльовані й розійшлися).
 
 **Реакція.** Кидається `RateLimitedError { retryAfterMs, rateLimitType, resetsAt }`. `retryAfterMs` рахується з `resetsAt` (+30 c запасу, обрізається `AGENT_RATE_LIMIT_MAX_WAIT_MINUTES`, дефолт 6 год), інакше `AGENT_RATE_LIMIT_WAIT_MINUTES` (дефолт 15 хв).
 
@@ -144,15 +178,18 @@ Builder працює з `bypassPermissions` (він мусить сам став
 
 ## Docker
 
-Образ ставить обидва CLI:
+Образ ставить усі три CLI:
 
 ```dockerfile
-RUN npm i -g @anthropic-ai/claude-code @openai/codex
+RUN npm i -g @anthropic-ai/claude-code @openai/codex opencode-ai
 ENV CODEX_HOME=/home/node/.codex
-USER node          # НЕ хардening: --dangerously-skip-permissions відмовляється працювати під root
+ENV OPENCODE_DISABLE_AUTOUPDATE=1
+USER node          # НЕ hardening: --dangerously-skip-permissions відмовляється працювати під root
 ```
 
-`CLAUDE_CODE_OAUTH_TOKEN` підхоплюється з `.env`. Для Codex змонтуй `~/.codex` як volume, щоб логін підписки жив між рестартами.
+`CLAUDE_CODE_OAUTH_TOKEN` підхоплюється з `.env`. Для Codex змонтуй `~/.codex`
+як volume (`codexhome`), для OpenCode — `~/.local/share/opencode`
+(`opencodehome`), щоб логіни підписок переживали рестарти.
 
 Плюс два бінарники для термінала збірки: `tmux` (з apt) і `ttyd`. **ttyd ставиться
 не через apt**, а як пінований статичний бінарник із перевіркою sha256: його немає
@@ -163,12 +200,14 @@ bookworm просто впаде і забере з собою весь білд
 ## Перевірка
 
 ```bash
-pnpm tsx scripts/test-agent-parsing.ts     # парсинг, схеми, routing/model args, rate-limit, семафор (без мережі)
+pnpm tsx scripts/test-agent-parsing.ts     # парсинг, схеми, реєстр, моделі, rate-limit, семафор (без мережі)
 pnpm tsx scripts/test-rate-limit-requeue.ts # retry_wait проти реального Postgres/pg-boss
 pnpm tsx scripts/test-agent-salvage.ts     # рятування результату при error_max_turns (реальні виклики)
 pnpm tsx scripts/test-agent-sandbox.ts     # env-allowlist + guard (33 офлайн); --live = реальна атака
 pnpm tsx scripts/verify-agent-runtime.ts   # реальні виклики по підписці
 AGENT_RUNTIME=codex pnpm tsx scripts/verify-agent-runtime.ts
+AGENT_RUNTIME=opencode AGENT_MODEL=opencode/x-preview-f-free pnpm tsx scripts/verify-agent-runtime.ts
+pnpm tsx scripts/test-tmux-agent.ts --live-opencode  # реальна tmux-сесія opencode TUI
 ```
 
 ## Групи воркерів: семафор на процес (рішення Романа, 2026-08-16)

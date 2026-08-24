@@ -19,7 +19,7 @@
  */
 import { unstable_noStore as noStore } from 'next/cache';
 
-export type CheckKind = 'claude' | 'codex' | 'telegram' | 'telegram-send' | 'smtp' | 'imap' | 'waha';
+export type CheckKind = 'claude' | 'codex' | 'opencode' | 'telegram' | 'telegram-send' | 'smtp' | 'imap' | 'waha';
 
 export interface CachedCheck {
   kind: CheckKind;

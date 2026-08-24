@@ -3,11 +3,13 @@ FROM node:22-bookworm
 RUN corepack enable
 WORKDIR /app
 
-# Agent runtimes. Both authenticate by SUBSCRIPTION, never by API key (spec §2.3):
-#   claude -> CLAUDE_CODE_OAUTH_TOKEN from .env (`claude setup-token` on the host once)
-#   codex  -> ChatGPT login persisted in $CODEX_HOME (mount ~/.codex to use it)
-RUN npm i -g @anthropic-ai/claude-code @openai/codex \
-    && claude --version && codex --version
+# Agent runtimes. All authenticate by SUBSCRIPTION, never by API key (spec §2.3):
+#   claude   -> CLAUDE_CODE_OAUTH_TOKEN from .env (`claude setup-token` on the host once)
+#   codex    -> ChatGPT login persisted in $CODEX_HOME (mount ~/.codex to use it)
+#   opencode -> provider logins persisted in ~/.local/share/opencode/auth.json
+#               (`opencode providers login` once inside the container)
+RUN npm i -g @anthropic-ai/claude-code @openai/codex opencode-ai \
+    && claude --version && codex --version && opencode --version
 
 # pnpm-workspace.yaml is NOT optional here: it carries `onlyBuiltDependencies:
 # [esbuild]`. pnpm 11 exits non-zero on ERR_PNPM_IGNORED_BUILDS, so without this
@@ -85,10 +87,14 @@ RUN mkdir -p .claude/skills && cp -r skills/. .claude/skills/
 # The mounted sites/ and deploys/ volumes must be writable by that uid; they are
 # created here so the bind mounts inherit an owner instead of arriving as root.
 RUN mkdir -p /app/sites /app/deploys /app/storage /home/node/.codex \
+    && mkdir -p /home/node/.local/share/opencode \
     && chown -R node:node /app /home/node
 
 # Where the Codex CLI keeps its subscription auth; mount a volume to persist it.
 ENV CODEX_HOME=/home/node/.codex
+# OpenCode: same idea for its provider logins; autoupdate has no business
+# inside a pinned image.
+ENV OPENCODE_DISABLE_AUTOUPDATE=1
 
 USER node
 

@@ -5,10 +5,17 @@
  *   pnpm tsx scripts/test-agent-parsing.ts
  */
 import { extractJson, zodToJsonSchema } from '../src/agents/schema.js';
-import { codexLooksRateLimited, codexModelArgs } from '../src/agents/codexRuntime.js';
+import { looksRateLimited } from '../src/agents/ratelimit.js';
+import { effectiveModel, effectiveModels } from '../src/agents/modelPolicy.js';
 import { withAgentSlot, agentSlotStats } from '../src/agents/semaphore.js';
-import { RateLimitedError, isRateLimitedError } from '../src/agents/types.js';
-import { getRuntime } from '../src/agents/runtime.js';
+import {
+  RateLimitedError, isRateLimitedError, RUNTIME_LABELS,
+} from '../src/agents/types.js';
+// OpenCode NDJSON fixtures captured live on 2026-08-24 (CLI 1.18.x).
+import {
+  parseOpencodeEvents, lastTextEvent, allText, usageFromEvents, errorFromEvents,
+} from '../src/agents/opencodeRuntime.js';
+import { getRuntime, getRuntimeById } from '../src/agents/runtime.js';
 import { config } from '../src/config.js';
 import { primeSettings } from '../src/lib/settings.js';
 import { z } from 'zod';
@@ -48,30 +55,77 @@ check('array items', eq(js.properties.tags, { type: 'array', items: { type: 'str
 check('enum values', eq(js.properties.kind, { type: 'string', enum: ['a', 'b'] }));
 check('additionalProperties false', js.additionalProperties === false);
 
-// ── rate limit detection ────────────────────────────────────────────────────
-check('detects "rate limit"', codexLooksRateLimited('Error: rate limit exceeded'));
-check('detects "usage limit"', codexLooksRateLimited("You've hit your usage limit"));
-check('detects 429', codexLooksRateLimited('HTTP 429 Too Many Requests'));
-check('ignores normal output', !codexLooksRateLimited('Created hello.txt successfully'));
+// ── rate limit detection (shared signatures) ────────────────────────────────
+check('detects "rate limit"', looksRateLimited('Error: rate limit exceeded'));
+check('detects "usage limit"', looksRateLimited("You've hit your usage limit"));
+check('detects 429', looksRateLimited('HTTP 429 Too Many Requests'));
+check('detects "try again later" (the union of both former lists)',
+  looksRateLimited('Please try again later'), 'pattern missing from the shared list');
+check('ignores normal output', !looksRateLimited('Created hello.txt successfully'));
+
+// ── registry ────────────────────────────────────────────────────────────────
+for (const id of ['claude-code', 'codex', 'opencode'] as const) {
+  check(`runtime "${id}" registered with a label`, getRuntimeById(id).label === RUNTIME_LABELS[id]);
+}
+
+// ── opencode NDJSON stream (fixtures captured live) ──────────────────────────
+{
+  const pongStream = [
+    '{"type":"step_start","timestamp":1787561034633,"sessionID":"ses_probe","part":{"type":"step-start"}}',
+    '{"type":"text","timestamp":1787561035000,"sessionID":"ses_probe","part":{"type":"text","text":"{\\"pong\\": true}"}}',
+    '{"type":"step_finish","timestamp":1787561036000,"sessionID":"ses_probe","part":{"type":"step-finish","reason":"stop","tokens":{"input":16517,"output":17},"cost":0}}',
+  ].join('\n');
+  const events = parseOpencodeEvents(pongStream);
+  check('opencode: parses the three event kinds', events.length === 3, events.length);
+  check('opencode: last text is the final answer', lastTextEvent(events).includes('pong'));
+  const usage = usageFromEvents(events);
+  check('opencode: usage counts one finished step', usage.numTurns === 1);
+  check('opencode: usage carries cost when reported', usage.costUsd === 0);
+
+  // The CLI interleaves human-readable lines (auto-rejected asks) with JSON.
+  const noisy = '!\x1b[1m permission requested: bash (echo hi); auto-rejecting\n' + pongStream;
+  check('opencode: skips non-JSON noise lines between events',
+    parseOpencodeEvents(noisy).length === 3);
+
+  const paymentRequired = parseOpencodeEvents(JSON.stringify({
+    type: 'error', timestamp: 1787560590247, sessionID: 'ses_x',
+    error: { name: 'APIError', data: {
+      message: 'Payment Required: unable to verify your membership benefits at this time.',
+      statusCode: 402,
+    } },
+  }));
+  const limited = errorFromEvents(paymentRequired);
+  check('opencode: 402 membership wall pauses the job instead of failing it',
+    limited instanceof RateLimitedError && limited.runtime === 'opencode');
+
+  const plainError = parseOpencodeEvents(JSON.stringify({
+    type: 'error', sessionID: 'ses_x',
+    error: { name: 'APIError', data: { message: 'model overloaded, try later', statusCode: 500 } },
+  }));
+  const ordinary = errorFromEvents(plainError);
+  check('opencode: an ordinary API error stays an ordinary error',
+    ordinary instanceof Error && !(ordinary instanceof RateLimitedError));
+
+  check('opencode: clean stream yields no error', errorFromEvents(parseOpencodeEvents(pongStream)) === null);
+  check('opencode: capability detects "payment required" in free text',
+    getRuntimeById('opencode').rateLimitFromText('Payment Required: quota') !== null);
+}
 
 // ── settings → selected runtime CLI ────────────────────────────────────────
-// The model fields in /settings are provider-neutral: when Codex is selected,
-// those exact values must reach `codex exec`. A hidden stage env override must
-// not defeat the global choice displayed in the UI.
+// The model fields in /settings are provider-neutral. The policy that maps them
+// onto a runtime's CLI is `effectiveModels`: the default runtime passes the raw
+// values; every other runtime treats "came from the registry default" as unset,
+// and lets a saved normal model cover the heavy tier.
 const savedEnv = new Map([
   ['AGENT_RUNTIME', process.env.AGENT_RUNTIME],
   ['AGENT_RUNTIME_DESIGN', process.env.AGENT_RUNTIME_DESIGN],
   ['AGENT_MODEL', process.env.AGENT_MODEL],
   ['AGENT_MODEL_HEAVY', process.env.AGENT_MODEL_HEAVY],
-  ['CODEX_MODEL', process.env.CODEX_MODEL],
-  ['CODEX_MODEL_HEAVY', process.env.CODEX_MODEL_HEAVY],
 ]);
 delete process.env.AGENT_RUNTIME;
 process.env.AGENT_RUNTIME_DESIGN = 'claude-code';
 delete process.env.AGENT_MODEL;
 delete process.env.AGENT_MODEL_HEAVY;
-delete process.env.CODEX_MODEL;
-delete process.env.CODEX_MODEL_HEAVY;
 primeSettings(new Map([
   ['AGENT_RUNTIME', 'codex'],
   ['AGENT_MODEL', 'gpt-5.6-terra'],
@@ -84,22 +138,52 @@ check('every agent kind resolves to the runtime selected in the UI',
   (['enrichment', 'qa', 'content', 'design', 'outreach', 'builder', 'visual-critique'] as const)
     .every((kind) => getRuntime(kind).id === 'codex'));
 check('Codex normal call receives AGENT_MODEL',
-  eq(codexModelArgs(false), ['--model', 'gpt-5.6-terra']), codexModelArgs(false));
+  effectiveModel('codex', false, config.agents.modelInputs()) === 'gpt-5.6-terra');
 check('Codex heavy call receives AGENT_MODEL_HEAVY',
-  eq(codexModelArgs(true), ['--model', 'gpt-5.6-sol']), codexModelArgs(true));
+  effectiveModel('codex', true, config.agents.modelInputs()) === 'gpt-5.6-sol');
 
 primeSettings(new Map([
   ['AGENT_RUNTIME', 'codex'],
   ['AGENT_MODEL', 'gpt-5.6-terra'],
 ]));
 check('Codex heavy calls inherit the normal model when heavy is unset',
-  eq(codexModelArgs(true), ['--model', 'gpt-5.6-terra']), codexModelArgs(true));
+  effectiveModels('codex', config.agents.modelInputs()).heavy === 'gpt-5.6-terra');
 
 primeSettings(new Map([['AGENT_RUNTIME', 'codex']]));
-check('untouched Claude defaults are never passed to Codex',
-  eq(codexModelArgs(false), []) && eq(codexModelArgs(true), []), {
-    normal: codexModelArgs(false), heavy: codexModelArgs(true),
-  });
+{
+  const m = effectiveModels('codex', config.agents.modelInputs());
+  check('untouched Claude defaults are never passed to Codex',
+    m.normal === '' && m.heavy === '', m);
+}
+{
+  const m = effectiveModels('claude-code', config.agents.modelInputs());
+  check('Claude still receives its registry defaults when nothing is saved',
+    m.normal === 'claude-sonnet-5' && m.heavy === 'claude-opus-5', m);
+}
+{
+  const m = effectiveModels('opencode', config.agents.modelInputs());
+  check('OpenCode also keeps its own default when nothing is saved',
+    m.normal === '' && m.heavy === '', m);
+}
+
+primeSettings(new Map([
+  ['AGENT_RUNTIME', 'opencode'],
+  ['AGENT_MODEL', 'kimi-for-coding/k3'],
+]));
+{
+  const m = effectiveModels('opencode', config.agents.modelInputs());
+  check('OpenCode: a saved normal model covers both tiers',
+    m.normal === 'kimi-for-coding/k3' && m.heavy === 'kimi-for-coding/k3', m);
+
+  primeSettings(new Map([
+    ['AGENT_RUNTIME', 'opencode'],
+    ['AGENT_MODEL', 'kimi-for-coding/k3'],
+    ['AGENT_MODEL_HEAVY', 'moonshotai/kimi-k2.7-code'],
+  ]));
+  const full = effectiveModel('opencode', true, config.agents.modelInputs());
+  check('OpenCode: an explicit heavy model wins for the heavy tier',
+    full === 'moonshotai/kimi-k2.7-code');
+}
 
 for (const [key, value] of savedEnv) {
   if (value === undefined) delete process.env[key];

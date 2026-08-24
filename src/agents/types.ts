@@ -7,7 +7,26 @@
  */
 import type { ZodType } from 'zod';
 
-export type AgentRuntimeId = 'claude-code' | 'codex';
+/**
+ * The runtime-id union is DEFINED in `modelPolicy.ts` — the one agent-layer
+ * module that must stay import-free, because it is copied into the UI image
+ * (see ui/Dockerfile) and the UI cannot resolve repo-relative imports.
+ * Re-exported here so the rest of the agent layer can use it normally.
+ */
+import type { AgentRuntimeId } from './modelPolicy.js';
+export type { AgentRuntimeId };
+
+/** Human-readable name for console messages, Telegram texts and UI cards. */
+export const RUNTIME_LABELS: Record<AgentRuntimeId, string> = {
+  'claude-code': 'Claude Code',
+  'codex': 'Codex',
+  'opencode': 'OpenCode',
+};
+
+/** Label with a fallback, so an unknown id degrades to words instead of "undefined". */
+export function runtimeLabel(id: AgentRuntimeId | undefined): string {
+  return (id && RUNTIME_LABELS[id]) || 'агентної моделі';
+}
 
 /**
  * What a single agent session actually consumed. Spec §9 wants "QA-ітерації"
@@ -139,11 +158,42 @@ export interface CodeAgentOptions {
 }
 
 /**
+ * How a runtime's CLI is launched inside an attachable tmux session.
+ * The contract is the same as `codeAgent()`: the prompt reaches the agent and
+ * the agent writes `result.json` — only the delivery differs.
+ */
+export interface TerminalLaunchSpec {
+  command: string;
+  args: string[];
+  /** Claude's TUI needs the prompt typed after first paint; exec-style CLIs do not. */
+  needsKickoff: boolean;
+  /** Whether browser keystrokes can meaningfully reach the running agent. */
+  interactive: boolean;
+  /**
+   * Regex SOURCE matching this TUI's "input box is listening" state — each CLI
+   * paints a different footer (Claude shows its permission mode, OpenCode shows
+   * «tab agents»). The tmux runner polls the pane against it before typing the
+   * kickoff line; without a pattern it falls back to Claude's.
+   */
+  kickoffReadyPattern?: string;
+}
+
+/** What `prepareTerminal` receives: call options plus where its settings file goes. */
+export type TerminalPrepareOptions = CodeAgentOptions & { settingsPath: string };
+
+/**
  * A runtime adapter is the ONLY thing that knows how to reach a model.
  * Both operations are subscription-authenticated and return validated data.
+ *
+ * The capability methods below exist so the transports around the adapters
+ * (tmux runner, queue, console) never branch on a runtime id. Adding a harness
+ * means implementing this interface and registering it in `runtime.ts` —
+ * nothing else in the codebase should mention the new id.
  */
 export interface AgentRuntime {
   readonly id: AgentRuntimeId;
+  /** Human name (RUNTIME_LABELS) for messages people read. */
+  readonly label: string;
   /** Headless single-shot, no tools, output validated against `schema`. */
   structured<T>(
     name: string,
@@ -154,6 +204,31 @@ export interface AgentRuntime {
   ): Promise<T>;
   /** Workspace agent with tools; result read from `result.json` and validated. */
   codeAgent<T>(opts: CodeAgentOptions, resultSchema: ZodType<T>): Promise<T>;
+  /**
+   * Detect an exhausted subscription window in UNSTRUCTURED output — CLI
+   * stdout/stderr or tmux scrollback. Returns the RateLimitedError to throw
+   * (the job pauses, it does not fail), or null when the text looks normal.
+   */
+  rateLimitFromText(text: string): RateLimitedError | null;
+  /**
+   * Launch spec for running this CLI attachably in a tmux session. Must fulfil
+   * the same result.json contract as `codeAgent()` in the same workspace.
+   */
+  terminalLaunch(opts: CodeAgentOptions, context: { settingsPath: string }): TerminalLaunchSpec;
+  /**
+   * Workspace/host preparation before a terminal launch: guard wiring,
+   * first-run trust seeding, permission configs — whatever THIS CLI needs to
+   * run unattended with the factory guard in force. Default: nothing to do
+   * (a runtime whose launch args alone are enough leaves this undefined).
+   */
+  prepareTerminal?(opts: TerminalPrepareOptions): Promise<void>;
+  /**
+   * Subscription credential env vars injected into every agent process beyond
+   * the sandbox allowlist (e.g. CLAUDE_CODE_OAUTH_TOKEN). Read PER CALL so a
+   * credential pasted in the UI is picked up without a restart. Empty for
+   * runtimes whose auth lives on disk in their own home directory.
+   */
+  authEnv(): Record<string, string>;
 }
 
 /**

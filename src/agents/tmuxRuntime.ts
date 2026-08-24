@@ -19,7 +19,13 @@
  * back to the SDK when tmux is not installed — an operator who never sets
  * anything up still gets working builds.
  *
- * ── What is genuinely different, and had to be solved ────────────────────────
+ * This file is runtime-agnostic by construction. It holds the TRANSPORT (tmux
+ * session lifecycle, prompt file, completion polling, scrollback capture);
+ * everything CLI-specific — launch argv, guard wiring, first-run seeding,
+ * auth env — arrives through the `AgentRuntime` capabilities
+ * (`terminalLaunch` / `prepareTerminal` / `authEnv` / `rateLimitFromText`).
+ *
+ * ── What is genuinely different per runtime, and how it is absorbed ──────────
  *
  * 1. **The prompt.** A builder prompt is multiple KB of Markdown. Passing that
  *    through `tmux send-keys` means shell quoting, newline-triggered submits and
@@ -29,9 +35,10 @@
  *
  * 2. **The guard.** The SDK path passes an in-process PreToolUse closure. A CLI
  *    session can only run a *command* hook, so `guardHook.ts` wraps the same
- *    `evaluateToolCall()` as a stdin/stdout process and it is wired via
- *    `--settings`. Same decision function, same deny payload — see
- *    `scripts/test-tmux-agent.ts`, which asserts the two agree.
+ *    `evaluateToolCall()` as a stdin/stdout process and Claude Code wires it
+ *    through its `prepareTerminal` capability (`--settings`). Same decision
+ *    function, same deny payload — see `scripts/test-tmux-agent.ts`, which
+ *    asserts the two agree.
  *
  * 3. **Completion.** The SDK resolves a promise; a TUI does not. Completion is
  *    therefore the artifact contract that already existed: `result.json` appears
@@ -46,7 +53,6 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { ZodType } from 'zod';
 import { config } from '../config.js';
 import { log } from '../lib/logger.js';
@@ -54,34 +60,21 @@ import { appendBuildLog, clip } from '../build/buildLog.js';
 import { zodToJsonSchema } from './schema.js';
 import { withAgentSlot } from './semaphore.js';
 import { codeAgentEnv } from './sandbox.js';
-import { readAndValidateResult } from './claudeCodeRuntime.js';
-import { codexLooksRateLimited, codexModelArgs } from './codexRuntime.js';
+import { readAndValidateResult, resultPathIn } from './result.js';
 import { startTerminalServer, stopTerminalServer } from './terminalServer.js';
-import {
-  RateLimitedError,
-  type AgentRuntimeId,
-  type CodeAgentOptions,
+import type {
+  AgentRuntime,
+  CodeAgentOptions,
 } from './types.js';
-
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-
-/** The guard hook, run by the CLI as a child process on every tool call. */
-const GUARD_HOOK = path.join(HERE, 'guardHook.ts');
 
 /** Prompt handed to the agent as a file, never as keystrokes. See note 1 above. */
 export const PROMPT_FILE = 'AGENT-PROMPT.md';
 
 /**
- * Mark a workspace as trusted in the CLI's per-user config (~/.claude.json) —
- * the same flag its interactive trust dialog sets. Without this, a fresh
- * workspace makes the TUI block on «Is this a project you trust?» forever and
- * the kickoff line lands on that dialog: measured — the pane sat on the trust
- * prompt for the whole timeout. Merge-write: the file holds other projects too.
- */
-/**
  * Deliver the kickoff line only once the TUI is really listening.
- * 1. Poll the pane until the input box is on screen (the `❯` prompt or the
- *    permissions footer) — up to 90s: first paint includes MOTD fetches.
+ * 1. Poll the pane until the input box is on screen — readiness is declared by
+ *    THIS runtime's `kickoffReadyPattern` (each CLI paints a different footer);
+ *    up to 90s: first paint includes MOTD fetches.
  * 2. Send the literal text, then Enter (two calls — together tmux would parse
  *    parts of the text as key names).
  * 3. VERIFY a distinctive fragment of the line is visible in the pane; if the
@@ -92,7 +85,9 @@ async function sendKickoffVerified(
   session: string,
   line: string,
   env: Record<string, string>,
+  readyPattern?: string,
 ): Promise<void> {
+  const ready = new RegExp(readyPattern ?? 'bypass permissions|shift\\+tab to cycle', 'i');
   const pane = async (): Promise<string> =>
     (await exec('tmux', ['capture-pane', '-p', '-t', session], { env })).stdout;
 
@@ -113,7 +108,7 @@ async function sendKickoffVerified(
       const last = (await pane().catch(() => ''))
         .split('\n').map((l) => l.trim()).filter(Boolean).slice(-10).join(' | ');
       throw new Error(
-        `tmux session ${session}: claude завершився одразу після старту (${died}). ` +
+        `tmux session ${session}: CLI завершився одразу після старту (${died}). ` +
         `Останній вивід: ${last || '(нічого не встиг надрукувати)'}`,
       );
     }
@@ -128,7 +123,7 @@ async function sendKickoffVerified(
       await new Promise((r) => setTimeout(r, 1_500));
       continue;
     }
-    if (/bypass permissions|shift\+tab to cycle/i.test(text)) break;
+    if (ready.test(text)) break;
     await new Promise((r) => setTimeout(r, 1_000));
   }
   await new Promise((r) => setTimeout(r, 3_000));
@@ -322,101 +317,17 @@ async function killSession(session: string): Promise<void> {
 }
 
 /**
- * The hook + permission settings this session runs under.
- *
- * Written as a file passed to `--settings` rather than into the workspace's own
- * `.claude/settings.json`, for two reasons: the workspace is a copy of
- * site-template that gets deployed, so a factory-internal hook config has no
- * business being in it; and `--settings` takes precedence over project settings,
- * so a template that later grows its own settings file cannot disarm the guard.
- *
- * `matcher: '*'` — every tool call is judged, exactly like the SDK's hook, which
- * registers with no matcher at all.
- */
-export function guardSettings(workspace: string, tsxBin: string): unknown {
-  return {
-    hooks: {
-      PreToolUse: [
-        {
-          matcher: '*',
-          hooks: [
-            {
-              type: 'command',
-              // `tsx` because the guard is TypeScript alongside the rest of src/.
-              // Quoted: workspace paths contain no spaces today, but a hook that
-              // breaks on one would fail *open* at the worst moment.
-              command: `${JSON.stringify(tsxBin)} ${JSON.stringify(GUARD_HOOK)} ${JSON.stringify(workspace)}`,
-              timeout: 20,
-            },
-          ],
-        },
-      ],
-    },
-  };
-}
-
-/** Absolute path to the repo's tsx, so the hook runs regardless of PATH. */
-function tsxBinary(): string {
-  // src/agents -> repo root
-  return path.resolve(HERE, '..', '..', 'node_modules', '.bin', 'tsx');
-}
-
-/**
  * The one line typed into the session.
  *
  * Short by design (see note 1): everything substantial is in the prompt file.
- * Ukrainian, because it is the instruction a human operator watching the pane
- * will read, and because the file it points at is written by the pipeline.
+ * ASCII ONLY. The line travels through `tmux send-keys` under the stripped
+ * agent env; without a locale the client mangles multibyte input and the TUI
+ * silently drops it — measured: a Ukrainian kickoff never reached the input
+ * box while an ASCII probe landed fine. The prompt file itself is UTF-8 and
+ * unaffected (it is read from disk, not typed).
  */
 export function kickoffLine(promptFile: string): string {
-  // ASCII ONLY. The line travels through `tmux send-keys` under the stripped
-  // agent env; without a locale the client mangles multibyte input and the TUI
-  // silently drops it — measured: a Ukrainian kickoff never reached the input
-  // box while an ASCII probe landed fine. The prompt file itself is UTF-8 and
-  // unaffected (it is read from disk, not typed).
   return `Read ${promptFile} in the workspace root and do everything it says.`;
-}
-
-/** The CLI process tmux should launch for the selected subscription runtime. */
-export interface TerminalLaunch {
-  command: string;
-  args: string[];
-  /** Claude's TUI needs the prompt typed after first paint; Codex exec does not. */
-  needsKickoff: boolean;
-  /** Whether browser keystrokes can meaningfully reach the running agent. */
-  interactive: boolean;
-}
-
-export function terminalLaunch(
-  runtimeId: AgentRuntimeId,
-  opts: CodeAgentOptions,
-  settingsPath: string,
-): TerminalLaunch {
-  if (runtimeId === 'codex') {
-    return {
-      command: config.agents.codexBin,
-      args: [
-        'exec',
-        '--sandbox', 'workspace-write',
-        '--skip-git-repo-check',
-        '--cd', opts.cwd,
-        ...codexModelArgs(opts.heavy),
-        kickoffLine(PROMPT_FILE),
-      ],
-      needsKickoff: false,
-      interactive: false,
-    };
-  }
-
-  const args = [
-    '--dangerously-skip-permissions',
-    '--model', opts.heavy ? config.agents.modelHeavy : config.agents.model,
-    '--settings', settingsPath,
-    '--setting-sources', 'project',
-    '--name', opts.name,
-  ];
-  if (opts.allowedTools?.length) args.push('--allowedTools', ...opts.allowedTools);
-  return { command: 'claude', args, needsKickoff: true, interactive: true };
 }
 
 export interface TmuxRunOutcome {
@@ -426,20 +337,22 @@ export interface TmuxRunOutcome {
   elapsedMs: number;
 }
 
-/** Map a terminal run with no result artifact to the queue-visible error type. */
+/**
+ * Map a terminal run with no result artifact to the queue-visible error type.
+ *
+ * Takes the RUNTIME, not an id: whether a scrollback signals an exhausted
+ * subscription window is each CLI's own dialect, so the question goes through
+ * `runtime.rateLimitFromText()`. This also covers the Claude TUI now — its
+ * pane can print a usage limit just like Codex's output does.
+ */
 export function terminalFailureError(
-  runtimeId: AgentRuntimeId,
+  runtime: AgentRuntime,
   outcome: TmuxRunOutcome,
   agentName: string,
 ): Error {
   const tail = clip(outcome.scrollback.split('\n').slice(-25).join(' '), 400);
-  if (runtimeId === 'codex' && codexLooksRateLimited(outcome.scrollback)) {
-    return new RateLimitedError(`codex subscription limit reached: ${tail}`, {
-      retryAfterMs: config.agents.rateLimitDefaultWaitMs,
-      resetsAt: new Date(Date.now() + config.agents.rateLimitDefaultWaitMs),
-      runtime: 'codex',
-    });
-  }
+  const limited = runtime.rateLimitFromText(outcome.scrollback);
+  if (limited) return limited;
   return new Error(
     `tmux code agent "${agentName}" produced no result.json (${outcome.reason} after ` +
     `${Math.round(outcome.elapsedMs / 1000)}s). Pane tail: ${tail}`,
@@ -506,18 +419,18 @@ async function waitForResult(
 /**
  * Run one workspace agent session inside tmux and return its validated result.
  *
- * Signature-compatible with `claudeCodeRuntime.codeAgent()` on purpose: the
- * builder does not branch, `runCodeAgent()` picks the runtime.
+ * Signature-compatible with any adapter's `codeAgent()` on purpose: the builder
+ * does not branch, `runCodeAgent()` picks the runtime and passes the object.
  */
 export async function runCodeAgentTmux<T>(
   opts: CodeAgentOptions,
   resultSchema: ZodType<T>,
   /** Session name; defaults to one derived from the workspace. Tests override it. */
   session = sessionName(path.basename(opts.cwd)),
-  /** Selected subscription CLI. Kept after session so existing test callers remain compatible. */
-  runtimeId: AgentRuntimeId = 'claude-code',
+  /** The selected subscription runtime. Its capabilities drive launch, guard and rate-limit handling. */
+  runtime: AgentRuntime,
 ): Promise<T> {
-  const resultPath = path.join(opts.cwd, 'result.json');
+  const resultPath = resultPathIn(opts.cwd);
   const promptPath = path.join(opts.cwd, PROMPT_FILE);
   const settingsPath = path.join(opts.cwd, SETTINGS_FILE);
   const terminalLogPath = path.join(opts.cwd, TERMINAL_LOG);
@@ -542,11 +455,10 @@ export async function runCodeAgentTmux<T>(
       `matching this JSON Schema, then stop:\n${JSON.stringify(zodToJsonSchema(resultSchema), null, 2)}\n`,
       'utf8',
     );
-    if (runtimeId === 'claude-code') {
-      await writeFile(settingsPath, JSON.stringify(guardSettings(opts.cwd, tsxBinary()), null, 2), 'utf8');
-      // See preTrustWorkspace — without it the TUI never reaches its input box.
-      await preTrustWorkspace(opts.cwd);
-    }
+    // Per-runtime workspace/host preparation — guard wiring, trust seeding,
+    // permission configs. A runtime whose launch args alone are enough leaves
+    // this capability undefined and pays nothing.
+    await runtime.prepareTerminal?.({ ...opts, settingsPath });
 
     // A leftover session under the same name would swallow our send-keys and
     // never write a result. Names are per project, so this is a stale one.
@@ -555,7 +467,7 @@ export async function runCodeAgentTmux<T>(
       await killSession(session);
     }
 
-    const launch = terminalLaunch(runtimeId, opts, settingsPath);
+    const launch = runtime.terminalLaunch(opts, { settingsPath });
     const args = [
       'new-session', '-d', '-s', session, '-c', opts.cwd,
       // Sizing matters: tmux defaults a detached session to 80x24, and the CLI
@@ -573,7 +485,7 @@ export async function runCodeAgentTmux<T>(
     // beats the option.
     args.push(';', 'set-option', '-w', '-t', session, 'remain-on-exit', 'on');
 
-    const env = codeAgentEnv(runtimeId === 'claude-code' ? config.agents.oauthToken : '');
+    const env = codeAgentEnv(runtime.authEnv());
     const started = await exec('tmux', args, { env, timeoutMs: 30_000 });
     if (started.code !== 0) {
       throw new Error(
@@ -609,9 +521,9 @@ export async function runCodeAgentTmux<T>(
     let outcome: TmuxRunOutcome;
     try {
       if (launch.needsKickoff) {
-        // Keys sent while Claude is still painting its welcome screen are
+        // Keys sent while the TUI is still painting its welcome screen are
         // silently swallowed, so wait for the input box and verify delivery.
-        await sendKickoffVerified(session, kickoffLine(PROMPT_FILE), env);
+        await sendKickoffVerified(session, kickoffLine(PROMPT_FILE), env, launch.kickoffReadyPattern);
       }
 
       outcome = await waitForResult(session, resultPath, timeoutMs, env, () => { void writeMarker(); });
@@ -643,7 +555,7 @@ export async function runCodeAgentTmux<T>(
         t: new Date().toISOString(), type: 'error', agent: opts.name,
         summary: `Термінальна сесія закінчилась без result.json (${outcome.reason})`,
       });
-      throw terminalFailureError(runtimeId, outcome, opts.name);
+      throw terminalFailureError(runtime, outcome, opts.name);
     }
 
     await appendBuildLog(opts.buildLogPath, {

@@ -4,24 +4,26 @@
  * Authentication is SUBSCRIPTION-ONLY (SPEC §2.3, decision #10):
  *   - server: `claude setup-token` once -> paste the token into the UI's
  *     /settings page (encrypted in Postgres). `config.agents.oauthToken` is a
- *     GETTER, and both entry points below read it inside the call, so a token
- *     pasted while workers are running is picked up on the next agent call —
- *     no restart, no rebuild (Roman's decision 2026-08-17). `.env` still works
- *     as a fallback for a fresh box.
+ *     GETTER, and `authEnv()` reads it inside the call, so a token pasted while
+ *     workers are running is picked up on the next agent call — no restart, no
+ *     rebuild (Roman's decision 2026-08-17). `.env` still works as a fallback
+ *     for a fresh box.
  *   - local dev: nothing to pass, the CLI's own login is used.
- * ANTHROPIC_API_KEY is actively STRIPPED from the child environment so a stray
- * key in the shell can never silently move billing onto the pay-per-token API.
+ * ANTHROPIC_API_KEY is actively STRIPPED from the child environment (see
+ * sandbox.ts) so a stray key in the shell can never silently move billing onto
+ * the pay-per-token API.
  *
- * Two operations:
- *   structured() — headless, no tools, native `outputFormat: { type: 'json_schema' }`
- *                  (SDK >= 0.3.x) with a prompt+parse fallback. Small turn budget
- *                  (default 2) so a large answer can finish being written.
- *   codeAgent()  — workspace session with tools; the agent writes result.json.
+ * Everything shared with the other adapters lives in its own module: result
+ * validation (`result.ts`), rate-limit signatures (`ratelimit.ts`), the
+ * structured retry loop (`retry.ts`), model policy (`modelPolicy.ts`). What
+ * remains here is only what is genuinely Claude-specific: the Agent SDK
+ * session, its typed rate-limit stream, and this CLI's attachable-terminal
+ * requirements (guard via --settings, first-run trust seeding).
  */
-import { readFile } from 'node:fs/promises';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { query, type Options, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { ZodType } from 'zod';
 import { config } from '../config.js';
@@ -30,66 +32,27 @@ import { zodToJsonSchema, extractJson, jsonOnlyInstruction } from './schema.js';
 import { appendBuildLog, summarizeSdkMessage } from '../build/buildLog.js';
 import { withAgentSlot } from './semaphore.js';
 import { codeAgentEnv, buildPreToolUseGuard } from './sandbox.js';
+import { withStructuredRetries } from './retry.js';
+import { looksRateLimited, rateLimitedFromInfo, rateLimitedFromText } from './ratelimit.js';
+import { effectiveModel } from './modelPolicy.js';
+import { readAndValidateResult, resultPathIn } from './result.js';
 import {
-  AgentSchemaError,
   RateLimitedError,
+  RUNTIME_LABELS,
   type AgentRuntime,
   type AgentUsage,
   type CodeAgentOptions,
   type StructuredOptions,
+  type TerminalLaunchSpec,
 } from './types.js';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 const DEFAULT_STRUCTURED_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_CODE_TIMEOUT_MS = 60 * 60_000;
 
-/** Free-text signatures of a subscription cap, for paths that carry no structured rate-limit info. */
-const RATE_LIMIT_PATTERNS = [
-  /rate limit/i,
-  /usage limit/i,
-  /you'?ve hit your limit/i,
-  /limit reached/i,
-  /quota exceeded/i,
-  /\b429\b/,
-  /too many requests/i,
-];
-
-function looksRateLimited(text: string): boolean {
-  return RATE_LIMIT_PATTERNS.some((re) => re.test(text));
-}
-
-/** Build a RateLimitedError from the SDK's structured rate-limit info. */
-function rateLimitedFromInfo(
-  info: { resetsAt?: number; rateLimitType?: string } | undefined,
-  message: string,
-): RateLimitedError {
-  const nowMs = Date.now();
-  // resetsAt is a unix timestamp in seconds.
-  const resetMs = info?.resetsAt ? info.resetsAt * 1000 : undefined;
-  const retryAfterMs = resetMs && resetMs > nowMs
-    ? Math.min(resetMs - nowMs + 30_000, config.agents.rateLimitMaxWaitMs)
-    : config.agents.rateLimitDefaultWaitMs;
-  return new RateLimitedError(message, {
-    retryAfterMs,
-    rateLimitType: info?.rateLimitType,
-    resetsAt: resetMs ? new Date(resetMs) : new Date(nowMs + retryAfterMs),
-    runtime: 'claude-code',
-  });
-}
-
-function rateLimitedFromText(text: string): RateLimitedError {
-  return new RateLimitedError(`subscription limit reached: ${text.slice(0, 300)}`, {
-    retryAfterMs: config.agents.rateLimitDefaultWaitMs,
-    resetsAt: new Date(Date.now() + config.agents.rateLimitDefaultWaitMs),
-    runtime: 'claude-code',
-  });
-}
-
-/** Throw RateLimitedError if the thrown SDK/transport error is a 429-shaped one. */
-function rethrowIfRateLimited(err: unknown): void {
-  const status = (err as { status?: number })?.status;
-  const text = String((err as { message?: string })?.message ?? err);
-  if (status === 429 || looksRateLimited(text)) throw rateLimitedFromText(text);
-}
+/** The guard hook, run by the CLI as a child process on every tool call. */
+const GUARD_HOOK = path.join(HERE, 'guardHook.ts');
 
 interface CollectedRun {
   resultText: string;
@@ -178,7 +141,7 @@ async function collectRun(
     if (abort.signal.aborted) {
       throw new Error(`claude-code call "${label}" timed out after ${Math.round(timeoutMs / 1000)}s`);
     }
-    rethrowIfRateLimited(err);
+    rethrowRateLimited(err);
     // The SDK converts a non-zero exit that carried an error result into a thrown
     // "Claude Code returned an error result: ..." (see Query.readMessages). If a
     // `result` message already arrived — e.g. error_max_turns on the turn that
@@ -198,20 +161,23 @@ async function collectRun(
 
   // Structured signal first, then typed assistant errors, then free text.
   if (out.rateLimit?.status === 'rejected') {
-    throw rateLimitedFromInfo(out.rateLimit, `subscription window exhausted (${out.rateLimit.rateLimitType ?? 'unknown'})`);
+    throw rateLimitedFromInfo('claude-code', out.rateLimit, `subscription window exhausted (${out.rateLimit.rateLimitType ?? 'unknown'})`);
   }
   if (out.assistantErrors.some((e) => e === 'rate_limit' || e === 'overloaded')) {
-    throw rateLimitedFromInfo(out.rateLimit, `model reported ${out.assistantErrors.join(',')}`);
+    throw rateLimitedFromInfo('claude-code', out.rateLimit, `model reported ${out.assistantErrors.join(',')}`);
   }
   if (!out.success) {
     const blob = [out.resultText, ...out.errors].join(' ');
-    if (looksRateLimited(blob)) throw rateLimitedFromText(blob);
+    if (looksRateLimited(blob)) throw rateLimitedFromText('claude-code', blob);
   }
   return out;
 }
 
-function modelFor(heavy: boolean | undefined): string {
-  return heavy ? config.agents.modelHeavy : config.agents.model;
+/** Throw RateLimitedError if the thrown SDK/transport error is a 429-shaped one. */
+function rethrowRateLimited(err: unknown): void {
+  const status = (err as { status?: number })?.status;
+  const text = String((err as { message?: string })?.message ?? err);
+  if (status === 429 || looksRateLimited(text)) throw rateLimitedFromText('claude-code', text);
 }
 
 /** Telemetry is best-effort: a throwing callback must never fail the agent call. */
@@ -233,8 +199,130 @@ function reportUsage(
   }
 }
 
+// ─── Attachable-terminal requirements of THIS CLI ────────────────────────────
+
+/**
+ * Mark a workspace as trusted in the CLI's per-user config (~/.claude.json) —
+ * the same flag its interactive trust dialog sets. Without this, a fresh
+ * workspace makes the TUI block on «Is this a project you trust?» forever and
+ * the kickoff line lands on that dialog: measured — the pane sat on the trust
+ * prompt for the whole timeout. Merge-write: the file holds other projects too.
+ *
+ * Two more first-run blockers are seeded here, because a container's HOME is
+ * fresh on every image rebuild and a dev Mac hits each exactly once:
+ *  - onboarding (theme picker etc.) blocks the TUI before the input box just
+ *    like the trust dialog does;
+ *  - `--dangerously-skip-permissions` shows a one-time «Bypass Permissions
+ *    mode — Yes, I accept / No, exit» dialog with the cursor ON «No, exit».
+ *    The kickoff's Enter therefore EXITED the CLI — the «порожня панель»
+ *    failure reproduced in a stock node:22-bookworm container (2026-08-22,
+ *    CLI 2.1.239). `bypassPermissionsModeAccepted` is what accepting that
+ *    dialog writes; seeding it boots the TUI straight to the input box.
+ */
+export async function preTrustWorkspace(cwd: string): Promise<void> {
+  const home = process.env.HOME;
+  if (!home) return;
+  const cfgPath = path.join(home, '.claude.json');
+  let cfg: Record<string, unknown> = {};
+  try { cfg = JSON.parse(await readFile(cfgPath, 'utf8')) as Record<string, unknown>; } catch { /* fresh file */ }
+  if (cfg.hasCompletedOnboarding !== true) {
+    cfg.hasCompletedOnboarding = true;
+    cfg.lastOnboardingVersion = cfg.lastOnboardingVersion ?? '2.0.0';
+  }
+  cfg.bypassPermissionsModeAccepted = true;
+  const projects = (cfg.projects ?? {}) as Record<string, Record<string, unknown>>;
+  projects[cwd] = {
+    ...(projects[cwd] ?? {}),
+    hasTrustDialogAccepted: true,
+    hasCompletedProjectOnboarding: true,
+  };
+  cfg.projects = projects;
+  await writeFile(cfgPath, JSON.stringify(cfg), 'utf8').catch(() => undefined);
+}
+
+/**
+ * The hook + permission settings this CLI runs under in terminal mode.
+ * Exported for the tmux-parity test, which asserts the wiring properties
+ * (matcher, command form, space-safe quoting) without launching a session.
+ *
+ * Written as a file passed to `--settings` rather than into the workspace's own
+ * `.claude/settings.json`, for two reasons: the workspace is a copy of
+ * site-template that gets deployed, so a factory-internal hook config has no
+ * business being in it; and `--settings` takes precedence over project settings,
+ * so a template that later grows its own settings file cannot disarm the guard.
+ *
+ * `matcher: '*'` — every tool call is judged, exactly like the SDK's hook, which
+ * registers with no matcher at all.
+ */
+export function guardSettings(workspace: string, tsxBin: string): unknown {
+  return {
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: '*',
+          hooks: [
+            {
+              type: 'command',
+              // `tsx` because the guard is TypeScript alongside the rest of src/.
+              // Quoted: workspace paths contain no spaces today, but a hook that
+              // breaks on one would fail *open* at the worst moment.
+              command: `${JSON.stringify(tsxBin)} ${JSON.stringify(GUARD_HOOK)} ${JSON.stringify(workspace)}`,
+              timeout: 20,
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+/** Absolute path to the repo's tsx, so the hook runs regardless of PATH. */
+function tsxBinary(): string {
+  // src/agents -> repo root
+  return path.resolve(HERE, '..', '..', 'node_modules', '.bin', 'tsx');
+}
+
 export const claudeCodeRuntime: AgentRuntime = {
   id: 'claude-code',
+  label: RUNTIME_LABELS['claude-code'],
+
+  rateLimitFromText(text: string): RateLimitedError | null {
+    return looksRateLimited(text) ? rateLimitedFromText(this.id, text) : null;
+  },
+
+  authEnv(): Record<string, string> {
+    // Read per call: a token pasted into /settings applies without a restart.
+    return { CLAUDE_CODE_OAUTH_TOKEN: config.agents.oauthToken };
+  },
+
+  async prepareTerminal(opts: CodeAgentOptions & { settingsPath: string }): Promise<void> {
+    await writeFile(
+      opts.settingsPath,
+      JSON.stringify(guardSettings(opts.cwd, tsxBinary()), null, 2),
+      'utf8',
+    );
+    // Without this the TUI never reaches its input box (see the docblock).
+    await preTrustWorkspace(opts.cwd);
+  },
+
+  terminalLaunch(opts: CodeAgentOptions, { settingsPath }: { settingsPath: string }): TerminalLaunchSpec {
+    const args = [
+      '--dangerously-skip-permissions',
+      '--model', effectiveModel(this.id, opts.heavy, config.agents.modelInputs()),
+      '--settings', settingsPath,
+      '--setting-sources', 'project',
+      '--name', opts.name,
+    ];
+    if (opts.allowedTools?.length) args.push('--allowedTools', ...opts.allowedTools);
+    return {
+      command: 'claude',
+      args,
+      needsKickoff: true,
+      interactive: true,
+      // The permissions footer is what first paint of a ready input box shows.
+      kickoffReadyPattern: 'bypass permissions|shift\\+tab to cycle',
+    };
+  },
 
   async structured<T>(
     name: string,
@@ -255,98 +343,85 @@ export const claudeCodeRuntime: AgentRuntime = {
       : '';
 
     const cwd = opts.cwd ?? await mkdtemp(path.join(tmpdir(), 'factory-agent-'));
+    const model = effectiveModel(this.id, opts.heavy, config.agents.modelInputs());
 
-    let lastErr: unknown;
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      try {
-        return await withAgentSlot(`structured:${name}`, async () => {
-          const options: Options = {
-            cwd,
-            model: modelFor(opts.heavy),
-            // Turn budget. Default 2 without tools: one turn is normally enough,
-            // but a large structured output can need a second turn to finish
-            // writing, and error_max_turns would discard an otherwise good run.
-            // allowedTools: [] means the extra turn can only complete the answer.
-            // With images, add a turn per Read.
-            maxTurns: opts.maxTurns
-              ?? (needsRead ? 2 + opts.imagePaths!.length + 2 : 2),
-            allowedTools: needsRead ? ['Read'] : [],
-            disallowedTools: needsRead ? ['Bash', 'Write', 'Edit', 'WebFetch', 'WebSearch'] : undefined,
-            permissionMode: 'bypassPermissions',
-            allowDangerouslySkipPermissions: true,
-            systemPrompt: { type: 'preset', preset: 'claude_code', append: systemPrompt },
-            settingSources: [],
-            outputFormat: { type: 'json_schema', schema: jsonSchema },
-            // No tools here, but there is still no reason to expose factory
-            // secrets to a model processing scraped third-party text.
-            env: codeAgentEnv(config.agents.oauthToken),
-          };
+    return withStructuredRetries({
+      name, runtime: this.id, retries,
+      attempt: (attempt) => withAgentSlot(`structured:${name}`, async () => {
+        const options: Options = {
+          cwd,
+          model,
+          // Turn budget. Default 2 without tools: one turn is normally enough,
+          // but a large structured output can need a second turn to finish
+          // writing, and error_max_turns would discard an otherwise good run.
+          // allowedTools: [] means the extra turn can only complete the answer.
+          // With images, add a turn per Read.
+          maxTurns: opts.maxTurns
+            ?? (needsRead ? 2 + opts.imagePaths!.length + 2 : 2),
+          allowedTools: needsRead ? ['Read'] : [],
+          disallowedTools: needsRead ? ['Bash', 'Write', 'Edit', 'WebFetch', 'WebSearch'] : undefined,
+          permissionMode: 'bypassPermissions',
+          allowDangerouslySkipPermissions: true,
+          systemPrompt: { type: 'preset', preset: 'claude_code', append: systemPrompt },
+          settingSources: [],
+          outputFormat: { type: 'json_schema', schema: jsonSchema },
+          // No tools here, but there is still no reason to expose factory
+          // secrets to a model processing scraped third-party text.
+          env: codeAgentEnv(this.authEnv()),
+        };
 
-          const prompt = `${userContent}${imageBlock}${jsonOnlyInstruction(schema)}`;
-          const startedAt = Date.now();
-          const run = await collectRun(options, prompt, timeoutMs, `structured:${name}`, {
-            logPath: opts.buildLogPath, agent: name,
+        const prompt = `${userContent}${imageBlock}${jsonOnlyInstruction(schema)}`;
+        const startedAt = Date.now();
+        const run = await collectRun(options, prompt, timeoutMs, `structured:${name}`, {
+          logPath: opts.buildLogPath, agent: name,
+        });
+        reportUsage(opts.onUsage, run, model, startedAt);
+
+        if (!run.success && run.structuredOutput === undefined && !run.resultText) {
+          throw new Error(
+            `claude-code structured call "${name}" failed: ${run.errorSubtype ?? 'unknown'} ` +
+            `${[run.threwAfterResult, ...run.errors].filter(Boolean).join('; ').slice(0, 300)}`,
+          );
+        }
+
+        // Native structured output first; fall back to parsing the final text.
+        // A run that hit the turn cap but still emitted schema-valid JSON is
+        // accepted: the deciding question is whether the payload validates,
+        // not which subtype the session ended on.
+        const candidate = run.structuredOutput !== undefined && run.structuredOutput !== null
+          ? run.structuredOutput
+          : extractJson(run.resultText);
+        if (candidate === undefined) {
+          throw new Error(
+            `agent "${name}" returned no parseable JSON (${run.errorSubtype ?? 'success'}): ` +
+            run.resultText.slice(0, 300),
+          );
+        }
+
+        const parsed = schema.safeParse(candidate);
+        if (!parsed.success) {
+          throw new Error(`schema validation failed: ${parsed.error.message.slice(0, 500)}`);
+        }
+        if (!run.success) {
+          log.warn('agent produced valid output despite a failed session subtype', {
+            name, subtype: run.errorSubtype, turns: run.numTurns,
           });
-          reportUsage(opts.onUsage, run, modelFor(opts.heavy), startedAt);
-
-          if (!run.success && run.structuredOutput === undefined && !run.resultText) {
-            throw new Error(
-              `claude-code structured call "${name}" failed: ${run.errorSubtype ?? 'unknown'} ` +
-              `${[run.threwAfterResult, ...run.errors].filter(Boolean).join('; ').slice(0, 300)}`,
-            );
-          }
-
-          // Native structured output first; fall back to parsing the final text.
-          // A run that hit the turn cap but still emitted schema-valid JSON is
-          // accepted: the deciding question is whether the payload validates,
-          // not which subtype the session ended on.
-          const candidate = run.structuredOutput !== undefined && run.structuredOutput !== null
-            ? run.structuredOutput
-            : extractJson(run.resultText);
-          if (candidate === undefined) {
-            throw new Error(
-              `agent "${name}" returned no parseable JSON (${run.errorSubtype ?? 'success'}): ` +
-              run.resultText.slice(0, 300),
-            );
-          }
-
-          const parsed = schema.safeParse(candidate);
-          if (!parsed.success) {
-            throw new Error(`schema validation failed: ${parsed.error.message.slice(0, 500)}`);
-          }
-          if (!run.success) {
-            log.warn('agent produced valid output despite a failed session subtype', {
-              name, subtype: run.errorSubtype, turns: run.numTurns,
-            });
-          }
-          log.info('agent done', { name, runtime: 'claude-code', model: modelFor(opts.heavy), attempt });
-          return parsed.data;
-        });
-      } catch (err) {
-        // Rate limit is not an attempt: the job waits, it does not burn retries.
-        if (err instanceof RateLimitedError) throw err;
-        lastErr = err;
-        log.warn('agent attempt failed', {
-          name, attempt, runtime: 'claude-code',
-          err: String((err as Error)?.message ?? err).slice(0, 300),
-        });
-        if (attempt < retries) await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
-      }
-    }
-    throw new AgentSchemaError(
-      `agent "${name}" produced no schema-valid output after ${retries + 1} attempts: ` +
-      String((lastErr as Error)?.message ?? lastErr).slice(0, 400),
-    );
+        }
+        log.info('agent done', { name, runtime: this.id, model, attempt });
+        return parsed.data;
+      }),
+    });
   },
 
   async codeAgent<T>(opts: CodeAgentOptions, resultSchema: ZodType<T>): Promise<T> {
     const timeoutMs = opts.timeoutMs ?? DEFAULT_CODE_TIMEOUT_MS;
-    const resultPath = path.join(opts.cwd, 'result.json');
+    const resultPath = resultPathIn(opts.cwd);
+    const model = effectiveModel(this.id, opts.heavy, config.agents.modelInputs());
 
     return withAgentSlot(`code:${opts.name}`, async () => {
       const options: Options = {
         cwd: opts.cwd,
-        model: modelFor(opts.heavy),
+        model,
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         // Default: the builder's tool set. A caller may substitute its own —
@@ -373,7 +448,7 @@ export const claudeCodeRuntime: AgentRuntime = {
         ...(opts.skills ? { skills: opts.skills } : {}),
         // Allowlist only: the builder never needs SMTP/IMAP/Telegram/S3/DB creds,
         // and must not be able to exfiltrate them via `echo $SMTP_PASS`.
-        env: codeAgentEnv(config.agents.oauthToken),
+        env: codeAgentEnv(this.authEnv()),
       };
 
       const prompt =
@@ -385,7 +460,7 @@ export const claudeCodeRuntime: AgentRuntime = {
       const run = await collectRun(options, prompt, timeoutMs, `code:${opts.name}`, {
         logPath: opts.buildLogPath, agent: opts.name,
       });
-      reportUsage(opts.onUsage, run, modelFor(opts.heavy), startedAt);
+      reportUsage(opts.onUsage, run, model, startedAt);
 
       // A session can end on error_max_turns having ALREADY written a valid
       // result.json. The artifact on disk is the contract, so check it before
@@ -407,28 +482,3 @@ export const claudeCodeRuntime: AgentRuntime = {
     });
   },
 };
-
-/** Shared by both adapters: read result.json from the workspace and validate it. */
-export async function readAndValidateResult<T>(
-  resultPath: string,
-  agentName: string,
-  resultSchema: ZodType<T>,
-): Promise<T> {
-  let raw: string;
-  try {
-    raw = await readFile(resultPath, 'utf8');
-  } catch {
-    throw new AgentSchemaError(`code agent "${agentName}" did not write result.json at ${resultPath}`);
-  }
-  const candidate = extractJson(raw);
-  if (candidate === undefined) {
-    throw new AgentSchemaError(`code agent "${agentName}" wrote unparseable result.json`);
-  }
-  const parsed = resultSchema.safeParse(candidate);
-  if (!parsed.success) {
-    throw new AgentSchemaError(
-      `code agent "${agentName}" result.json failed schema: ${parsed.error.message.slice(0, 400)}`,
-    );
-  }
-  return parsed.data;
-}

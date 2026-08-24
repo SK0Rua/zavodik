@@ -44,7 +44,7 @@ export const CHECK_TTL_MS = 10 * 60_000;
 export const CHECK_TIMEOUT_MS = 10_000;
 
 export const CHECK_KINDS: CheckKind[] = [
-  'claude', 'codex', 'telegram', 'smtp', 'imap', 'waha',
+  'claude', 'codex', 'opencode', 'telegram', 'smtp', 'imap', 'waha',
 ];
 
 export interface CachedCheck extends CheckResult {

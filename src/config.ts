@@ -42,11 +42,14 @@ type AgentRuntimeKind =
  * Only subscription runtimes exist. Anything else (notably the removed `api`
  * runtime) falls back to the default instead of silently enabling API billing.
  */
-function normalizeRuntime(value: string | undefined, fallback: 'claude-code' | 'codex'): 'claude-code' | 'codex' {
+function normalizeRuntime(
+  value: string | undefined,
+  fallback: 'claude-code' | 'codex' | 'opencode',
+): 'claude-code' | 'codex' | 'opencode' {
   const v = (value ?? '').trim().toLowerCase();
-  if (v === 'claude-code' || v === 'codex') return v;
+  if (v === 'claude-code' || v === 'codex' || v === 'opencode') return v;
   if (v && v !== '') {
-    console.warn(`[config] unknown AGENT_RUNTIME "${value}"; only claude-code|codex are supported (API billing is not). Using "${fallback}".`);
+    console.warn(`[config] unknown AGENT_RUNTIME "${value}"; only claude-code|codex|opencode are supported (API billing is not). Using "${fallback}".`);
   }
   return fallback;
 }
@@ -72,22 +75,21 @@ export const config = {
      * Empty locally (the CLI's own login is used).
      */
     get oauthToken(): string { return getSetting('CLAUDE_CODE_OAUTH_TOKEN'); },
-    get model(): string { return getSetting('AGENT_MODEL'); },
-    get modelHeavy(): string { return getSetting('AGENT_MODEL_HEAVY'); },
     /** CLI binaries stay in env: they are properties of the image, not of the operator. */
     get codexBin(): string { return process.env.CODEX_BIN ?? 'codex'; },
     /**
-     * The two model fields in the UI belong to whichever runtime is selected.
-     * When they have never been configured, Codex keeps its own CLI default;
-     * the registry's Claude defaults must never be passed to `codex exec`.
+     * Raw shared model fields + their resolution sources, consumed through
+     * `effectiveModels()` (src/agents/modelPolicy.ts) — which decides what each
+     * runtime's CLI actually receives. Registry defaults are Claude-typed and
+     * must not leak into other harnesses; that rule lives there, not here.
      */
-    get codexModel(): string {
-      return settingSource('AGENT_MODEL') === 'default' ? '' : getSetting('AGENT_MODEL');
-    },
-    get codexModelHeavy(): string {
-      return settingSource('AGENT_MODEL_HEAVY') === 'default'
-        ? this.codexModel
-        : getSetting('AGENT_MODEL_HEAVY');
+    modelInputs() {
+      return {
+        normal: getSetting('AGENT_MODEL'),
+        heavy: getSetting('AGENT_MODEL_HEAVY'),
+        normalSource: settingSource('AGENT_MODEL'),
+        heavySource: settingSource('AGENT_MODEL_HEAVY'),
+      };
     },
     /** Concurrent agent calls; subscription windows are shared, so keep it low. */
     get concurrency(): number { return getSettingNumber('AGENT_CONCURRENCY', 1); },
@@ -118,12 +120,14 @@ export const config = {
       return Number(process.env.AGENT_RATE_LIMIT_MAX_WAIT_MINUTES ?? 6 * 60) * 60_000;
     },
     /** One runtime for every agent stage; the settings UI is authoritative. */
-    get runtime(): 'claude-code' | 'codex' {
+    get runtime(): 'claude-code' | 'codex' | 'opencode' {
       return normalizeRuntime(getSetting('AGENT_RUNTIME'), 'claude-code');
     },
-    runtimeFor(_kind?: AgentRuntimeKind): 'claude-code' | 'codex' {
+    runtimeFor(_kind?: AgentRuntimeKind): 'claude-code' | 'codex' | 'opencode' {
       return this.runtime;
     },
+    /** Binary paths stay in env: they are properties of the image, not of the operator. */
+    get openCodeBin(): string { return process.env.OPENCODE_BIN ?? 'opencode'; },
   },
   // gosom/google-maps-scraper REST API — the single discovery source (spec §3).
   gosom: {

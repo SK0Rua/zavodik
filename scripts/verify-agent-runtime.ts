@@ -9,7 +9,8 @@
 import { mkdtemp, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { runAgent, runCodeAgent, z } from '../src/agents/runtime.js';
+import { runAgent, runCodeAgent, getRuntime, z } from '../src/agents/runtime.js';
+import { effectiveModels } from '../src/agents/modelPolicy.js';
 import { config } from '../src/config.js';
 
 const FactsSchema = z.object({
@@ -26,7 +27,9 @@ const BuildResultSchema = z.object({
 });
 
 async function main(): Promise<void> {
-  console.log(`runtime=${config.agents.runtime}  model=${config.agents.model}  heavy=${config.agents.modelHeavy}`);
+  const rt = getRuntime();
+  const models = effectiveModels(rt.id, config.agents.modelInputs());
+  console.log(`runtime=${rt.id} (${rt.label})  model=${models.normal || 'CLI default'}  heavy=${models.heavy || 'CLI default'}`);
   console.log(`ANTHROPIC_API_KEY present in env: ${Boolean(process.env.ANTHROPIC_API_KEY)} (must NOT be needed)\n`);
 
   // ── 1. structured, no tools ────────────────────────────────────────────────

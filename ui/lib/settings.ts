@@ -19,6 +19,10 @@ import {
   masterKeyConfigured, settingDef,
   type SettingDef, type SettingGroup,
 } from '@factory/settings';
+import {
+  effectiveModels,
+  type AgentRuntimeId, type ModelInputs, type SettingSource,
+} from '@factory/models';
 
 export { SETTINGS, SETTING_GROUPS, masterKeyConfigured };
 export type { SettingDef, SettingGroup };
@@ -95,23 +99,35 @@ async function settingRows(): Promise<Map<string, Row>> {
 export async function loadSettingViews(): Promise<SettingView[]> {
   const rows = await settingRows();
   const runtimeRow = rows.get('AGENT_RUNTIME');
-  const effectiveRuntime = runtimeRow?.value
+  const effectiveRuntime = (runtimeRow?.value
     || process.env.AGENT_RUNTIME
     || settingDef('AGENT_RUNTIME')?.default
-    || 'claude-code';
-  const codexNormalModel = rows.get('AGENT_MODEL')?.value
-    || process.env.AGENT_MODEL
-    || '';
+    || 'claude-code') as AgentRuntimeId;
 
-  // The registry carries Claude's defaults for the Claude adapter. Codex must
-  // not display those as its fallback because the factory deliberately omits
-  // --model until Roman saves a Codex model and lets the CLI choose instead.
+  // The two model fields are shared by every harness, and the policy that maps
+  // them onto the selected runtime is ONE definition shared with the workers
+  // (@factory/models). The UI renders exactly what the workers would pass:
+  // registry defaults belong to the default runtime; any other runtime keeps
+  // its own CLI default until Roman saves a value.
+  const modelInputs: ModelInputs = {
+    normal: rows.get('AGENT_MODEL')?.value || process.env.AGENT_MODEL || '',
+    heavy: rows.get('AGENT_MODEL_HEAVY')?.value || process.env.AGENT_MODEL_HEAVY || '',
+    normalSource: sourceOf(rows.get('AGENT_MODEL'), 'AGENT_MODEL'),
+    heavySource: sourceOf(rows.get('AGENT_MODEL_HEAVY'), 'AGENT_MODEL_HEAVY'),
+  };
+  const effectiveModelFields = effectiveModels(effectiveRuntime, modelInputs);
+
   const defaultFor = (def: SettingDef): string => {
-    if (effectiveRuntime !== 'codex') return def.default ?? '';
-    if (def.key === 'AGENT_MODEL') return '';
-    if (def.key === 'AGENT_MODEL_HEAVY') return codexNormalModel;
+    if (def.key === 'AGENT_MODEL') return effectiveModelFields.normal;
+    if (def.key === 'AGENT_MODEL_HEAVY') return effectiveModelFields.heavy;
     return def.default ?? '';
   };
+
+  function sourceOf(row: Row | undefined, key: string): SettingSource {
+    if (row !== undefined && row.value !== '') return 'db';
+    if ((process.env[key] ?? '') !== '') return 'env';
+    return 'default';
+  }
 
   return SETTINGS.map((def) => {
     const row = rows.get(def.key);
