@@ -113,8 +113,15 @@ fix EXACTLY those issues, and change nothing else — the rest of the page passe
 
 ${qaText}
 
-Constraints are unchanged and still binding: re-read \`BUILD-TASK.md\` before you start. In
-particular: facts only from \`input/snapshot.json\`, only snapshot contacts, images only from
+SOURCE PRIORITY, read this before anything else: \`QA-ISSUES.md\` — and above all the owner's
+note at its top, when there is one — OVERRIDE \`BUILD-TASK.md\` and \`DESIGN.md\` wherever the
+two disagree. "Change nothing else" protects the rest of the page from regressions; it does
+NOT protect the listed issues from being fixed. If the contract told you to build the thing
+QA now flags, the contract loses for this iteration — implement what the issue's \`fix:\` line
+says instead, and verify the new rendering in _shots.
+
+Other constraints are unchanged and still binding: re-read \`BUILD-TASK.md\` before you start.
+In particular: facts only from \`input/snapshot.json\`, only snapshot contacts, images only from
 \`public/assets/\` and \`public/generated/\`, copy in ${snapshot.languageName}, noindex stays,
 reduced motion must render a complete page.
 

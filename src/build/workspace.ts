@@ -304,7 +304,11 @@ ${contactLines}
    surface rather than inverting it.` : `This business publishes NO logo we could verify.
    Set its NAME as a wordmark instead — that is a legitimate, honest identity, and it is what a
    typographic direction is for. **Do not invent an emblem, monogram, icon or crest for them**,
-   and do not borrow a mark from anywhere. A fabricated logo is a fabricated fact.`}
+   and do not borrow a mark from anywhere. A fabricated logo is a fabricated fact.
+   The wordmark must FIT: the full name visible inside the viewport at every breakpoint — size
+   display type with clamp()/vw so "BEAUTIFUL" scales down before it ever overflows. A hero
+   word cut mid-glyph is measured by the QA gate and fails the build, so an oversized wordmark
+   is not a style this contract permits.`}
 4. **Images.** Only files under \`public/assets/\` and \`public/generated/\`.
    - \`/assets/*\` are REAL photos of this business: they may be the hero and may illustrate real claims.
    - \`/generated/*\` are AI-generated: **decorative only** (texture, pattern, atmospheric background,
