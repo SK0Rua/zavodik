@@ -30,6 +30,9 @@
  * read back as empty — never as garbage, and never as a crash.
  */
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import {
+  COUNTRY_CODES, COUNTRY_LABELS, LANGUAGE_CODES, LANGUAGE_LABELS,
+} from './regions.js';
 
 // ─── Registry ────────────────────────────────────────────────────────────────
 
@@ -48,6 +51,12 @@ export interface SettingDef {
   /** Value used when neither DB nor env has one. Always a string (the wire format). */
   default?: string;
   options?: string[];
+  /**
+   * Human labels for `options`, keyed by the option value. When a value has no
+   * entry the value itself is shown. Lets a select store a terse code (`GR`)
+   * while the dropdown reads «Греція (GR)».
+   */
+  optionLabels?: Record<string, string>;
   hint?: string;
   placeholder?: string;
   /** Return an error message, or null when the value is acceptable. */
@@ -286,6 +295,16 @@ export const SETTINGS: SettingDef[] = [
   },
 
   // ── Система ───────────────────────────────────────────────────────────────
+  {
+    key: 'CAMPAIGN_DEFAULT_COUNTRY', label: 'Країна за замовчуванням', group: 'system',
+    kind: 'select', options: COUNTRY_CODES, optionLabels: COUNTRY_LABELS, default: 'GR',
+    hint: 'Наперед вибрана в новій кампанії. Впливає на id кампанії; змінюється у формі перед створенням.',
+  },
+  {
+    key: 'CAMPAIGN_DEFAULT_LANGUAGE', label: 'Мова за замовчуванням', group: 'system',
+    kind: 'select', options: LANGUAGE_CODES, optionLabels: LANGUAGE_LABELS, default: 'el',
+    hint: 'Наперед вибрана в новій кампанії. Цією мовою фабрика шукає бізнеси в Google Maps і пише контент демо.',
+  },
   {
     key: 'UI_BASE_URL', label: 'Адреса цієї консолі', group: 'system', kind: 'text',
     default: 'http://localhost:3000', validate: url,

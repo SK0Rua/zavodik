@@ -6,6 +6,7 @@ import { fmtDate, plural } from '@/lib/format';
 import { NewCampaignForm } from '@/components/NewCampaignForm';
 import { ActionForm } from '@/components/ActionForm';
 import { setCampaignBuildPolicy } from '@/lib/actions';
+import { effectiveValue } from '@/lib/settings';
 import { BUILD_POLICIES, BUILD_POLICY_LABELS, normalizeBuildPolicy } from '@/lib/buildPolicy';
 
 export const dynamic = 'force-dynamic';
@@ -22,6 +23,13 @@ export const dynamic = 'force-dynamic';
 export default async function CampaignsPage() {
   const campaigns = await db.select().from(schema.campaigns)
     .orderBy(desc(schema.campaigns.createdAt));
+
+  // The «Нова кампанія» form opens on Roman's chosen country/language rather
+  // than a hard-coded Greek pair (see /settings → Система).
+  const [defaultCountry, defaultLanguage] = await Promise.all([
+    effectiveValue('CAMPAIGN_DEFAULT_COUNTRY'),
+    effectiveValue('CAMPAIGN_DEFAULT_LANGUAGE'),
+  ]);
 
   // «готові до демо» counts EXACTLY `production_ready` — the businesses that
   // are ready and not yet started. It used to include `site_in_progress`, so
@@ -129,7 +137,10 @@ export default async function CampaignsPage() {
           </div>
         )}
 
-        <NewCampaignForm />
+        <NewCampaignForm
+          defaultCountry={defaultCountry || 'GR'}
+          defaultLanguage={defaultLanguage || 'el'}
+        />
       </div>
     </div>
   );

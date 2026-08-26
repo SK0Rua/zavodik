@@ -6,6 +6,7 @@ import { createCampaign } from '@/lib/actions';
 import {
   BUILD_POLICIES, BUILD_POLICY_HINTS, BUILD_POLICY_LABELS, DEFAULT_BUILD_POLICY,
 } from '@/lib/buildPolicy';
+import { COUNTRIES, LANGUAGES } from '@factory/regions';
 
 /**
  * Creating a campaign, as two questions instead of eleven fields.
@@ -15,14 +16,28 @@ import {
  * defaults for and that he changes once a year — so they sit under
  * «Додаткові налаштування», pre-filled, not gone.
  *
+ * Country and language are no longer typed by hand: they default to whatever
+ * Roman set on /settings and are picked from a list, so a run never silently
+ * comes out Greek just because that was the last hard-coded value.
+ *
  * The whole form is collapsed until clicked: it is a monthly action on a page
  * he opens to check numbers.
  */
-export function NewCampaignForm() {
+export function NewCampaignForm({
+  defaultCountry = 'GR',
+  defaultLanguage = 'el',
+}: {
+  defaultCountry?: string;
+  defaultLanguage?: string;
+}) {
   const [open, setOpen] = useState(false);
   const [autoBuild, setAutoBuild] = useState(DEFAULT_BUILD_POLICY);
   const [city, setCity] = useState('');
   const [niche, setNiche] = useState('');
+  // Lat/lng are controlled so the single "paste from Google" box can fill both.
+  const [lat, setLat] = useState('38.2466');
+  const [lng, setLng] = useState('21.7346');
+  const [coordsError, setCoordsError] = useState('');
 
   if (!open) {
     return (
@@ -38,6 +53,23 @@ export function NewCampaignForm() {
   const suggestedQueries = city && niche
     ? `${niche} ${city}\n${niche} salon ${city}\n${city} ${niche}`
     : '';
+
+  /**
+   * Accept "50.906868, 34.788767" exactly as Google Maps copies it (right-click
+   * → the first line of the context menu is «lat, lng»). Splits on comma or
+   * whitespace, fills both boxes, and says so instead of silently doing nothing
+   * when the paste is not a coordinate pair.
+   */
+  function applyCoords(raw: string) {
+    const parts = raw.trim().split(/[\s,]+/).filter(Boolean);
+    if (parts.length !== 2) { setCoordsError('Очікую дві координати через кому'); return; }
+    const [a, b] = parts.map(Number);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) { setCoordsError('Не схоже на координати'); return; }
+    if (Math.abs(a) > 90 || Math.abs(b) > 180) { setCoordsError('Широта ≤ 90, довгота ≤ 180'); return; }
+    setLat(String(a));
+    setLng(String(b));
+    setCoordsError('');
+  }
 
   return (
     <section className="card p-5 sm:p-6">
@@ -94,14 +126,23 @@ export function NewCampaignForm() {
                 Додай варіант місцевою мовою — так знаходиться вдвічі більше.
               </p>
             </div>
+
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div>
                 <label className="label" htmlFor="country">Країна</label>
-                <input id="country" name="country" defaultValue="GR" />
+                <select id="country" name="country" defaultValue={defaultCountry}>
+                  {COUNTRIES.map((c) => (
+                    <option key={c.code} value={c.code}>{c.name} ({c.code})</option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="label" htmlFor="language">Мова</label>
-                <input id="language" name="language" defaultValue="el" />
+                <select id="language" name="language" defaultValue={defaultLanguage}>
+                  {LANGUAGES.map((l) => (
+                    <option key={l.code} value={l.code}>{l.name} ({l.code})</option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="label" htmlFor="radiusKm">Радіус, км</label>
@@ -111,13 +152,37 @@ export function NewCampaignForm() {
                 <label className="label" htmlFor="targetCount">Ліміт бізнесів</label>
                 <input id="targetCount" name="targetCount" type="number" defaultValue="50" />
               </div>
+            </div>
+
+            <div>
+              <label className="label" htmlFor="coordsPaste">Координати центру з Google Maps</label>
+              <input
+                id="coordsPaste"
+                inputMode="decimal"
+                placeholder="50.906868, 34.788767"
+                onChange={(e) => applyCoords(e.target.value)}
+                onPaste={(e) => applyCoords(e.clipboardData.getData('text'))}
+              />
+              <p className={`text-sm mt-1.5 ${coordsError ? 'text-dot-stop' : 'text-ink-mute'}`}>
+                {coordsError
+                  || 'Правий клік на точці в Google Maps → перший рядок меню, встав сюди — широта й довгота заповняться самі.'}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="label" htmlFor="lat">Широта</label>
-                <input id="lat" name="lat" type="number" step="any" defaultValue="38.2466" />
+                <input
+                  id="lat" name="lat" type="number" step="any"
+                  value={lat} onChange={(e) => setLat(e.target.value)}
+                />
               </div>
               <div>
                 <label className="label" htmlFor="lng">Довгота</label>
-                <input id="lng" name="lng" type="number" step="any" defaultValue="21.7346" />
+                <input
+                  id="lng" name="lng" type="number" step="any"
+                  value={lng} onChange={(e) => setLng(e.target.value)}
+                />
               </div>
             </div>
           </div>

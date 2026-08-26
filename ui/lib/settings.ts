@@ -38,6 +38,8 @@ export interface SettingView {
   kind: SettingDef['kind'];
   secret: boolean;
   options?: string[];
+  /** Human labels for `options`, keyed by value; a missing entry shows the value. */
+  optionLabels?: Record<string, string>;
   hint?: string;
   placeholder?: string;
   /** Rarely-touched field: the page keeps it behind «Показати всі параметри». */
@@ -152,6 +154,7 @@ export async function loadSettingViews(): Promise<SettingView[]> {
       kind: def.kind,
       secret: Boolean(def.secret),
       options: def.options,
+      optionLabels: def.optionLabels,
       hint: def.hint,
       placeholder: def.placeholder,
       advanced: Boolean(def.advanced),

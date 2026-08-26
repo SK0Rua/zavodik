@@ -38,6 +38,9 @@ function display(field: SettingView): { text: string; muted: boolean } {
   }
   if (field.value === '') return { text: 'не задано', muted: true };
   if (field.kind === 'select' && field.value.trim() === '') return { text: 'автоматично', muted: true };
+  if (field.kind === 'select' && field.optionLabels?.[field.value]) {
+    return { text: field.optionLabels[field.value], muted: false };
+  }
   return { text: field.value, muted: false };
 }
 
@@ -134,7 +137,9 @@ function Editor({ field, value, onChange }: {
     return (
       <select {...common} value={value} onChange={(e) => onChange(e.target.value)}>
         {(field.options ?? []).map((o) => (
-          <option key={o} value={o}>{o === '' ? 'автоматично' : o}</option>
+          <option key={o} value={o}>
+            {o === '' ? 'автоматично' : (field.optionLabels?.[o] ?? o)}
+          </option>
         ))}
       </select>
     );

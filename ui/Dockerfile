@@ -25,7 +25,7 @@ COPY ui/ ./
 # `ui/factory/schema.ts` arrives as the dev symlink (-> ../../src/db/schema.ts),
 # which dangles here because the copy is rooted at /app. Remove it first, then
 # copy the real file: a plain COPY would otherwise write THROUGH the symlink.
-RUN rm -f ./factory/schema.ts ./factory/buildPolicy.ts ./factory/settings.ts ./factory/models.ts
+RUN rm -f ./factory/schema.ts ./factory/buildPolicy.ts ./factory/settings.ts ./factory/models.ts ./factory/regions.ts
 COPY src/db/schema.ts ./factory/schema.ts
 # Same reasoning as the schema: the build policy (who gets a demo built, in what
 # order) is ONE file shared with the workers, so the router and the UI's
@@ -36,6 +36,10 @@ COPY src/orchestrator/buildPolicy.ts ./factory/buildPolicy.ts
 # ONE definition. A drifting copy here would mean the UI writes a row the
 # factory cannot decrypt, or offers a key nothing reads.
 COPY src/lib/settings.ts ./factory/settings.ts
+# settings.ts imports the country/language lists from ./regions.js, so the copy
+# must travel with it — otherwise the registry offers CAMPAIGN_DEFAULT_* options
+# that the build cannot resolve. Same ONE-definition rule as the files above.
+COPY src/lib/regions.ts ./factory/regions.ts
 # Fourth shared file, same rule: the MODEL-TIER policy (how AGENT_MODEL /
 # AGENT_MODEL_HEAVY map onto whichever harness is selected) is one definition —
 # the workers pass these ids to their CLIs and the settings page renders the

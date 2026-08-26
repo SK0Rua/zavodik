@@ -23,6 +23,7 @@ import {
   isActiveProjectState, normalizeBuildPolicy,
 } from './buildPolicy';
 import { CLOSED_STATUSES, isSocialChannel, socialsButtonState } from './socials';
+import { effectiveValue } from './settings';
 import { humanStatus, reviewAsk } from './humanStatus';
 import { stageName } from './stageNames';
 import type { ActionResult } from './types';
@@ -382,8 +383,13 @@ export async function stopFailedBuildAction(jobId: number): Promise<ActionResult
 export async function createCampaign(formData: FormData): Promise<ActionResult> {
   const city = String(formData.get('city') ?? '').trim();
   const niche = String(formData.get('niche') ?? '').trim();
-  const country = String(formData.get('country') ?? 'GR').trim();
-  const language = String(formData.get('language') ?? 'el').trim();
+  // The form always submits a selected code; the settings default is the fallback
+  // for a programmatic call or an empty field, so the «за замовчуванням» values
+  // hold on both paths rather than being re-hardcoded here.
+  const country = String(formData.get('country') || '').trim()
+    || (await effectiveValue('CAMPAIGN_DEFAULT_COUNTRY')) || 'GR';
+  const language = String(formData.get('language') || '').trim()
+    || (await effectiveValue('CAMPAIGN_DEFAULT_LANGUAGE')) || 'el';
   const queries = String(formData.get('queries') ?? '').split('\n').map((s) => s.trim()).filter(Boolean);
   const targetCount = Number(formData.get('targetCount') ?? 50);
   const lat = Number(formData.get('lat') ?? 0);
