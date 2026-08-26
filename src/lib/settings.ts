@@ -32,7 +32,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import {
   COUNTRY_CODES, COUNTRY_LABELS, LANGUAGE_CODES, LANGUAGE_LABELS,
-} from './regions.js';
+} from './regions';
 
 // ─── Registry ────────────────────────────────────────────────────────────────
 
