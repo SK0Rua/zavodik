@@ -37,4 +37,8 @@ export interface QuickView {
   auditShotKey: string | null;
   /** Object key of a representative business photo/logo (bucket `assets`). */
   heroKey: string | null;
+  /** A demo build for this business is in flight right now — show the live panel. */
+  buildActive: boolean;
+  /** Newest site_project state, or null when none exists (for the live panel). */
+  projectState: string | null;
 }

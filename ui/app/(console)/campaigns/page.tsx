@@ -70,7 +70,15 @@ export default async function CampaignsPage() {
 
   return (
     <div>
-      <h1 className="h-page mb-6">Кампанії</h1>
+      <div className="flex items-baseline justify-between gap-3 flex-wrap mb-6">
+        <h1 className="h-page">Кампанії</h1>
+        {/* Before firing a run at 50 businesses, one glance at "чи все живе".
+            The full panel (gosom/MinIO/WAHA + last successful runs) lives under
+            Налаштування, so this is a link, not a fifth nav item. */}
+        <Link href="/settings/system" className="link-quiet text-sm no-underline">
+          Стан системи →
+        </Link>
+      </div>
 
       <div className="space-y-4">
         {campaigns.map((c) => {

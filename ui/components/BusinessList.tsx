@@ -253,7 +253,12 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
                          flex items-center gap-3 flex-wrap
                          justify-start sm:justify-end sm:min-w-[140px]"
             >
-              <RowAction row={r} pending={pending} onBuild={() => runOne(r)} onEnrich={() => runOneEnrich(r)} />
+              <RowAction
+                row={r} pending={pending}
+                onBuild={() => runOne(r)}
+                onEnrich={() => runOneEnrich(r)}
+                onQuick={() => setQuick({ id: r.id, name: r.name })}
+              />
             </span>
           </li>
         ))}
@@ -291,12 +296,29 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
  *    a different sentence from «пропуски не закриті» and a different sentence
  *    again from an inviting green button.
  */
-function RowAction({ row, pending, onBuild, onEnrich }: {
+function RowAction({ row, pending, onBuild, onEnrich, onQuick }: {
   row: ListRow;
   pending: boolean;
   onBuild: () => void;
   onEnrich: () => void;
+  onQuick: () => void;
 }) {
+  // A build is in flight. The most useful action here is not a disabled
+  // «Будувати демо» but a way to WATCH it — the live panel opens in the modal,
+  // which is where "чи не зависло" is actually answered.
+  if (row.build.availability === 'busy') {
+    return (
+      <button
+        type="button"
+        className="btn-quiet btn-sm min-h-[36px]"
+        title="Показати збірку наживо — таймлайн, дії агента і сигнал, чи вона ще жива"
+        onClick={onQuick}
+      >
+        Дивитись збірку
+      </button>
+    );
+  }
+
   // A lead waiting in the reviewable list: its next step is data collection, not
   // a build. Show that verb instead of a disabled «Будувати демо».
   if (row.canEnrich) {

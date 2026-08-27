@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Status } from './Status';
+import { LiveBuildPanel } from './LiveBuildPanel';
 import { safeHttpUrl } from '@/lib/format';
 import { businessQuickView } from '@/lib/actions';
 import type { QuickView } from '@/lib/types';
@@ -86,6 +87,16 @@ export function QuickViewModal({
 
         {state === 'ready' && data && (
           <div className="mt-5 space-y-5">
+            {/* A build in flight is the thing a person most wants to WATCH here:
+                it runs long and a status word cannot say whether it is alive. The
+                live panel (timeline, agent tail, "мовчить X хв" warning, terminal
+                link) goes first, so clicking a building row shows the process. */}
+            {data.buildActive && (
+              <div className="rounded-lg border border-line bg-paper-sunk/40 p-4">
+                <LiveBuildPanel businessId={data.id} projectState={data.projectState} embedded />
+              </div>
+            )}
+
             {/* What the current site looks like + the demo, side by side when both. */}
             {(data.auditShotKey || data.heroKey) && (
               <div className="grid grid-cols-2 gap-3">
