@@ -1,8 +1,8 @@
 'use client';
 
-import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import { Status } from './Status';
+import { QuickViewModal } from './QuickViewModal';
 import { safeHttpUrl } from '@/lib/format';
 import type { DotTone } from '@/lib/humanStatus';
 import {
@@ -16,6 +16,8 @@ import type { SocialsButtonState } from '@/lib/socials';
 export interface ListRow {
   id: string;
   name: string;
+  /** The campaign's niche, shown next to the row. */
+  niche: string;
   /** One human phrase, already composed on the server. */
   statusText: string;
   statusTone: DotTone;
@@ -47,6 +49,7 @@ export interface ListRow {
 export function BusinessList({ rows }: { rows: ListRow[] }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState<string | null>(null);
+  const [quick, setQuick] = useState<{ id: string; name: string } | null>(null);
   const [pending, startTransition] = useTransition();
 
   const selectedRows = rows.filter((r) => selected.has(r.id));
@@ -204,12 +207,20 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
             />
 
             <div className="min-w-0">
-              {/* The row's own title. Underlined at rest, not on hover: a name
-                  that only reveals itself as a link once the pointer is on it
-                  is unreachable knowledge on a phone, which has no hover. */}
-              <Link href={`/businesses/${r.id}`} className="link font-medium">
+              {/* The name opens a quick-view modal instead of navigating away:
+                  Roman judges a lead in place and drills into the full card from
+                  inside the modal. Left-aligned and underlined so it still reads
+                  as the row's actionable title on a phone, which has no hover. */}
+              <button
+                type="button"
+                className="link font-medium text-left"
+                onClick={() => setQuick({ id: r.id, name: r.name })}
+              >
                 {r.name}
-              </Link>
+              </button>
+              {r.niche && (
+                <span className="ml-2 text-sm text-ink-mute">{r.niche}</span>
+              )}
               <div className="mt-0.5">
                 <Status tone={r.statusTone} title={r.rawStatus}>{r.statusText}</Status>
               </div>
@@ -253,6 +264,14 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
           </li>
         )}
       </ul>
+
+      {quick && (
+        <QuickViewModal
+          businessId={quick.id}
+          fallbackName={quick.name}
+          onClose={() => setQuick(null)}
+        />
+      )}
     </section>
   );
 }

@@ -23,6 +23,7 @@ import { db, schema } from '../db/client.js';
 import { notifyBuildInterrupted } from '../telegram/notify.js';
 import { ensureBuckets } from '../lib/storage.js';
 import { discoverHandler } from './discovery.js';
+import { assessCityHandler } from './assessCity.js';
 import { normalizeHandler } from './normalize.js';
 import { fastQualifyHandler } from './fastQualify.js';
 import { enrichHandler } from './enrich.js';
@@ -49,7 +50,7 @@ export type WorkerGroup = 'core' | 'enrich' | 'build';
 export const WORKER_GROUPS: Record<WorkerGroup, JobName[]> = {
   /** Deterministic + light-agent stages, plus the schedules and the outreach path. */
   core: [
-    'discover', 'normalize', 'fast-qualify', 'collect-assets', 'audit-website',
+    'discover', 'assess-city', 'normalize', 'fast-qualify', 'collect-assets', 'audit-website',
     'readiness-gate', 'deploy-demo', 'request-approval',
     'send-outreach', 'send-followup', 'poll-replies', 'daily-summary',
   ],
@@ -65,6 +66,7 @@ export const WORKER_GROUPS: Record<WorkerGroup, JobName[]> = {
 
 const HANDLERS: Record<JobName, Parameters<typeof register>[1]> = {
   'discover': discoverHandler,
+  'assess-city': assessCityHandler,
   'normalize': normalizeHandler,
   'fast-qualify': fastQualifyHandler,
   'enrich': enrichHandler,

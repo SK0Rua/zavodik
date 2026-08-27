@@ -52,6 +52,7 @@ export default async function BusinessesPage({
     return {
       id: b.id,
       name: b.name,
+      niche: b.niche,
       // The gaps are the actionable half of a `needs_review`, so they become the
       // reason clause rather than a separate column of numbers.
       statusText: b.status === 'needs_review' && b.openGaps.length

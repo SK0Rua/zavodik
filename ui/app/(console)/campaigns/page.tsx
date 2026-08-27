@@ -4,6 +4,7 @@ import { db, schema } from '@/lib/db';
 import { Status, Metric } from '@/components/Status';
 import { fmtDate, plural } from '@/lib/format';
 import { NewCampaignForm } from '@/components/NewCampaignForm';
+import { CityAssessment, type AssessmentRow } from '@/components/CityAssessment';
 import { ActionForm } from '@/components/ActionForm';
 import { setCampaignBuildPolicy, setCampaignFlow, setCampaignRunning } from '@/lib/actions';
 import { effectiveValue } from '@/lib/settings';
@@ -34,6 +35,16 @@ export default async function CampaignsPage() {
     effectiveValue('CAMPAIGN_DEFAULT_COUNTRY'),
     effectiveValue('CAMPAIGN_DEFAULT_LANGUAGE'),
   ]);
+
+  // Recent city assessments (the "worth a campaign?" probes) — newest first.
+  const assessmentsRaw = await db.select().from(schema.cityAssessments)
+    .orderBy(desc(schema.cityAssessments.createdAt)).limit(8);
+  const assessments: AssessmentRow[] = assessmentsRaw.map((a) => ({
+    id: a.id, city: a.city, niche: a.niche, country: a.country, status: a.status,
+    found: a.found, noSite: a.noSite, hasSite: a.hasSite, socialOnly: a.socialOnly,
+    avgRating: a.avgRating, verdict: a.verdict, sample: a.sample, error: a.error,
+    createdAt: a.createdAt.toISOString(),
+  }));
 
   // «готові до демо» counts EXACTLY `production_ready` — the businesses that
   // are ready and not yet started. It used to include `site_in_progress`, so
@@ -187,6 +198,12 @@ export default async function CampaignsPage() {
             Кампаній ще немає. Створи першу — фабрика одразу почне шукати бізнеси.
           </div>
         )}
+
+        <CityAssessment
+          recent={assessments}
+          defaultCountry={defaultCountry || 'GR'}
+          defaultLanguage={defaultLanguage || 'el'}
+        />
 
         <NewCampaignForm
           defaultCountry={defaultCountry || 'GR'}

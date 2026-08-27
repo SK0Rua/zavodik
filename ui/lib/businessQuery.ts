@@ -47,6 +47,8 @@ export interface BusinessFilters {
 export interface BusinessRow {
   id: string;
   campaignId: string;
+  /** The campaign's niche — a business has only a Google `category` of its own. */
+  niche: string;
   name: string;
   status: string;
   statusReason: string | null;
@@ -219,6 +221,7 @@ export async function queryBusinesses(
       b.review_count as "reviewCount", b.updated_at as "updatedAt",
       a.verdict,
       c.autoBuild as "autoBuild",
+      c.niche as "niche",
       exists (select 1 from business_contacts bc
               where bc.business_id = b.id and bc.channel = 'instagram') as "hasInstagram",
       exists (select 1 from business_contacts bc
@@ -262,7 +265,7 @@ export async function queryBusinesses(
       where w.business_id = b.id order by w.audited_at desc limit 1
     ) a on true
     left join lateral (
-      select cc.auto_build as autoBuild from campaigns cc where cc.id = b.campaign_id
+      select cc.auto_build as autoBuild, cc.niche as niche from campaigns cc where cc.id = b.campaign_id
     ) c on true
     left join lateral (
       select s.deploy_url, s.state from site_projects s
@@ -287,6 +290,7 @@ export async function queryBusinesses(
   return (rows.rows as Array<Record<string, unknown>>).map((r) => ({
     id: String(r.id),
     campaignId: String(r.campaignId),
+    niche: (r.niche as string | null) ?? '',
     name: String(r.name),
     status: String(r.status),
     statusReason: (r.statusReason as string | null) ?? null,
