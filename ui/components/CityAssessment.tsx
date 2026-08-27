@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { ActionForm } from './ActionForm';
 import { Status } from './Status';
-import { assessCity } from '@/lib/actions';
+import { assessCity, createCampaignFromAssessment } from '@/lib/actions';
+import { runWithToast } from '@/lib/toast';
 import { NICHES } from '@/lib/niches';
 import { fmtDate } from '@/lib/format';
 import type { DotTone } from '@/lib/humanStatus';
@@ -57,8 +58,17 @@ export function CityAssessment({
   defaultLanguage?: string;
 }) {
   const router = useRouter();
+  const [pending, startTransition] = useTransition();
   const [open, setOpen] = useState(false);
   const [niche, setNiche] = useState('');
+
+  const createCampaign = (id: number) => {
+    startTransition(() => {
+      void runWithToast(() => createCampaignFromAssessment(id), {
+        onResult: () => router.refresh(),
+      });
+    });
+  };
   const [lat, setLat] = useState('38.2466');
   const [lng, setLng] = useState('21.7346');
   const [coordsError, setCoordsError] = useState('');
@@ -198,6 +208,21 @@ export function CityAssessment({
 
                 {r.status === 'failed' && (
                   <p className="mt-2 text-sm text-dot-stop">{r.error || 'проба не вдалася — спробуй ще раз'}</p>
+                )}
+
+                {r.status === 'done' && (
+                  <div className="mt-3">
+                    {/* One click to the campaign the assessment implies: a
+                        no-site, review-first run on the same city+niche. */}
+                    <button
+                      type="button"
+                      className={r.verdict === 'go' ? 'btn-primary btn-sm' : 'btn-outline btn-sm'}
+                      disabled={pending}
+                      onClick={() => createCampaign(r.id)}
+                    >
+                      Створити кампанію
+                    </button>
+                  </div>
                 )}
 
                 {r.status === 'done' && r.sample && r.sample.length > 0 && (

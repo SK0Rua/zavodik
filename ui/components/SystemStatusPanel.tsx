@@ -1,4 +1,5 @@
 import { Badge } from '@/components/Badge';
+import { fmtDate } from '@/lib/format';
 import type { SystemStatus } from '@/lib/systemStatus';
 
 /**
@@ -23,6 +24,23 @@ export function SystemStatusPanel({ status }: { status: SystemStatus }) {
             </span>
           </div>
         ))}
+      </div>
+
+      <div>
+        {/* «Up right now» above cannot see this: gosom can answer HTTP while no
+            discovery has actually succeeded in days. This is that second, slower
+            health question. */}
+        <h3 className="text-xs uppercase tracking-wide text-ink-mute mb-2">Останні успішні прогони</h3>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {status.lastRuns.map((r) => (
+            <div key={r.id} className="flex items-center justify-between gap-2 rounded-md border border-line bg-paper-sunk px-3 py-2">
+              <span className="text-sm text-ink">{r.label}</span>
+              <span className={`text-xs text-ink-mute ${r.at ? '' : 'italic opacity-70'}`}>
+                {r.at ? fmtDate(r.at) : 'ще не було'}
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div>

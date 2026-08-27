@@ -491,6 +491,42 @@ export async function assessCity(formData: FormData): Promise<ActionResult> {
   return { ok: true, message: `Оцінюю «${city} · ${niche}» — за кілька хвилин зʼявиться результат` };
 }
 
+/**
+ * Turn a finished city assessment into a campaign in one click.
+ *
+ * The assessment already holds everything a campaign needs — city, niche,
+ * country, language, centre, radius — so this closes the loop that used to make
+ * Roman retype all of it into the form. It launches in the workflow the
+ * assessment implies: `auto_stage = discover` (a reviewable list, no data
+ * collected yet) with the «лише без сайту» filter (the opportunity the verdict
+ * was about). Queries are generated the same way the form suggests them.
+ *
+ * It delegates to `createCampaign` rather than duplicating its id-generation and
+ * conflict handling, so a second click for the same city+niche this month is the
+ * same honest "вже існує" no-op it is from the form.
+ */
+export async function createCampaignFromAssessment(assessmentId: number): Promise<ActionResult> {
+  const [a] = await db.select().from(schema.cityAssessments)
+    .where(eq(schema.cityAssessments.id, assessmentId));
+  if (!a) return { ok: false, message: 'Оцінку не знайдено' };
+
+  const queries = [...new Set([`${a.niche} ${a.city}`, `${a.city} ${a.niche}`])].join('\n');
+  const fd = new FormData();
+  fd.set('city', a.city);
+  fd.set('niche', a.niche);
+  fd.set('country', a.country);
+  fd.set('language', a.language);
+  fd.set('queries', queries);
+  if (a.lat !== null) fd.set('lat', String(a.lat));
+  if (a.lng !== null) fd.set('lng', String(a.lng));
+  fd.set('radiusKm', String(a.radiusKm ?? 10));
+  // The workflow the assessment implies: build a reviewable list of no-site
+  // leads, then Roman hand-picks. He can widen either on the campaign card.
+  fd.set('autoStage', 'discover');
+  fd.set('filterWebsiteNone', 'on');
+  return createCampaign(fd);
+}
+
 // ─── Deals ───────────────────────────────────────────────────────────────────
 
 export async function updateDealStage(formData: FormData): Promise<ActionResult> {

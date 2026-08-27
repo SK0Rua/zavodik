@@ -25,10 +25,52 @@ async function probe(label: string, id: string, url: string, headers?: Record<st
   }
 }
 
+/** «Коли фабрика востаннє успішно робила X» — the health question a live probe
+ *  cannot answer: gosom can be up while no discovery has succeeded in days. */
+export interface LastRun {
+  id: string;
+  label: string;
+  /** ISO timestamp of the most recent success, or null when it never ran. */
+  at: string | null;
+}
+
+/** Job types worth showing as "last successful run", in pipeline order. */
+const LAST_RUN_SERVICES: Array<[type: string, label: string]> = [
+  ['discover', 'Пошук бізнесів (gosom)'],
+  ['assess-city', 'Оцінка міста'],
+  ['enrich', 'Збір даних'],
+  ['audit-website', 'Аудит сайтів'],
+  ['build-site', 'Збірка демо'],
+  ['send-outreach', 'Відправка'],
+  ['poll-replies', 'Перевірка відповідей'],
+];
+
 export interface SystemStatus {
   services: StatusLine[];
   heartbeats: HeartbeatView[];
   jobs: PendingJobs | null;
+  lastRuns: LastRun[];
+}
+
+async function loadLastRuns(): Promise<LastRun[]> {
+  try {
+    const rows = await db.execute(sql`
+      select job_type as "jobType", max(finished_at) as "at"
+      from workflow_jobs
+      where status = 'succeeded' and finished_at is not null
+      group by job_type
+    `);
+    const byType = new Map(
+      (rows.rows as Array<{ jobType: string; at: string | Date | null }>)
+        .map((r) => [r.jobType, r.at]),
+    );
+    return LAST_RUN_SERVICES.map(([type, label]) => {
+      const at = byType.get(type);
+      return { id: type, label, at: at ? new Date(at).toISOString() : null };
+    });
+  } catch {
+    return LAST_RUN_SERVICES.map(([type, label]) => ({ id: type, label, at: null }));
+  }
 }
 
 export async function loadSystemStatus(): Promise<SystemStatus> {
@@ -54,10 +96,11 @@ export async function loadSystemStatus(): Promise<SystemStatus> {
       : Promise.resolve<StatusLine>({ id: 'waha', label: 'WAHA', ok: false, detail: 'WAHA_URL не заданий' }),
   ]);
 
-  const [heartbeats, jobs] = await Promise.all([
+  const [heartbeats, jobs, lastRuns] = await Promise.all([
     loadHeartbeats().catch(() => [] as HeartbeatView[]),
     loadPendingJobs().catch(() => null),
+    loadLastRuns(),
   ]);
 
-  return { services: [dbLine, ...rest], heartbeats, jobs };
+  return { services: [dbLine, ...rest], heartbeats, jobs, lastRuns };
 }
