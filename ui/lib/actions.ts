@@ -27,9 +27,9 @@ import {
 } from './campaignFlow';
 import { CLOSED_STATUSES, isSocialChannel, socialsButtonState } from './socials';
 import { effectiveValue } from './settings';
-import { humanStatus, reviewAsk } from './humanStatus';
+import { gapName, humanBusinessStatus, humanStatus, humanVerdict, reviewAsk } from './humanStatus';
 import { stageName } from './stageNames';
-import type { ActionResult } from './types';
+import type { ActionResult, QuickView } from './types';
 import { retryFailedJob, stopFailedBuild } from './buildFailureDecision';
 
 // ─── Approvals ───────────────────────────────────────────────────────────────
@@ -511,6 +511,88 @@ export async function updateDealStage(formData: FormData): Promise<ActionResult>
   revalidatePath('/inbox');
   revalidatePath(`/businesses/${businessId}`);
   return { ok: true, message: `Етап розмови: «${humanStatus(state).text}»` };
+}
+
+// ─── Quick view: «Швидкий перегляд» modal ────────────────────────────────────
+
+/**
+ * The at-a-glance projection behind a business row's quick-view modal.
+ *
+ * A READ, exposed as a server action so the client modal can pull it on open
+ * without a route handler: name, niche, verdict, the description and services
+ * the pipeline extracted, contacts, open gaps, and keys for the audit screenshot
+ * and one representative photo (served through /api/object). Returns null for an
+ * unknown id rather than throwing, so a stale row id just shows "not found".
+ */
+export async function businessQuickView(id: string): Promise<QuickView | null> {
+  const [biz] = await db.select().from(schema.businesses).where(eq(schema.businesses.id, id));
+  if (!biz) return null;
+
+  const [campaign, facts, contacts, audits, assets, gapRows, projects] = await Promise.all([
+    db.select({ niche: schema.campaigns.niche }).from(schema.campaigns)
+      .where(eq(schema.campaigns.id, biz.campaignId)),
+    db.select().from(schema.businessFacts).where(eq(schema.businessFacts.businessId, id)),
+    db.select().from(schema.businessContacts).where(eq(schema.businessContacts.businessId, id)),
+    db.select().from(schema.websiteAudits).where(eq(schema.websiteAudits.businessId, id))
+      .orderBy(desc(schema.websiteAudits.auditedAt)).limit(1),
+    db.select().from(schema.assets).where(eq(schema.assets.businessId, id)),
+    db.select({ gap: schema.productionGaps.gap }).from(schema.productionGaps)
+      .where(and(
+        eq(schema.productionGaps.businessId, id),
+        eq(schema.productionGaps.resolved, false),
+        eq(schema.productionGaps.blockerLevel, 'hard'),
+      )),
+    db.select().from(schema.siteProjects).where(eq(schema.siteProjects.businessId, id))
+      .orderBy(desc(schema.siteProjects.createdAt)).limit(1),
+  ]);
+  const audit = audits[0];
+  const project = projects[0];
+  const descFact = facts.find((f) => f.key === 'identity.description');
+  const description = typeof descFact?.value === 'string' ? descFact.value : null;
+  const services = facts
+    .filter((f) => f.key === 'service')
+    .map((f) => {
+      const v = f.value as { name?: string; price?: string } | null;
+      if (!v?.name) return null;
+      return v.price ? `${v.name} — ${v.price}` : v.name;
+    })
+    .filter((s): s is string => !!s)
+    .slice(0, 8);
+
+  // One representative image: a real hero/logo first, then any non-AI photo, then
+  // whatever exists. AI-generated assets are never passed off as a real photo.
+  const hero = assets.find((a) => a.intendedUsage === 'hero' && !a.aiGenerated)
+    ?? assets.find((a) => a.intendedUsage === 'logo' && !a.aiGenerated)
+    ?? assets.find((a) => !a.aiGenerated)
+    ?? null;
+
+  const statusView = humanBusinessStatus({
+    status: biz.status, statusReason: biz.statusReason, websiteVerdict: audit?.verdict ?? null,
+  });
+
+  return {
+    id: biz.id,
+    name: biz.name,
+    niche: campaign[0]?.niche ?? '',
+    category: biz.category,
+    address: biz.address,
+    phone: biz.phone,
+    statusText: statusView.text,
+    statusTone: statusView.tone,
+    verdictText: humanVerdict(audit?.verdict).text,
+    score: biz.score,
+    rating: biz.rating,
+    reviewCount: biz.reviewCount,
+    description,
+    services,
+    contacts: contacts
+      .filter((c) => c.channel !== 'website')
+      .map((c) => ({ channel: c.channel, value: c.value, verified: !!c.verified })),
+    gaps: gapRows.map((g) => gapName(g.gap)),
+    deployUrl: project?.deployUrl ?? null,
+    auditShotKey: audit?.desktopScreenshotKey ?? null,
+    heroKey: hero?.objectKey ?? null,
+  };
 }
 
 // ─── Funnel counts (used by several pages) ───────────────────────────────────
