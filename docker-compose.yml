@@ -13,7 +13,10 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5432:5432"
+      # Remapped from the default 5432: this host already runs its own
+      # Postgres on 127.0.0.1:5432 for another site. Containers still talk to
+      # this service over the compose network as `postgres:5432`, unaffected.
+      - "127.0.0.1:15432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U factory"]
       interval: 5s
@@ -236,6 +239,11 @@ services:
   # Bound to 127.0.0.1 like everything else: the WhatsApp session is a
   # credential, and an exposed WAHA is an account takeover.
   waha:
+    # Excluded from a plain `docker compose up` on this host: its default host
+    # port (127.0.0.1:3001) collides with an unrelated site already running
+    # there. Start explicitly later with `docker compose --profile whatsapp up -d`
+    # once the port is resolved and a dedicated WhatsApp number is ready.
+    profiles: ["whatsapp"]
     image: ${WAHA_IMAGE:-devlikeapro/waha:noweb}
     restart: unless-stopped
     volumes:
