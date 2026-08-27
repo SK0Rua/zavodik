@@ -6,6 +6,9 @@ import { createCampaign } from '@/lib/actions';
 import {
   BUILD_POLICIES, BUILD_POLICY_HINTS, BUILD_POLICY_LABELS, DEFAULT_BUILD_POLICY,
 } from '@/lib/buildPolicy';
+import {
+  AUTO_STAGES, AUTO_STAGE_HINTS, AUTO_STAGE_LABELS, DEFAULT_AUTO_STAGE,
+} from '@/lib/campaignFlow';
 import { COUNTRIES, LANGUAGES } from '@factory/regions';
 
 /**
@@ -32,6 +35,7 @@ export function NewCampaignForm({
 }) {
   const [open, setOpen] = useState(false);
   const [autoBuild, setAutoBuild] = useState(DEFAULT_BUILD_POLICY);
+  const [autoStage, setAutoStage] = useState(DEFAULT_AUTO_STAGE);
   const [city, setCity] = useState('');
   const [niche, setNiche] = useState('');
   // Lat/lng are controlled so the single "paste from Google" box can fill both.
@@ -101,14 +105,57 @@ export function NewCampaignForm({
         </div>
 
         <div>
-          <label className="label" htmlFor="autoBuild">Кому фабрика сама будує демо</label>
-          <select id="autoBuild" name="autoBuild" value={autoBuild} onChange={(e) => setAutoBuild(e.target.value as typeof autoBuild)}>
-            {BUILD_POLICIES.map((p) => (
-              <option key={p} value={p}>{BUILD_POLICY_LABELS[p]}</option>
+          <label className="label" htmlFor="autoStage">Наскільки далеко фабрика йде сама</label>
+          <select id="autoStage" name="autoStage" value={autoStage} onChange={(e) => setAutoStage(e.target.value as typeof autoStage)}>
+            {AUTO_STAGES.map((s) => (
+              <option key={s} value={s}>{AUTO_STAGE_LABELS[s]}</option>
             ))}
           </select>
-          <p className="text-sm text-ink-mute mt-1.5">{BUILD_POLICY_HINTS[autoBuild]}</p>
+          <p className="text-sm text-ink-mute mt-1.5">{AUTO_STAGE_HINTS[autoStage]}</p>
         </div>
+
+        {/* «Кому будувати» має сенс лише коли фабрика доходить до збірки сама.
+            На «тільки список» / «зібрати дані» збірку так чи так запускаєш ти. */}
+        {autoStage === 'build' && (
+          <div>
+            <label className="label" htmlFor="autoBuild">Кому фабрика сама будує демо</label>
+            <select id="autoBuild" name="autoBuild" value={autoBuild} onChange={(e) => setAutoBuild(e.target.value as typeof autoBuild)}>
+              {BUILD_POLICIES.map((p) => (
+                <option key={p} value={p}>{BUILD_POLICY_LABELS[p]}</option>
+              ))}
+            </select>
+            <p className="text-sm text-ink-mute mt-1.5">{BUILD_POLICY_HINTS[autoBuild]}</p>
+          </div>
+        )}
+        {/* Keep the chosen value submitted even while the select is hidden. */}
+        {autoStage !== 'build' && <input type="hidden" name="autoBuild" value={autoBuild} />}
+
+        <fieldset className="border border-line rounded-lg p-4">
+          <legend className="label px-1">Фільтр пошуку — кого залишати в списку</legend>
+          <p className="text-sm text-ink-mute -mt-1 mb-3">
+            Застосовується одразу після пошуку, до збору даних. Порожні поля — без обмеження.
+          </p>
+          <div className="space-y-3">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" name="filterWebsiteNone" className="w-auto" />
+              <span>Лише бізнеси без свого сайту</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" name="filterRequireContact" className="w-auto" />
+              <span>Тільки з телефоном або іншим контактом</span>
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label" htmlFor="filterMinRating">Мін. рейтинг</label>
+                <input id="filterMinRating" name="filterMinRating" type="number" step="0.1" min="0" max="5" placeholder="напр. 4" />
+              </div>
+              <div>
+                <label className="label" htmlFor="filterMinReviews">Мін. відгуків</label>
+                <input id="filterMinReviews" name="filterMinReviews" type="number" min="0" placeholder="напр. 5" />
+              </div>
+            </div>
+          </div>
+        </fieldset>
 
         <details>
           <summary className="disclosure">Додаткові налаштування</summary>

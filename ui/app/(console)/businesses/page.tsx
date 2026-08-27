@@ -77,6 +77,9 @@ export default async function BusinessesPage({
         activeJobStatus: b.socialsJobStatus,
         status: b.status,
       }),
+      // Resting in the reviewable list (campaign stop-point `discover`): the next
+      // step is «Зібрати дані», offered right on the row.
+      canEnrich: b.status === 'prequalified',
     };
   });
 

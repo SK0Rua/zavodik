@@ -135,10 +135,10 @@ Google Places API не використовується: ні як основн�
 
 | # | Етап | Виконавець | Вихід / Gate |
 |---|---|---|---|
-| 0 | Campaign setup | CLI/dashboard | запис campaign; валідні geofence, queries, ліміти |
+| 0 | Campaign setup | CLI/dashboard | запис campaign; валідні geofence, queries, ліміти, **стоп-точка `auto_stage` і discovery-фільтр** (рішення №14) |
 | 1 | Discovery | gosom через discovery-worker | candidates + raw JSON в storage |
 | 2 | Normalize + dedup | код | стабільний business_id; дублікат приєднує source |
-| 3 | Fast qualification | код | prequalified / needs_review / rejected з причиною |
+| 3 | Fast qualification | код | prequalified / needs_review / rejected з причиною; тут же застосовується discovery-фільтр кампанії (лише без сайту, мін. рейтинг/відгуки, обов'язковий контакт) як hard-reject `filter:*` (рішення №14) |
 | 4 | Deep enrichment | Playwright capture → structured call | facts з source_id і confidence; немає доказу = null + gap; окремо детектяться месенджери бізнесу: WhatsApp/Viber-маркери біля телефону, Instagram/Facebook профілі |
 | 5 | Assets | код | файли з hash, source, dimensions, rights=`private_demo_only` |
 | 6 | Website audit | Playwright | матриця http/https × www/non-www, desktop+mobile скриншоти, вердикт з 5 значень (`no_website`, `broken`, `outdated`, `working_with_https_issue`, `working_good`); соцпрофіль/каталог ≠ сайт — фіксується як контакт, не як окремий вердикт (рішення Романа 2026-08-19: `social_only` злито в `no_website`); суперечність з enrichment → needs_review |
@@ -226,6 +226,11 @@ Telegram: пуші про failed jobs, needs_human, готові до approve д
 11. **Дизайн-стек:** готові компоненти (Aceternity + Magic UI в шаблоні) + офіційні GSAP skills + куровані референси на нішу. Кастомні дизайн-skills не пишемо. (Розділ 2.4.)
 12. **Відео: авто Ken Burns + ручний wow-кліп** (змінено 2026-08-22; було: FlowKit/Chrome-міст — видалено, бо кожен міст до Flow потребує живого Chrome поза датацентром, а на маку Роман нічого не тримає). Базово — ffmpeg Ken Burns з реального фото; wow — відео-бриф на картці бізнесу, Роман генерує і завантажує mp4, наступна збірка підхоплює. Без pay-per-use відео-API. (Розділ 2.5.)
 13. **Зображення через gen-image skill Романа** (Codex CLI, gpt-image-2, підписка ChatGPT): декор/фони/патерни/og-images з позначкою `ai_generated`; ніколи не замінюють реальні фото бізнесу. (Розділ 2.5.)
+14. **Керування потоком кампанії — стоп-точка + discovery-фільтр + пауза** (2026-08-27). Робочий сценарій Романа: «запускаю на 50 сайтів з фільтром «лише без сайту», ставлю «не заповнювати дані», спершу переглядаю список — сам оцінюю які перспективні — і даю команду по підготовці до демо». Реалізація (детермінований шар, `src/orchestrator/campaignFlow.ts`; жодна з галок не рухає бізнес між статусами — лише гейтить авто-крок роутера):
+    - **`campaigns.auto_stage`** — сходинка автозапуску: `discover` (пошук + fast-qualify, і стоп — список без фото/фактів/аудиту), `enrich` (зібрати дані + аудит + скоринг, стоп на `production_ready`), `build` (повний автозапуск; кому саме будувати далі вирішує `auto_build`). Дефолт `build` — стара поведінка. Ручні кнопки «Зібрати дані» (для `prequalified`) і «Будувати демо» (наявна) продовжують окремий бізнес.
+    - **`campaigns.discovery_filter`** — `{ websiteNone, minRating, minReviews, requireContact }`, застосовується на етапі 3 як hard-reject до збору даних. `minRating` довіряється лише за ≥3 відгуків (як і базова обережність fast-qualify).
+    - **Пауза кампанії** — `campaigns.status = paused`: роутер не запускає нову роботу, поточні jobs дороблюють (кнопки «Зупинити»/«Продовжити» на картці кампанії). М'який стоп у дусі «падіння одного бізнесу не зупиняє кампанію».
+    - **`DIRECTORY_DOMAINS_EXTRA`** (налаштування, `/settings`) — домени, які не рахуються за власний сайт (напр. `msg.me`, `choiceqr.com`); зливаються з вбудованим каталог-списком у `extractDomain`, тож бізнес із таким посиланням лишається «без сайту».
 
 ---
 

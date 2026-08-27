@@ -9,6 +9,7 @@ import { enqueue } from './queue.js';
 import {
   buildJobPriority, isAutoBuildEligible, normalizeBuildPolicy,
 } from './buildPolicy.js';
+import { autoStageAllows, normalizeAutoStage } from './campaignFlow.js';
 import { log } from '../lib/logger.js';
 
 const NEXT_JOB: Record<string, Parameters<typeof enqueue>[0] | null> = {
@@ -47,6 +48,32 @@ export async function advance(businessId: string): Promise<void> {
     return;
   }
 
+  const [campaign] = await db.select().from(schema.campaigns)
+    .where(eq(schema.campaigns.id, biz.campaignId));
+
+  // ── campaign paused (Roman's "Зупинити" button) ──────────────────────────
+  // A paused campaign starts no new work. In-flight jobs finish; the businesses
+  // they belong to simply rest where they are until Roman resumes. This is a
+  // soft stop, matching "падіння одного бізнесу не зупиняє кампанію": nothing is
+  // cancelled or lost, the conveyor just stops feeding itself.
+  if (campaign?.status === 'paused') {
+    log.info('auto-advance halted: campaign paused', { businessId, campaignId: biz.campaignId, next });
+    return;
+  }
+
+  // ── stop-point ladder (Roman's workflow 2026-08-27) ──────────────────────
+  // `auto_stage` decides how far the factory advances on its own. `discover`
+  // stops before enrichment (a reviewable list, no data collected); `enrich`
+  // stops before the build. A blocked business rests where it is until Roman
+  // presses "Зібрати дані" / "Будувати демо".
+  const stage = normalizeAutoStage(campaign?.autoStage);
+  if (!autoStageAllows(stage, next)) {
+    log.info('auto-advance stopped by campaign stop-point', {
+      businessId, campaignId: biz.campaignId, stage, next,
+    });
+    return;
+  }
+
   // ── build policy gate (SPEC §4 stage 9; Roman's rule) ────────────────────
   // Reaching `production_ready` means the evidence is good enough to build. It
   // does NOT by itself mean the factory should spend subscription time on this
@@ -54,8 +81,6 @@ export async function advance(businessId: string): Promise<void> {
   // site at all. The campaign's `auto_build` policy decides; ineligible
   // businesses rest in `production_ready` until Roman presses "Будувати демо".
   if (next === 'content-and-design') {
-    const [campaign] = await db.select().from(schema.campaigns)
-      .where(eq(schema.campaigns.id, biz.campaignId));
     const policy = normalizeBuildPolicy(campaign?.autoBuild);
     const verdict = await latestAuditVerdict(businessId);
     const decision = isAutoBuildEligible({ policy, latestVerdict: verdict });

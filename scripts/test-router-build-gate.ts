@@ -51,6 +51,9 @@ async function main(): Promise<void> {
   const noSite = await makeBusiness('nosite', 'no_website', 60);
   const hasSite = await makeBusiness('hassite', 'working_good', 95);
   const noAudit = await makeBusiness('noaudit', null, 90);
+  // For the stop-point ladder: a business that WOULD be built (no_website) so the
+  // only thing that can hold it back is `auto_stage`, never the build policy.
+  const stageGate = await makeBusiness('stagegate', 'no_website', 80);
 
   try {
     // ── policy no_site_only ──────────────────────────────────────────────────
@@ -76,6 +79,26 @@ async function main(): Promise<void> {
     await advance(hasSite);
     ok('policy all: working_good business IS enqueued', await buildJobCount(hasSite) === 1);
 
+    // ── stop-point ladder (auto_stage) — orthogonal to auto_build ─────────────
+    // auto_build stays 'all' so a skipped build can only be the stop-point.
+    await db.update(schema.campaigns).set({ autoStage: 'enrich' })
+      .where(eq(schema.campaigns.id, CAMPAIGN));
+    await advance(stageGate);
+    ok('auto_stage enrich: a buildable business is NOT built', await buildJobCount(stageGate) === 0);
+
+    await db.update(schema.campaigns).set({ autoStage: 'build' })
+      .where(eq(schema.campaigns.id, CAMPAIGN));
+    await advance(stageGate);
+    ok('auto_stage build: the same business IS built', await buildJobCount(stageGate) === 1);
+
+    // ── paused campaign starts no new work ────────────────────────────────────
+    await db.update(schema.campaigns).set({ status: 'paused' })
+      .where(eq(schema.campaigns.id, CAMPAIGN));
+    await advance(noSite); // noSite already has 1 job from the first assertion
+    ok('paused campaign: no further build is enqueued', await buildJobCount(noSite) === 1);
+    await db.update(schema.campaigns).set({ status: 'running' })
+      .where(eq(schema.campaigns.id, CAMPAIGN));
+
     // ── policy manual ────────────────────────────────────────────────────────
     await db.update(schema.campaigns).set({ autoBuild: 'manual' })
       .where(eq(schema.campaigns.id, CAMPAIGN));
@@ -84,7 +107,7 @@ async function main(): Promise<void> {
 
     console.log(`\n🏭 ROUTER BUILD GATE PASSED (${passed})`);
   } finally {
-    for (const id of [noSite, hasSite, noAudit]) {
+    for (const id of [noSite, hasSite, noAudit, stageGate]) {
       await db.delete(schema.workflowJobs).where(eq(schema.workflowJobs.businessId, id));
       await db.delete(schema.websiteAudits).where(eq(schema.websiteAudits.businessId, id));
       await db.delete(schema.businesses).where(eq(schema.businesses.id, id));

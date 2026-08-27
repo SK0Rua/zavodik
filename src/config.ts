@@ -151,6 +151,22 @@ export const config = {
       return getSetting('GOSOM_PROXIES').split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
     },
   },
+  // Discovery-side normalization knobs (operator-tunable).
+  discovery: {
+    /**
+     * Extra host suffixes that must NOT count as a business's own website:
+     * booking/menu/messaging shorteners like `msg.me`, `choiceqr.com`. Merged
+     * with the built-in directory list in `extractDomain` (src/workers/normalize.ts),
+     * so a listing that points only at one of these leaves the business "without a
+     * site". Comma/newline separated; scheme and `www.` are stripped.
+     */
+    get extraDirectoryDomains(): string[] {
+      return getSetting('DIRECTORY_DOMAINS_EXTRA')
+        .split(/[,\n]/)
+        .map((s) => s.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, ''))
+        .filter(Boolean);
+    },
+  },
   // Media generation (SPEC §2.5, decisions #12/#13) — subscriptions only.
   media: {
     /** Codex CLI binary for the gen-image flow (ChatGPT subscription, `codex login`). */

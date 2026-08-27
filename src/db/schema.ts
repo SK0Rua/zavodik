@@ -30,6 +30,26 @@ export const campaigns = pgTable('campaigns', {
    * untouched — an ineligible business simply waits in `production_ready`.
    */
   autoBuild: text('auto_build').notNull().default('no_site_only'), // no_site_only | all | manual
+  /**
+   * How far the factory advances a business on its own before it waits for Roman
+   * (Roman's workflow 2026-08-27: review the list first, then command demo prep).
+   * The ladder lives in `src/orchestrator/campaignFlow.ts`; the state machine is
+   * untouched — a business simply rests where the ladder stops it.
+   *
+   *   discover — collect + fast-qualify only, then stop (no photos/facts/audit)
+   *   enrich   — collect data + audit + score, stop at production_ready (no build)
+   *   build (default) — full auto; `auto_build` above then decides WHO gets built
+   */
+  autoStage: text('auto_stage').notNull().default('build'), // discover | enrich | build
+  /**
+   * Cheap keep/drop rules applied at stage 3 (fast-qualify), BEFORE any data is
+   * collected: `{ websiteNone, minRating, minReviews, requireContact }`. Shape and
+   * logic in `src/orchestrator/campaignFlow.ts`. `{}` (or a missing column on an
+   * old row) means "no extra filtering" — exactly the previous behaviour.
+   */
+  discoveryFilter: jsonb('discovery_filter')
+    .$type<{ websiteNone?: boolean; minRating?: number | null; minReviews?: number | null; requireContact?: boolean }>()
+    .notNull().default({}),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 

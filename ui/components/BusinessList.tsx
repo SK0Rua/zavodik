@@ -5,7 +5,10 @@ import { useState, useTransition } from 'react';
 import { Status } from './Status';
 import { safeHttpUrl } from '@/lib/format';
 import type { DotTone } from '@/lib/humanStatus';
-import { startDemoBuild, startDemoBuildBulk, startSocialsDiscoveryBulk } from '@/lib/actions';
+import {
+  startDemoBuild, startDemoBuildBulk, startEnrichment, startEnrichmentBulk,
+  startSocialsDiscoveryBulk,
+} from '@/lib/actions';
 import { runWithToast } from '@/lib/toast';
 import type { BuildButtonState } from '@/lib/buildPolicy';
 import type { SocialsButtonState } from '@/lib/socials';
@@ -24,6 +27,12 @@ export interface ListRow {
   deployUrl: string | null;
   build: BuildButtonState;
   socials: SocialsButtonState;
+  /**
+   * The business rests at `prequalified` because the campaign's stop-point is
+   * `discover` — a reviewable lead waiting for Roman's «Зібрати дані». True only
+   * then, so the button appears exactly where data collection is the next step.
+   */
+  canEnrich: boolean;
 }
 
 /**
@@ -46,6 +55,7 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
   // same `availability` and cannot drift apart (sweep P1-1).
   const buildable = selectedRows.filter((r) => r.build.enabled);
   const searchable = selectedRows.filter((r) => r.socials.enabled);
+  const enrichable = selectedRows.filter((r) => r.canEnrich);
 
   const toggle = (id: string) => setSelected((prev) => {
     const next = new Set(prev);
@@ -95,6 +105,32 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
     });
   };
 
+  const runOneEnrich = (row: ListRow) => {
+    startTransition(() => {
+      void runWithToast(() => startEnrichment(row.id), {
+        onResult: () => setSelected((prev) => {
+          const n = new Set(prev); n.delete(row.id); return n;
+        }),
+      });
+    });
+  };
+
+  const runBulkEnrich = () => {
+    const ids = enrichable.map((r) => r.id);
+    if (!ids.length) return;
+    const ignored = selected.size - ids.length;
+    if (!window.confirm(
+      `Зібрати дані для ${ids.length} бізнесів?`
+      + '\n\nФабрика збере фото, факти й зробить аудит сайтів. Демо це ще не будує.'
+      + (ignored > 0 ? `\n\n${ignored} з обраних пропустимо — для них збір даних зараз недоступний.` : ''),
+    )) return;
+    startTransition(() => {
+      void runWithToast(() => startEnrichmentBulk(ids), {
+        onResult: (res) => { setMessage(res.message); setSelected(new Set()); },
+      });
+    });
+  };
+
   const runBulkSocials = () => {
     const ids = searchable.map((r) => r.id);
     if (!ids.length) return;
@@ -116,6 +152,16 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
       {selected.size > 0 && (
         <div className="flex items-center gap-2 flex-wrap px-4 py-3 border-b border-line bg-accent-soft">
           <span className="text-sm font-medium">Обрано: {selected.size}</span>
+          {enrichable.length > 0 && (
+            <button
+              type="button"
+              className="btn-outline btn-sm"
+              disabled={pending}
+              onClick={runBulkEnrich}
+            >
+              Зібрати дані ({enrichable.length})
+            </button>
+          )}
           <button
             type="button"
             className="btn-outline btn-sm"
@@ -196,7 +242,7 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
                          flex items-center gap-3 flex-wrap
                          justify-start sm:justify-end sm:min-w-[140px]"
             >
-              <RowAction row={r} pending={pending} onBuild={() => runOne(r)} />
+              <RowAction row={r} pending={pending} onBuild={() => runOne(r)} onEnrich={() => runOneEnrich(r)} />
             </span>
           </li>
         ))}
@@ -226,11 +272,28 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
  *    a different sentence from «пропуски не закриті» and a different sentence
  *    again from an inviting green button.
  */
-function RowAction({ row, pending, onBuild }: {
+function RowAction({ row, pending, onBuild, onEnrich }: {
   row: ListRow;
   pending: boolean;
   onBuild: () => void;
+  onEnrich: () => void;
 }) {
+  // A lead waiting in the reviewable list: its next step is data collection, not
+  // a build. Show that verb instead of a disabled «Будувати демо».
+  if (row.canEnrich) {
+    return (
+      <button
+        type="button"
+        className="btn-quiet btn-sm min-h-[36px]"
+        disabled={pending}
+        title="Зібрати фото, факти й зробити аудит сайту. Демо це ще не будує."
+        onClick={onEnrich}
+      >
+        Зібрати дані
+      </button>
+    );
+  }
+
   if (row.deployUrl) {
     return (
       <a

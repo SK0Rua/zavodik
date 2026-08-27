@@ -18,6 +18,7 @@
       "@/*": ["./*"],
       "@factory/schema": ["./factory/schema.ts"],
       "@factory/buildPolicy": ["./factory/buildPolicy.ts"],
+      "@factory/campaignFlow": ["./factory/campaignFlow.ts"],
       "@factory/settings": ["./factory/settings.ts"],
       "@factory/models": ["./factory/models.ts"],
       "@factory/regions": ["./factory/regions.ts"]

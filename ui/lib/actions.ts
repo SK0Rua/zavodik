@@ -22,6 +22,9 @@ import {
   BUILDABLE_STATUSES, BUILD_POLICY_LABELS, buildJobPriority, isActiveJobStatus,
   isActiveProjectState, normalizeBuildPolicy,
 } from './buildPolicy';
+import {
+  AUTO_STAGE_LABELS, normalizeAutoStage, normalizeDiscoveryFilter,
+} from './campaignFlow';
 import { CLOSED_STATUSES, isSocialChannel, socialsButtonState } from './socials';
 import { effectiveValue } from './settings';
 import { humanStatus, reviewAsk } from './humanStatus';
@@ -399,6 +402,16 @@ export async function createCampaign(formData: FormData): Promise<ActionResult> 
   // the factory starts building for on its own. Default is "only those with no
   // site of their own" (Roman's rule), and it stays editable on this page.
   const autoBuild = normalizeBuildPolicy(String(formData.get('autoBuild') ?? ''));
+  // Stop-point ladder + discovery filter (Roman's workflow 2026-08-27). Both are
+  // normalized through the shared campaignFlow logic so a hand-crafted form or a
+  // missing field can never store an invalid value.
+  const autoStage = normalizeAutoStage(String(formData.get('autoStage') ?? ''));
+  const discoveryFilter = normalizeDiscoveryFilter({
+    websiteNone: formData.get('filterWebsiteNone'),
+    requireContact: formData.get('filterRequireContact'),
+    minRating: String(formData.get('filterMinRating') ?? ''),
+    minReviews: String(formData.get('filterMinReviews') ?? ''),
+  });
   if (!city || !niche || !queries.length) {
     return { ok: false, message: 'Потрібні місто, ніша і хоча б один пошуковий запит' };
   }
@@ -413,6 +426,8 @@ export async function createCampaign(formData: FormData): Promise<ActionResult> 
     geofence: { lat, lng, radiusKm },
     targetCount,
     autoBuild,
+    autoStage,
+    discoveryFilter,
     mode: process.env.FACTORY_MODE === 'live' ? 'live' : 'dry_run',
     status: 'running',
   }).onConflictDoNothing().returning({ id: schema.campaigns.id });
@@ -676,6 +691,127 @@ export async function setCampaignBuildPolicy(formData: FormData): Promise<Action
   revalidatePath('/campaigns');
   revalidatePath('/businesses');
   return { ok: true, message: `Політика збірки: ${BUILD_POLICY_LABELS[policy]}` };
+}
+
+/**
+ * Change the stop-point ladder of a running campaign.
+ *
+ * Takes effect on the NEXT auto-advance of each business: the router reads this
+ * value fresh on every transition (`campaignFlow.autoStageAllows`), so switching
+ * a live campaign from `build` down to `discover` stops new data collection for
+ * businesses not yet started, without touching anything already in flight.
+ */
+export async function setCampaignFlow(formData: FormData): Promise<ActionResult> {
+  const campaignId = String(formData.get('campaignId') ?? '');
+  const stage = normalizeAutoStage(String(formData.get('autoStage') ?? ''));
+  if (!campaignId) return { ok: false, message: 'Не вибрано кампанію' };
+  await db.update(schema.campaigns)
+    .set({ autoStage: stage })
+    .where(eq(schema.campaigns.id, campaignId));
+  revalidatePath('/campaigns');
+  revalidatePath('/businesses');
+  return { ok: true, message: `Автозапуск: «${AUTO_STAGE_LABELS[stage]}»` };
+}
+
+/**
+ * Pause / resume a campaign — Roman's «Зупинити» / «Продовжити» buttons.
+ *
+ * A paused campaign starts no new work: the router's `advance()` returns early
+ * for every business whose campaign is paused, so jobs already running finish and
+ * their businesses simply rest until resume. Nothing is cancelled or lost — this
+ * is the same fault-isolation the whole factory is built on. Only the campaign's
+ * own `status` flips; the businesses keep their statuses.
+ */
+export async function setCampaignRunning(formData: FormData): Promise<ActionResult> {
+  const campaignId = String(formData.get('campaignId') ?? '');
+  const paused = String(formData.get('paused') ?? '') === 'true';
+  if (!campaignId) return { ok: false, message: 'Не вибрано кампанію' };
+  const [campaign] = await db.select().from(schema.campaigns)
+    .where(eq(schema.campaigns.id, campaignId));
+  if (!campaign) return { ok: false, message: 'Кампанію не знайдено' };
+  await db.update(schema.campaigns)
+    .set({ status: paused ? 'paused' : 'running' })
+    .where(eq(schema.campaigns.id, campaignId));
+  revalidatePath('/campaigns');
+  revalidatePath('/businesses');
+  return {
+    ok: true,
+    message: paused
+      ? 'Кампанію зупинено — нова робота не запускається, поточні кроки дороблять'
+      : 'Кампанію відновлено — фабрика знову рухає бізнеси далі',
+  };
+}
+
+// ─── Manual "collect data": «Зібрати дані» ───────────────────────────────────
+
+/**
+ * Start data collection (enrichment) for one prequalified business — the manual
+ * counterpart of the router's stop-point gate.
+ *
+ * When a campaign's `auto_stage` is `discover`, businesses rest at `prequalified`
+ * as a reviewable list. This is how Roman hand-picks a promising one and says
+ * "collect its data now": it enqueues `enrich`, whose worker then chains assets +
+ * audit + scoring exactly as an automatic run would, and the business stops at
+ * `production_ready` (the build still needs its own button).
+ *
+ * Refused for anything not `prequalified` (data collection either already ran or
+ * makes no sense), and idempotent per business so a double click is a no-op.
+ */
+export async function startEnrichment(businessId: string): Promise<ActionResult> {
+  const [biz] = await db.select().from(schema.businesses).where(eq(schema.businesses.id, businessId));
+  if (!biz) return { ok: false, message: 'Бізнес не знайдено' };
+  if (biz.status !== 'prequalified') {
+    return { ok: false, message: `${biz.name}: збір даних доступний лише для «в черзі на дані» (зараз ${humanStatus(biz.status).text})` };
+  }
+
+  const [job] = await db.select().from(schema.workflowJobs)
+    .where(and(
+      eq(schema.workflowJobs.businessId, businessId),
+      eq(schema.workflowJobs.jobType, 'enrich'),
+    ))
+    .orderBy(desc(schema.workflowJobs.createdAt)).limit(1);
+  if (isActiveJobStatus(job?.status)) {
+    return { ok: false, message: `${biz.name}: збір даних уже в черзі (${job!.status})` };
+  }
+
+  const jobId = await enqueueJob({
+    name: 'enrich',
+    businessId,
+    campaignId: biz.campaignId,
+    idempotencyKey: `enrich:${businessId}`,
+  });
+
+  revalidatePath('/businesses');
+  revalidatePath(`/businesses/${businessId}`);
+  revalidatePath('/settings', 'layout');
+
+  if (!jobId) return { ok: false, message: `${biz.name}: збір даних уже активний у черзі` };
+  return { ok: true, message: `${biz.name}: збір даних поставлено в чергу` };
+}
+
+/**
+ * Bulk «Зібрати дані» over the selected ids. Per-business fault-isolated exactly
+ * like `startDemoBuildBulk`: one refusal never stops the rest.
+ */
+export async function startEnrichmentBulk(businessIds: string[]): Promise<ActionResult> {
+  const ids = [...new Set(businessIds.filter(Boolean))];
+  if (!ids.length) return { ok: false, message: 'Нічого не обрано' };
+
+  const results = await Promise.all(ids.map(async (id) => {
+    try {
+      return await startEnrichment(id);
+    } catch (err) {
+      return { ok: false, message: `${id}: ${String(err)}` } satisfies ActionResult;
+    }
+  }));
+
+  const queued = results.filter((r) => r.ok).length;
+  const skipped = results.filter((r) => !r.ok);
+  const detail = skipped.length ? ` Пропущено ${skipped.length}: ${skipped.map((s) => s.message).join('; ')}` : '';
+  return {
+    ok: queued > 0,
+    message: `Поставлено в чергу збір даних: ${queued} з ${ids.length}.${detail}`,
+  };
 }
 
 // ─── Social discovery: «Дошукати соцмережі» ──────────────────────────────────

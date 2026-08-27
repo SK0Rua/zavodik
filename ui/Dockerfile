@@ -25,12 +25,16 @@ COPY ui/ ./
 # `ui/factory/schema.ts` arrives as the dev symlink (-> ../../src/db/schema.ts),
 # which dangles here because the copy is rooted at /app. Remove it first, then
 # copy the real file: a plain COPY would otherwise write THROUGH the symlink.
-RUN rm -f ./factory/schema.ts ./factory/buildPolicy.ts ./factory/settings.ts ./factory/models.ts ./factory/regions.ts
+RUN rm -f ./factory/schema.ts ./factory/buildPolicy.ts ./factory/campaignFlow.ts ./factory/settings.ts ./factory/models.ts ./factory/regions.ts
 COPY src/db/schema.ts ./factory/schema.ts
 # Same reasoning as the schema: the build policy (who gets a demo built, in what
 # order) is ONE file shared with the workers, so the router and the UI's
 # "Будувати демо" button can never disagree about eligibility.
 COPY src/orchestrator/buildPolicy.ts ./factory/buildPolicy.ts
+# Same rule again: the campaign-flow controls (the stop-point ladder auto_stage
+# and the discovery filter) are ONE file, so the router's auto-advance and the
+# campaign form can never disagree about where a campaign stops or what it keeps.
+COPY src/orchestrator/campaignFlow.ts ./factory/campaignFlow.ts
 # Third shared file, same rule: the settings REGISTRY (which keys exist, which
 # are secret, how they validate) and the AES-256-GCM envelope format must be
 # ONE definition. A drifting copy here would mean the UI writes a row the
