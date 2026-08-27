@@ -384,3 +384,46 @@ export const settings = pgTable('settings', {
   /** 'roman' for a UI edit, 'worker' for a heartbeat. Credential changes are auditable. */
   updatedBy: text('updated_by'),
 });
+
+// ─── City assessments (pre-campaign probe) ──────────────────────────────────
+
+/**
+ * A quick, throwaway gosom probe that answers "is this city+niche worth a
+ * campaign?" WITHOUT creating one (Roman, 2026-08-27). It persists only the
+ * aggregate numbers and a verdict — never businesses, never evidence — so the
+ * card can show a history of assessments and the numbers survive a page reload
+ * while the background job runs. The row IS the job's status tracker: the worker
+ * flips `status` running → done | failed and fills the counts.
+ *
+ * `no_site` is the opportunity signal: candidates gosom returned with no owned
+ * domain (a social/booking profile counts as no site — SPEC §5), scored with the
+ * same `extractDomain` skip-list the pipeline uses. The verdict formula lives in
+ * `src/lib/cityAssessment.ts`.
+ */
+export const cityAssessments = pgTable('city_assessments', {
+  id: serial('id').primaryKey(),
+  country: text('country').notNull(),
+  city: text('city').notNull(),
+  niche: text('niche').notNull(),
+  language: text('language').notNull(),
+  lat: real('lat'),
+  lng: real('lng'),
+  radiusKm: real('radius_km'),
+  /** gosom scroll depth for the probe — kept small (1-2): a probe, not a scrape. */
+  depth: integer('depth').notNull().default(2),
+  status: text('status').notNull().default('running'), // running | done | failed
+  found: integer('found'),
+  noSite: integer('no_site'),
+  hasSite: integer('has_site'),
+  socialOnly: integer('social_only'),
+  avgRating: real('avg_rating'),
+  sample: jsonb('sample').$type<Array<{
+    name: string; rating: number | null; reviewCount: number | null; hasSite: boolean;
+  }>>(),
+  verdict: text('verdict'), // go | maybe | skip — null while running or on failure
+  error: text('error'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  finishedAt: timestamp('finished_at'),
+}, (t) => [
+  index('city_assess_created_idx').on(desc(t.createdAt)),
+]);

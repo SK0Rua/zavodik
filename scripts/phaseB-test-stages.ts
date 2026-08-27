@@ -9,6 +9,7 @@ import {
   normalizeDiscoveryFilter,
 } from '../src/orchestrator/campaignFlow.js';
 import { extractDomain } from '../src/workers/normalize.js';
+import { cityVerdict, noSiteShare } from '../src/lib/cityAssessment.js';
 import { evaluateReadiness } from '../src/workers/readiness.js';
 import { dimsFromBuffer, upsizeGoogleImage } from '../src/workers/assets.js';
 import { parseGosomCsv, findRecord } from '../src/enrichment/gosomEvidence.js';
@@ -75,6 +76,15 @@ t('build allows the build', autoStageAllows('build', 'content-and-design') === t
 t('build allows enrich', autoStageAllows('build', 'enrich') === true);
 t('approval is never gated by stop-point', autoStageAllows('discover', 'request-approval') === true);
 t('unknown auto_stage falls back to build', normalizeAutoStage('nonsense') === 'build');
+
+console.log('\n# city assessment verdict');
+t('nothing found -> skip', cityVerdict({ found: 0, noSite: 0 }) === 'skip');
+t('many leads, mostly no site -> go', cityVerdict({ found: 30, noSite: 18 }) === 'go');
+t('many leads but almost all have sites -> skip', cityVerdict({ found: 30, noSite: 3 }) === 'skip');
+t('too few leads -> skip', cityVerdict({ found: 4, noSite: 4 }) === 'skip');
+t('middling -> maybe', cityVerdict({ found: 10, noSite: 3 }) === 'maybe');
+t('no-site share is a ratio', Math.abs(noSiteShare({ found: 20, noSite: 5 }) - 0.25) < 1e-9);
+t('share of nothing is zero, not NaN', noSiteShare({ found: 0, noSite: 0 }) === 0);
 
 console.log('\n# stage 8: readiness gate');
 const sourced = (key: string, n: number) => Array.from({ length: n }, () => ({ key, verified: true, sourceId: 1 }));

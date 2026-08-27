@@ -11,7 +11,8 @@ export type JobName =
   | 'collect-assets' | 'refresh-brand'
   | 'audit-website' | 'score-and-qa' | 'readiness-gate' | 'content-and-design'
   | 'build-site' | 'visual-qa' | 'deploy-demo' | 'request-approval'
-  | 'send-outreach' | 'send-followup' | 'poll-replies' | 'daily-summary';
+  | 'send-outreach' | 'send-followup' | 'poll-replies' | 'daily-summary'
+  | 'assess-city';
 
 export interface JobPayload {
   campaignId?: string;
@@ -59,6 +60,10 @@ const RETRY: Partial<Record<JobName, { limit: number; delay: number }>> = {
   'audit-website': { limit: 3, delay: 60 },
   'build-site': { limit: 1, delay: 0 },
   'send-outreach': { limit: 0, delay: 0 }, // NEVER auto-retry sends
+  // A throwaway probe: the worker records its own failure on the assessment row
+  // and does not rethrow, so a retry would only re-run a scrape Roman can trigger
+  // again himself. One attempt.
+  'assess-city': { limit: 0, delay: 0 },
 };
 
 export async function enqueue(

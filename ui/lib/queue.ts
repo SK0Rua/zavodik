@@ -16,7 +16,8 @@ export type JobName =
   | 'collect-assets'
   | 'audit-website' | 'score-and-qa' | 'readiness-gate' | 'content-and-design'
   | 'build-site' | 'visual-qa' | 'deploy-demo' | 'request-approval'
-  | 'send-outreach' | 'send-followup' | 'poll-replies' | 'daily-summary';
+  | 'send-outreach' | 'send-followup' | 'poll-replies' | 'daily-summary'
+  | 'assess-city';
 
 /** Mirrors src/orchestrator/queue.ts. Sends are NEVER auto-retried (SPEC §7). */
 const RETRY: Partial<Record<JobName, { limit: number; delay: number }>> = {

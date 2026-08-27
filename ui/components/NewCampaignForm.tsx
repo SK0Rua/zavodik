@@ -9,6 +9,7 @@ import {
 import {
   AUTO_STAGES, AUTO_STAGE_HINTS, AUTO_STAGE_LABELS, DEFAULT_AUTO_STAGE,
 } from '@/lib/campaignFlow';
+import { NICHES } from '@/lib/niches';
 import { COUNTRIES, LANGUAGES } from '@factory/regions';
 
 /**
@@ -97,10 +98,18 @@ export function NewCampaignForm({
           </div>
           <div>
             <label className="label" htmlFor="niche">Ніша</label>
+            {/* A datalist, not a <select>: Roman picks a common niche from the
+                list or types his own. The value is what goes into the queries. */}
             <input
-              id="niche" name="niche" required placeholder="beauty"
+              id="niche" name="niche" required placeholder="обери або впиши свою"
+              list="niche-options" autoComplete="off"
               value={niche} onChange={(e) => setNiche(e.target.value)}
             />
+            <datalist id="niche-options">
+              {NICHES.map((n) => (
+                <option key={n.value} value={n.value} label={n.label} />
+              ))}
+            </datalist>
           </div>
         </div>
 

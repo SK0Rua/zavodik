@@ -441,6 +441,56 @@ export async function createCampaign(formData: FormData): Promise<ActionResult> 
   return { ok: true, message: `Кампанію «${city} · ${niche}» створено, пошук бізнесів поставлено в чергу` };
 }
 
+/**
+ * Quick city assessment (Roman, 2026-08-27): a throwaway gosom probe that answers
+ * "is this city+niche worth a campaign?" without creating one.
+ *
+ * Persists a `city_assessments` row up front (status `running`) so the card shows
+ * it immediately, then enqueues the background probe under a unique key — one per
+ * assessment, so two different cities never collide on the singleton key. The
+ * worker fills the row and flips it to `done`/`failed`.
+ */
+export async function assessCity(formData: FormData): Promise<ActionResult> {
+  const city = String(formData.get('city') ?? '').trim();
+  const niche = String(formData.get('niche') ?? '').trim();
+  const country = String(formData.get('country') || '').trim()
+    || (await effectiveValue('CAMPAIGN_DEFAULT_COUNTRY')) || 'GR';
+  const language = String(formData.get('language') || '').trim()
+    || (await effectiveValue('CAMPAIGN_DEFAULT_LANGUAGE')) || 'el';
+  const lat = Number(formData.get('lat') ?? 0);
+  const lng = Number(formData.get('lng') ?? 0);
+  const radiusKm = Number(formData.get('radiusKm') ?? 10);
+  // Small on purpose: a probe, not a scrape. Clamp so the form can never ask
+  // gosom for a full-depth crawl under the guise of a quick check.
+  const depth = Math.min(3, Math.max(1, Number(formData.get('depth') ?? 2)));
+  if (!city || !niche) {
+    return { ok: false, message: 'Потрібні місто і ніша' };
+  }
+
+  const [row] = await db.insert(schema.cityAssessments).values({
+    country, city, niche, language,
+    lat: Number.isFinite(lat) ? lat : null,
+    lng: Number.isFinite(lng) ? lng : null,
+    radiusKm: Number.isFinite(radiusKm) ? radiusKm : null,
+    depth, status: 'running',
+  }).returning({ id: schema.cityAssessments.id });
+
+  const id = row!.id;
+  const jobId = await enqueueJob({
+    name: 'assess-city',
+    idempotencyKey: `assess-city:${id}`,
+    data: { assessmentId: id },
+  });
+  if (!jobId) {
+    await db.update(schema.cityAssessments)
+      .set({ status: 'failed', error: 'не вдалося поставити пробу в чергу', finishedAt: new Date() })
+      .where(eq(schema.cityAssessments.id, id));
+    return { ok: false, message: 'Не вдалося поставити оцінку в чергу' };
+  }
+  revalidatePath('/campaigns');
+  return { ok: true, message: `Оцінюю «${city} · ${niche}» — за кілька хвилин зʼявиться результат` };
+}
+
 // ─── Deals ───────────────────────────────────────────────────────────────────
 
 export async function updateDealStage(formData: FormData): Promise<ActionResult> {

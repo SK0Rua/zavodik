@@ -106,6 +106,13 @@
       "when": 1787616000003,
       "tag": "0015_campaign_flow_controls",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1787616000004,
+      "tag": "0016_city_assessments",
+      "breakpoints": true
     }
   ]
 }
