@@ -583,6 +583,16 @@ export async function businessQuickView(id: string): Promise<QuickView | null> {
   ]);
   const audit = audits[0];
   const project = projects[0];
+
+  // Is a build in flight? Same signal buildButtonState uses for «busy», so the
+  // modal shows the live panel exactly when the row is building.
+  const [buildJob] = await db.select({ status: schema.workflowJobs.status }).from(schema.workflowJobs)
+    .where(and(
+      eq(schema.workflowJobs.businessId, id),
+      inArray(schema.workflowJobs.jobType, ['content-and-design', 'build-site']),
+    ))
+    .orderBy(desc(schema.workflowJobs.createdAt)).limit(1);
+  const buildActive = isActiveProjectState(project?.state) || isActiveJobStatus(buildJob?.status);
   const descFact = facts.find((f) => f.key === 'identity.description');
   const description = typeof descFact?.value === 'string' ? descFact.value : null;
   const services = facts
@@ -628,6 +638,8 @@ export async function businessQuickView(id: string): Promise<QuickView | null> {
     deployUrl: project?.deployUrl ?? null,
     auditShotKey: audit?.desktopScreenshotKey ?? null,
     heroKey: hero?.objectKey ?? null,
+    buildActive,
+    projectState: project?.state ?? null,
   };
 }
 

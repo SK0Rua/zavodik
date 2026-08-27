@@ -127,10 +127,12 @@ function renderLine(line: BuildLogLine): { glyph: string; text: string; tone: st
   }
 }
 
-export function LiveBuildPanel({ businessId, projectState }: {
+export function LiveBuildPanel({ businessId, projectState, embedded = false }: {
   businessId: string;
   /** Newest project's state; null while the design stage runs pre-project. */
   projectState: string | null;
+  /** Rendered inside another card (the quick-view modal): drop the card chrome. */
+  embedded?: boolean;
 }) {
   const [lines, setLines] = useState<BuildLogLine[]>([]);
   const [poll, setPoll] = useState<Poll | null>(null);
@@ -250,7 +252,7 @@ export function LiveBuildPanel({ businessId, projectState }: {
   );
 
   return (
-    <section className="card p-5 sm:p-6">
+    <section className={embedded ? '' : 'card p-5 sm:p-6'}>
       <div className="flex items-baseline justify-between gap-3 flex-wrap">
         <h3 className="label mb-0">Збірка наживо</h3>
         <span className="text-sm text-ink-mute">
