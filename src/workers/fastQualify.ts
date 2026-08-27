@@ -13,6 +13,10 @@ import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { transition } from '../orchestrator/statuses.js';
 import { advance } from '../orchestrator/router.js';
+import {
+  type DiscoveryFilter, DEFAULT_DISCOVERY_FILTER,
+  discoveryFilterReasons, normalizeDiscoveryFilter,
+} from '../orchestrator/campaignFlow.js';
 import type { JobPayload } from '../orchestrator/queue.js';
 import { log } from '../lib/logger.js';
 
@@ -52,9 +56,13 @@ export function decideFastQualification(input: {
   businessStatus: string | null;
   normalizedPhone: string | null;
   hasContact: boolean;
+  /** Has an owned domain (not a social/booking profile). Defaults to false. */
+  hasOwnSite?: boolean;
   rating: number | null;
   reviewCount: number | null;
   blockedByDnc: boolean;
+  /** Per-campaign keep/drop rules chosen by Roman at launch. Defaults to no-op. */
+  filter?: DiscoveryFilter;
 }): FastQualifyDecision {
   const reasons: string[] = [];
   let verdict: FastQualifyDecision['verdict'] = 'prequalified';
@@ -63,6 +71,18 @@ export function decideFastQualification(input: {
   const review = (reason: string) => { if (verdict !== 'rejected') verdict = 'needs_review'; reasons.push(reason); };
 
   if (input.blockedByDnc) reject('do_not_contact');
+
+  // Campaign discovery filter: hard rejects the operator explicitly asked for
+  // ("лише без сайту", min rating/reviews, must have a contact). These run
+  // BEFORE data collection so a filtered-out lead never costs enrichment time.
+  for (const r of discoveryFilterReasons(input.filter ?? DEFAULT_DISCOVERY_FILTER, {
+    hasOwnSite: input.hasOwnSite ?? false,
+    hasContact: input.hasContact || !!input.normalizedPhone,
+    rating: input.rating,
+    reviewCount: input.reviewCount,
+  })) {
+    reject(r);
+  }
 
   if (input.businessStatus && CLOSED_STATUSES.includes(input.businessStatus)) {
     reject(`closed:${input.businessStatus.toLowerCase()}`);
@@ -98,6 +118,10 @@ export async function fastQualifyHandler(payload: JobPayload): Promise<void> {
   const [biz] = await db.select().from(schema.businesses).where(eq(schema.businesses.id, businessId));
   if (!biz) throw new Error(`business not found: ${businessId}`);
 
+  const [campaign] = await db.select().from(schema.campaigns)
+    .where(eq(schema.campaigns.id, biz.campaignId));
+  const filter = normalizeDiscoveryFilter(campaign?.discoveryFilter);
+
   const contacts = await db.select().from(schema.businessContacts)
     .where(eq(schema.businessContacts.businessId, businessId));
   const dnc = await db.select().from(schema.doNotContact);
@@ -113,9 +137,11 @@ export async function fastQualifyHandler(payload: JobPayload): Promise<void> {
     businessStatus: biz.businessStatus,
     normalizedPhone: biz.normalizedPhone,
     hasContact: contacts.some((c) => c.channel !== 'website'),
+    hasOwnSite: !!biz.domain,
     rating: biz.rating,
     reviewCount: biz.reviewCount,
     blockedByDnc,
+    filter,
   });
 
   await db.insert(schema.qualifications).values({

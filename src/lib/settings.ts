@@ -338,6 +338,11 @@ export const SETTINGS: SettingDef[] = [
   { key: 'GOSOM_JOB_TIMEOUT_SECONDS', label: 'Скільки чекати на результат скрейпу (с)', group: 'system', kind: 'number', default: '1800', validate: num(60, 14400), advanced: true },
   { key: 'GOSOM_PROXIES', label: 'Проксі для пошуку бізнесів', group: 'system', kind: 'textarea', secret: true, advanced: true, hint: 'По одному в рядку або через кому. Порожньо = ходити з IP сервера.' },
   {
+    key: 'DIRECTORY_DOMAINS_EXTRA', label: 'Домени, що не рахуються за сайт', group: 'system', kind: 'textarea',
+    placeholder: 'msg.me\nchoiceqr.com',
+    hint: 'По одному в рядку або через кому. Посилання на ці домени фабрика вважає профілем/каталогом, а не власним сайтом бізнесу — тож бізнес лишається «без сайту». Вбудований список (facebook, instagram, booksy, fresha, treatwell, linktr.ee, business.site) уже враховано.',
+  },
+  {
     key: 'WORKSPACE_GC', label: 'Прибирати за собою після збірки', group: 'system', kind: 'boolean', default: 'true',
     hint: 'Видаляє node_modules і кеш білду (~735 МБ на сайт). Вихідний код демо лишається.',
   },

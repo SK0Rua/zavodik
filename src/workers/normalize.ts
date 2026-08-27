@@ -9,6 +9,7 @@ import { transition } from '../orchestrator/statuses.js';
 import { advance } from '../orchestrator/router.js';
 import type { JobPayload } from '../orchestrator/queue.js';
 import type { RawCandidate } from './discovery.js';
+import { config } from '../config.js';
 import { log } from '../lib/logger.js';
 
 export function normalizePhone(phone: string | null): string | null {
@@ -17,13 +18,20 @@ export function normalizePhone(phone: string | null): string | null {
   return digits.length >= 8 ? digits : null;
 }
 
-export function extractDomain(url: string | null): string | null {
+/**
+ * The owned domain of a URL, or null when it is a booking/directory/social
+ * profile rather than a business's own site (SPEC §5 invariant). `extra` carries
+ * the operator's skip-list from settings (`msg.me`, `choiceqr.com`, …) so a
+ * short-lived booking/menu shortener can be classified as "not a real site"
+ * without a code change — see config.discovery.extraDirectoryDomains.
+ */
+export function extractDomain(url: string | null, extra: string[] = []): string | null {
   if (!url) return null;
   try {
     const host = new URL(url).hostname.replace(/^www\./, '').toLowerCase();
     // booking/directory profiles are NOT owned websites
-    const directories = ['facebook.com', 'instagram.com', 'booksy.com', 'fresha.com', 'treatwell.gr', 'linktr.ee', 'business.site'];
-    if (directories.some((d) => host.endsWith(d))) return null;
+    const directories = ['facebook.com', 'instagram.com', 'booksy.com', 'fresha.com', 'treatwell.gr', 'linktr.ee', 'business.site', ...extra];
+    if (directories.some((d) => host === d || host.endsWith(`.${d}`))) return null;
     return host;
   } catch { return null; }
 }
@@ -52,7 +60,7 @@ export async function normalizeHandler(payload: JobPayload): Promise<void> {
   if (!campaign) throw new Error(`campaign not found: ${campaignId}`);
 
   const nPhone = normalizePhone(cand.phone);
-  const domain = extractDomain(cand.websiteUrl);
+  const domain = extractDomain(cand.websiteUrl, config.discovery.extraDirectoryDomains);
   const nName = normalizeName(cand.name);
 
   // 1) place_id

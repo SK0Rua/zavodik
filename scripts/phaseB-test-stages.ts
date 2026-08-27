@@ -4,6 +4,11 @@
  * rejected or what counts as production-ready.
  */
 import { decideFastQualification } from '../src/workers/fastQualify.js';
+import {
+  autoStageAllows, discoveryFilterReasons, normalizeAutoStage,
+  normalizeDiscoveryFilter,
+} from '../src/orchestrator/campaignFlow.js';
+import { extractDomain } from '../src/workers/normalize.js';
 import { evaluateReadiness } from '../src/workers/readiness.js';
 import { dimsFromBuffer, upsizeGoogleImage } from '../src/workers/assets.js';
 import { parseGosomCsv, findRecord } from '../src/enrichment/gosomEvidence.js';
@@ -33,6 +38,43 @@ t('very few reviews -> needs_review', decideFastQualification({ ...base, reviewC
 t('poor rating with volume -> needs_review', decideFastQualification({ ...base, rating: 2.9, reviewCount: 50 }).verdict === 'needs_review');
 t('rejection beats needs_review', decideFastQualification({ ...base, reviewCount: 1, blockedByDnc: true }).verdict === 'rejected');
 t('reason is always recorded', decideFastQualification({ ...base, blockedByDnc: true }).reasons.includes('do_not_contact'));
+
+console.log('\n# discovery filter (campaign-level, applied in stage 3)');
+const noSite = { websiteNone: true, minRating: null, minReviews: null, requireContact: false };
+t('empty filter passes a healthy salon', decideFastQualification({ ...base }).verdict === 'prequalified');
+t('websiteNone rejects a business WITH its own site',
+  decideFastQualification({ ...base, hasOwnSite: true, filter: normalizeDiscoveryFilter(noSite) }).verdict === 'rejected');
+t('websiteNone passes a business without a site',
+  decideFastQualification({ ...base, hasOwnSite: false, filter: normalizeDiscoveryFilter(noSite) }).verdict === 'prequalified');
+t('has_own_site reason is recorded',
+  decideFastQualification({ ...base, hasOwnSite: true, filter: normalizeDiscoveryFilter(noSite) }).reasons.includes('filter:has_own_site'));
+t('minReviews rejects below threshold',
+  decideFastQualification({ ...base, reviewCount: 2, filter: normalizeDiscoveryFilter({ minReviews: 5 }) }).verdict === 'rejected');
+t('minRating rejects only with enough reviews behind it',
+  decideFastQualification({ ...base, rating: 3.0, reviewCount: 10, filter: normalizeDiscoveryFilter({ minRating: 4 }) }).verdict === 'rejected');
+t('minRating spares a low-rated place with too few reviews',
+  decideFastQualification({ ...base, rating: 3.0, reviewCount: 2, filter: normalizeDiscoveryFilter({ minRating: 4, minReviews: null }) }).reasons.every((r) => !r.startsWith('filter:below_min_rating')));
+t('requireContact rejects a business with no way to reach it',
+  decideFastQualification({ ...base, normalizedPhone: null, hasContact: false, filter: normalizeDiscoveryFilter({ requireContact: true }) }).reasons.includes('filter:no_contact'));
+t('discoveryFilterReasons is pure and returns tokens',
+  discoveryFilterReasons(normalizeDiscoveryFilter(noSite), { hasOwnSite: true, hasContact: true, rating: 5, reviewCount: 9 }).includes('filter:has_own_site'));
+
+console.log('\n# extractDomain skip-list (msg.me / choiceqr etc.)');
+t('owned domain is kept', extractDomain('https://nicenails.gr/book') === 'nicenails.gr');
+t('built-in directory returns null', extractDomain('https://instagram.com/nicenails') === null);
+t('extra skip domain -> not an owned site', extractDomain('https://msg.me/nicenails', ['msg.me', 'choiceqr.com']) === null);
+t('subdomain of a skip domain -> null', extractDomain('https://x.choiceqr.com/menu', ['msg.me', 'choiceqr.com']) === null);
+t('a domain merely CONTAINING a skip token is kept', extractDomain('https://notchoiceqr.com', ['choiceqr.com']) === 'notchoiceqr.com');
+
+console.log('\n# stop-point ladder (auto_stage)');
+t('discover blocks enrich', autoStageAllows('discover', 'enrich') === false);
+t('discover allows fast-qualify', autoStageAllows('discover', 'fast-qualify') === true);
+t('enrich allows enrich', autoStageAllows('enrich', 'enrich') === true);
+t('enrich blocks the build', autoStageAllows('enrich', 'content-and-design') === false);
+t('build allows the build', autoStageAllows('build', 'content-and-design') === true);
+t('build allows enrich', autoStageAllows('build', 'enrich') === true);
+t('approval is never gated by stop-point', autoStageAllows('discover', 'request-approval') === true);
+t('unknown auto_stage falls back to build', normalizeAutoStage('nonsense') === 'build');
 
 console.log('\n# stage 8: readiness gate');
 const sourced = (key: string, n: number) => Array.from({ length: n }, () => ({ key, verified: true, sourceId: 1 }));
