@@ -6,9 +6,9 @@
 
 | Рантайм | Оплата | Аутентифікація |
 |---|---|---|
-| `claude-code` (default) | підписка Claude Pro/Max Романа | сервер: `claude setup-token` → токен у налаштуваннях; локально: власний логін CLI |
-| `codex` | підписка ChatGPT | `codex login` (токен у `$CODEX_HOME`) |
-| `opencode` | підписка провайдера, залогіненого в opencode (Kimi, Zen, …) | `opencode providers login` (креденшели в `~/.local/share/opencode/auth.json`) |
+| `claude-code` (default) | підписка Claude Pro/Max Романа | UI запускає `claude setup-token` у runner; токен у runner credential volume |
+| `codex` | підписка ChatGPT | UI запускає `codex login`; credential у runner `$CODEX_HOME` |
+| `opencode` | підписка провайдера з каталогу models.dev (GLM Coding Plan, Kimi, Zen, …) | форма «провайдер + ключ» в «Акаунтах» пише `auth.json` у runner volume `opencodehome`; провайдер має бути в `OPENCODE_PROVIDERS` |
 
 Усі реалізують `AgentRuntime` (`src/agents/types.ts`):
 
@@ -44,6 +44,9 @@ import { runCodeAgent } from '../agents/codeAgent.js';   // workspace
 | `src/agents/retry.ts` | спільний retry-цикл `structured()` (rate-limit не витрачає спробу, фінал — `NEEDS_HUMAN`) |
 | `src/agents/schema.ts` | zod → JSON Schema, стійкий парсер JSON з відповіді |
 | `src/agents/semaphore.ts` | обмеження конкурентності агентних викликів |
+| `src/agents/confinement.ts` | production confinement: Codex exact-root profiles, `confinedCommand()` (той самий `codex sandbox`) для рантаймів без власної пісочниці, Claude tool-sandbox allowlist з egress-реєстру |
+| `src/runner/egressRegistry.ts` | єдине джерело egress-доменів (`infra/agent-egress/`): каталог провайдерів OpenCode + inherent domains; читають Squid/CoreDNS (через `render.sh`), Claude sandbox, broker і UI |
+| `src/runner/providerBroker.ts` | loopback credential broker executor-а: підміняє placeholder на ключ з `auth.json` і форвардить на API base провайдера через egress-проксі |
 
 ### Як додати новий harness (чекліст)
 
@@ -56,7 +59,12 @@ import { runCodeAgent } from '../agents/codeAgent.js';   // workspace
    `normalizeRuntime` (`src/config.ts`).
 4. Якщо CLI має інтерактивний логін — додай флоу в `src/api/accounts.ts`
    (PTY через `script -q`, як у claude; plain spawn, як у codex) і картку в
-   `ui/components/ConnectedAccounts.tsx`.
+   `ui/components/ConnectedAccounts.tsx`. Якщо credential — це файл з ключем
+   (як `auth.json` OpenCode), пиши його напряму з `src/runner/credentials.ts`
+   через форму в картці, а не жени TUI.
+5. Якщо CLI не має власної OS-пісочниці — запускай його через
+   `confinedCommand()` (Codex exact-root sandbox) і не давай йому ключа:
+   маршрутизуй провайдера через `src/runner/providerBroker.ts`.
 
 Більше ніщо не гілкується за id рантайму: tmux-транспорт, черга, перевірки й
 консоль ідуть через capability-методи інтерфейсу (`terminalLaunch`,
@@ -66,9 +74,9 @@ import { runCodeAgent } from '../agents/codeAgent.js';   // workspace
 
 **Claude Code:** нативно через Agent SDK — `outputFormat: { type: 'json_schema', schema }` (є в `@anthropic-ai/claude-agent-sdk` 0.3.233), результат читається з `result.structured_output`. Плюс `allowedTools: []`, turn budget (див. нижче), `permissionMode: 'bypassPermissions'`, `settingSources: []` (щоб проєктні CLAUDE.md/скіли не втручались у витяг фактів). У промпт додатково вкладається JSON Schema — якщо `structured_output` порожній, парситься фінальний текст (зняття ```-огорожі, збалансований span з урахуванням лапок). Невалідний JSON/схема → retry (за замовчуванням 3 спроби), далі `AgentSchemaError` з кодом `NEEDS_HUMAN` (спека §7: schema failure не крутиться в retry-циклі).
 
-**Codex:** `codex exec --output-schema <file> --output-last-message <file> --sandbox read-only --ephemeral`; JSON береться з останнього повідомлення агента і валідується тією ж zod-схемою.
+**Codex:** `codex exec --output-schema <file> --output-last-message <file> --ephemeral`; у production CLI отримує runner-owned exact-root profile `factory-read-only`, у локальній розробці — legacy `--sandbox read-only`. JSON береться з останнього повідомлення агента і валідується тією ж zod-схемою.
 
-**OpenCode:** `opencode run --format json` без нативного schema-прапора — контракт JSON вкладається в промпт (`jsonOnlyInstruction`), відповідь — останній `text`-івент, парситься тим самим `extractJson`. Помилки стріму класифікуються в `errorFromEvents`: statusCode 401/402/429 чи "payment required" → `RateLimitedError` (пауза), інше → звичайна помилка.
+**OpenCode:** `opencode run --format json` без нативного schema-прапора — контракт JSON вкладається в промпт (`jsonOnlyInstruction`), відповідь — останній `text`-івент, парситься тим самим `extractJson`. Помилки стріму класифікуються в `errorFromEvents`: statusCode 402/429 чи "payment required" → `RateLimitedError` (пауза); 401/403 → `AgentAuthError` (`NEEDS_HUMAN` з підказкою перепідключити провайдера в «Акаунтах», без retry); інше → звичайна помилка.
 
 **Мультимодальність (visual QA):** скриншоти пишуться у тимчасову теку, агенту дозволяється лише `Read` і передаються шляхи до файлів — картинки читає він сам. Жодних base64-payload'ів в API.
 
@@ -136,7 +144,7 @@ Rate-limit і timeout лишаються справжніми помилками
 
 ## Ізоляція workspace-агента (безпека)
 
-Builder працює з `bypassPermissions` (він мусить сам ставити пакети і робити білди без нагляду), тому два механізми в `src/agents/sandbox.ts` є навантаженими:
+Builder працює без ручних permission prompt-ів (він мусить сам ставити пакети і робити білди), але JS-guard — лише defense in depth. Production boundary складається з кількох незалежних шарів:
 
 **1. Allowlist змінних оточення.** Процес фабрики тримає SMTP/IMAP-паролі, Telegram-токен, S3-ключі і `DATABASE_URL`. Агенту передається **тільки явний список**: `PATH`, `HOME`, `SHELL`, `TERM`, `TMPDIR`, `LANG`/`LC_*`, `NODE*`/`PNPM_*`/`NPM_CONFIG_*`/`COREPACK_*`, `HTTP(S)_PROXY`/`NO_PROXY`, `CLAUDE_CODE_OAUTH_TOKEN`, `CODEX_HOME`. Все інше відкидається, плюс окремий denylist (`SMTP_`, `IMAP_`, `TELEGRAM_`, `WAHA_`, `S3_`, `AWS_`, `DATABASE_`, `UI_`, `ANTHROPIC_`, `OPENAI_`, …) як другий пояс. Те саме застосовано до Codex-адаптера і до `structured()` — немає причин показувати секрети моделі, яка обробляє чужий скрейпнутий текст.
 
@@ -144,13 +152,19 @@ Builder працює з `bypassPermissions` (він мусить сам став
 
 > **Важливо для тих, хто це рефакторитиме:** `canUseTool` тут НЕ працює. Під `bypassPermissions` SDK авто-схвалює кожен виклик до колбека і друкує `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED`; навіть під `permissionMode: 'default'` голі імена в `allowedTools` перекривають колбек. Перевірено емпірично на 0.3.233: файл записався попри `deny`-колбек. Працює саме **PreToolUse hook** — його `deny` дотримується. Не «спрощуй» це назад до `canUseTool`: guard мовчки перестане існувати.
 
-**Це не периметр безпеки, а другий пояс.** Реальна ізоляція в проді — Docker-контейнер (спека §2.3: інтернету немає, крім пакетних реєстрів). У SETUP при розгортанні варто додати фільтрацію egress на рівні `--network` (дозволити лише registry.npmjs.org і API Anthropic/OpenAI), щоб мережеві обмеження трималися ядром, а не регекспами.
+**3. Native tool sandbox.** Claude SDK отримує `sandbox.enabled=true`, `failIfUnavailable=true`, exact workspace read/write, deny для всього runner root, auth і `/proc`, credentials deny та strict network allowlist. Codex використовує runner-owned profiles у `$CODEX_HOME/config.toml`: весь `/app/runner-work` прихований, назад відкривається тільки поточний workspace; package store повертається лише tool/package profiles. `TMPDIR` теж лежить усередині workspace. Якщо native sandbox не стартує, readiness executor-а падає і gateway/factory не запускаються.
+
+**4. Docker/мережевий периметр.** Executor не підключений до звичайної Compose-мережі й не має default gateway. Він бачить тільки дві `internal: true` мережі: gateway-control та runner-egress. Startup, live health і спільний guard усіх authenticated control requests читають kernel route tables та fail-closed відхиляють будь-який IPv4/IPv6 default route, зокрема мережу, яку deployment platform додала після конвертації compose. Public DNS проходить через CoreDNS, який за замовчуванням forward-ить лише provider/package zones; HTTP(S) — через Squid, який дозволяє тільки затверджені provider/package domains і відсікає private/link-local/direct-IP/довільний CONNECT. Обидва allowlist-и рендеряться при старті контейнерів з одного реєстру `infra/agent-egress/` (`runtime-domains.txt` + `opencode-providers.tsv`, відфільтрований `OPENCODE_PROVIDERS`), той самий реєстр читає `src/runner/egressRegistry.ts` для Claude tool-sandbox і broker-а — жодних дубльованих списків доменів. `RUNNER_DNS_PROTECTION_ENABLED=false` є явним operator escape hatch для unrestricted public DNS, але не відкриває внутрішні service names, HTTP allowlist або прямий network route. `node fetch`, Python urllib без proxy, raw sockets, Postgres/MinIO/factory/host і Docker socket недоступні. Root FS read-only, capabilities скинуті, `no-new-privileges`, PID/memory limits; auth — у nested named-volume overlays, яких gateway не монтує. Executor окремо вимикає Docker `seccomp` profile і працює під власним AppArmor-профілем `wf-runner-executor` (`deploy/apparmor/`; у ядро хоста його завантажує privileged сервіс `agent-runner-apparmor` з того ж compose, executor чекає на його healthcheck): це docker-default плюс `userns`/`mount`/`pivot_root`, без яких вкладений bubblewrap не стартує. `apparmor=unconfined` не підходить — на Ubuntu 24.04 (`kernel.apparmor_restrict_unprivileged_userns=1`) unconfined-процес при створенні userns переводиться в профіль `unprivileged_userns` без capabilities, і bwrap падає на `setting up uid map: Permission denied`. Нічого з цього не додає `privileged` чи `SYS_ADMIN`, а решта контейнерів лишається під стандартними host profiles.
+
+**5. Output gate.** Значення credentials завантажуються тільки в coordinator memory, рекурсивно маскуються у structured logs/build-log і перед sync шукаються в output як точні byte sequences. Збіг або symlink/special file → `SECURITY_VIOLATION`; gateway у такому випадку не синхронізує жоден output назад у factory storage.
+
+OpenCode 1.18 має permission rules, але не має enforceable OS sandbox для tool subprocesses. Тому в production весь процес `opencode` (і `structured()`, і `codeAgent()`, і TUI у tmux) запускається через `confinedCommand()` — `codex sandbox -P factory-tools -C <workspace> -- opencode …`, тобто в тому самому bubblewrap-профілі, що застосовується до tool-процесів Codex і перевіряється startup-пробою: система read-only, весь `/app/runner-work` (а з ним і справжній `auth.json`) прихований, назад rw відкриваються лише поточний workspace і pnpm store, приватні PID/IPC/UTS namespaces, спільна мережа (loopback до broker-а, egress лише через проксі). Одна умова на рівні хоста: Bun-рантайм OpenCode без `/proc/self` падає на старті, а вкладений procfs ядро не дає змонтувати, поки діють masked paths Docker-а. Тому executor у compose має `systempaths=unconfined` (безпечно: non-root, усі capabilities скинуті, AppArmor-профіль зберігає docker-default deny на запис у `/proc`/`/sys`); з ним `codex sandbox` монтує приватний `/proc`, і startup-проба перевіряє, що з пісочниці не видно ні `auth.json`, ні env жодного процесу executor-а (`grep EXECUTOR_API_KEY /proc/*/environ` порожній). XDG-теки OpenCode переносяться у `<workspace>/.factory-tmp/sandbox-home`. Ключ до моделі доходить через **credential broker** executor-а (`src/runner/providerBroker.ts`, loopback `127.0.0.1:8792`): згенерований `OPENCODE_CONFIG` містить `provider.<id>.options.{baseURL: http://127.0.0.1:8792/<id>, apiKey: placeholder}` для кожного підключеного провайдера, broker підміняє placeholder на ключ з `auth.json` (у тому заголовку, який обрав SDK: `Authorization` чи `x-api-key`) і форвардить на API base з каталогу через Squid. Пісочниця може лише витрачати підписку підключеного провайдера — не прочитати ключ і не дістатись іншого хоста. Перевірено на 1.18.23 (порожній XDG + такий конфіг → запит на broker з placeholder-ключем; всередині runner-а → реальний 401 від api.z.ai на bogus-ключ) і в `test:runner-isolation`.
 
 > **Другий транспорт того самого гарда.** Коли збірка йде в tmux (`BUILDER_MODE=tmux`, див. `docs/BUILD-PIPELINE.md`), агент — це інтерактивний CLI, а CLI вміє тільки *командний* хук, не JS-замикання. Тому `src/agents/guardHook.ts` загортає ту саму `evaluateToolCall()` у процес «payload зі stdin → рішення в stdout» і вмикається через `--settings`. Рішуча функція одна на два шляхи; різниця тільки в транспорті, і `pnpm test:tmux-agent` звіряє їх на однакових входах, щоб tmux-шлях не став мовчки нергардженим. Хук fail-closed так само: нечитабельний payload, відсутній аргумент воркспейсу чи виняток — усе deny.
 >
 > PreToolUse-хуки спрацьовують **до** перевірки permission-mode, тому `deny` тримається і під `--dangerously-skip-permissions` — та сама властивість, на якій тримається SDK-шлях.
 
-Перевірка: `pnpm tsx scripts/test-agent-sandbox.ts` (33 офлайн-тести) і `--live` (реальний агент пробує вкрасти `~/.ssh` і писати поза workspace); `pnpm test:tmux-agent` — паритет CLI-хука з SDK-гардом.
+Перевірка: `pnpm tsx scripts/test-agent-sandbox.ts` і `--live` (реальний агент пробує вкрасти `~/.ssh` і писати поза workspace); `pnpm test:tmux-agent` — паритет CLI-хука з SDK-гардом; `pnpm test:runner-isolation` — реальні Compose-проби network/auth/workspace/output boundaries.
 
 ## Метрики використання (§9)
 
@@ -174,22 +188,34 @@ Builder працює з `bypassPermissions` (він мусить сам став
 
 ## Конкурентність
 
-`AGENT_CONCURRENCY` (дефолт 1) обмежує одночасні агентні виклики через in-process семафор (`withAgentSlot`, `src/agents/semaphore.ts`) — він огортає і `structured`, і `codeAgent` в обох адаптерах. Другий пояс: агентні типи jobs (`enrich`, `score-and-qa`, `content-and-design`, `build-site`, `visual-qa`, `request-approval`) реєструються в pg-boss з `teamSize: 1, batchSize: 1`, і їм дається довший `expireInSeconds` (90 хв), бо збірка сайту з `pnpm build` довга.
+Factory передає worker-group і її актуальний ліміт у кожному runner request.
+Executor відновлює окремі `core` / `enrich` / `build` семафори через
+`withAgentSlot`; attachable terminal додатково має окремий ліміт 1 через єдиний
+ttyd-порт. На стороні черги `WorkerConsumerPool` підтримує потрібну кількість
+окремих pg-boss consumer handles для кожної групи (`batchSize: 1`, priority
+увімкнений). Отже, фактична capacity видима в heartbeat і змінюється без
+застарілого `teamSize` припущення. Агентні job definitions мають довший
+`expireInSeconds` (90 хв), бо збірка сайту з `pnpm build` довга.
 
 ## Docker
 
-Образ ставить усі три CLI:
+Окремий `Dockerfile.runner` ставить усі три CLI в executor (версії піновані):
 
 ```dockerfile
-RUN npm i -g @anthropic-ai/claude-code @openai/codex opencode-ai
-ENV CODEX_HOME=/home/node/.codex
+RUN npm i -g @anthropic-ai/claude-code@2.1.239 @openai/codex@0.149.1 opencode-ai@1.18.23
+ENV CODEX_HOME=/app/runner-work/.private/codex
 ENV OPENCODE_DISABLE_AUTOUPDATE=1
 USER node          # НЕ hardening: --dangerously-skip-permissions відмовляється працювати під root
 ```
 
-`CLAUDE_CODE_OAUTH_TOKEN` підхоплюється з `.env`. Для Codex змонтуй `~/.codex`
-як volume (`codexhome`), для OpenCode — `~/.local/share/opencode`
-(`opencodehome`), щоб логіни підписок переживали рестарти.
+Claude token пишеться account-flow у runner-owned volume файлом `0600`. Codex і
+OpenCode мають окремі `codexhome` / `opencodehome` volumes. Factory-контейнери
+не монтують жоден із них і не містять provider CLI.
+
+Фактичний production path для Codex — `/app/runner-work/.private/codex`, для
+Claude credentials — `/app/runner-work/.private/credentials`, для OpenCode —
+`/app/runner-work/.private/provider/opencode`. Це nested volume
+overlays: executor бачить credential, gateway у своєму `runnerwork` — ні.
 
 Плюс два бінарники для термінала збірки: `tmux` (з apt) і `ttyd`. **ttyd ставиться
 не через apt**, а як пінований статичний бінарник із перевіркою sha256: його немає
@@ -206,11 +232,15 @@ pnpm tsx scripts/test-agent-salvage.ts     # рятування результа
 pnpm tsx scripts/test-agent-sandbox.ts     # env-allowlist + guard (33 офлайн); --live = реальна атака
 pnpm tsx scripts/verify-agent-runtime.ts   # реальні виклики по підписці
 AGENT_RUNTIME=codex pnpm tsx scripts/verify-agent-runtime.ts
-AGENT_RUNTIME=opencode AGENT_MODEL=opencode/x-preview-f-free pnpm tsx scripts/verify-agent-runtime.ts
+AGENT_RUNTIME=opencode AGENT_MODEL=zai-coding-plan/glm-4.7 pnpm tsx scripts/verify-agent-runtime.ts
+pnpm test:provider-broker               # credential broker офлайн: підміна ключа, стрім, відмови
 pnpm tsx scripts/test-tmux-agent.ts --live-opencode  # реальна tmux-сесія opencode TUI
+pnpm test:agent-runner                 # protocol + gateway/executor + sync, без підписок
+pnpm test:runner-isolation              # реальний Compose: egress/DNS/raw sockets/auth/workspaces/readiness + OpenCode connect→run→NEEDS_HUMAN
+pnpm egress:catalog                     # оновити infra/agent-egress/opencode-providers.tsv з models.dev
 ```
 
-## Групи воркерів: семафор на процес (рішення Романа, 2026-08-16)
+## Групи воркерів і capacity через runner (оновлено 2026-08-28)
 
 `AGENT_CONCURRENCY` і `withAgentSlot` обмежують агентні виклики **в межах одного
 процесу**. Поки `startWorkers()` реєстрував усі типи jobs, це означало спільну
@@ -218,9 +248,7 @@ FIFO-чергу: 40-хвилинна сесія `build-site` або блокув
 сама ставала в чергу за ним (реально спостережено: 126 `enrich` у черзі, білд не
 стартував 50 хвилин).
 
-Рішення — топологія процесів, не зміна архітектури (спека §2.3(а) говорить про
-конкурентність, а вона конфігурується на процес). `src/workers/main.ts` реєструє
-jobs групами `core` / `enrich` / `build`:
+Factory і надалі реєструє jobs групами `core` / `enrich` / `build`:
 
 ```bash
 pnpm workers                      # усі групи (дефолт, локальна розробка)
@@ -229,10 +257,10 @@ pnpm workers --only=build         # контейнер factory-build
 WORKER_GROUPS=build pnpm workers  # те саме через env
 ```
 
-Процес, що хостить рівно одну агентну групу, бере її власний ліміт:
-`AGENT_CONCURRENCY_BUILD` / `AGENT_CONCURRENCY_ENRICH` (інакше — глобальний
-`AGENT_CONCURRENCY`). Розклади реєструє тільки `core`. Деталі груп і сервісів
-compose — `docs/BUILD-PIPELINE.md` §11.
+Factory передає назву поточної групи й її ефективний ліміт у runner request.
+Executor відновлює три незалежні семафори, тому один довгий `build` не забирає
+слот у `enrich`, хоча provider CLI централізовані. Розклади реєструє тільки
+`core`. Деталі груп і сервісів compose — `docs/BUILD-PIPELINE.md` §11.
 
 Перемикання `AGENT_RUNTIME=codex` у UI кладе всі агентні етапи на підписку
 ChatGPT. Поточний runtime і фактичні normal/heavy моделі можна запитати прямо

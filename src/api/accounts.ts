@@ -6,10 +6,10 @@
  * has to find a terminal, run `claude setup-token` there, and copy a secret
  * between two machines. The console should just have a **Підключити** button.
  *
- * These flows live in the FACTORY process, not in the UI, for the same reason
- * the checks do (see `checks.ts`): the factory container is the one with the
- * `claude` and `codex` CLIs, and it is the process whose credentials actually
- * get used. A login brokered anywhere else would prove nothing.
+ * These flows live beside the runtime that owns the credential, not in the UI.
+ * In production that is the isolated runner executor; explicit local-development
+ * mode keeps the same engine in the factory process. A login brokered by the UI
+ * container would authenticate the wrong filesystem and prove nothing.
  *
  * ─── What the CLIs really do (measured, not assumed) ─────────────────────────
  *
@@ -43,15 +43,26 @@
  * a `claude` process camped on a PTY forever.
  *
  * Nothing here touches business data, and no secret is ever returned to the
- * browser: the resulting token goes straight into the encrypted settings store.
+ * browser: the resulting token goes straight into the runtime credential store.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { config } from '../config.js';
 import { log } from '../lib/logger.js';
-import { writeSetting, reloadSettings } from '../lib/settingsStore.js';
-import { runCheck, type CheckResult } from './checks.js';
+import { runLocalAgentCheck, type CheckResult } from './checks.js';
+import {
+  clearRunnerClaudeCredential,
+  connectOpenCodeProvider,
+  connectedOpenCodeProviderIds,
+  disconnectOpenCodeProvider,
+  runnerCredentialStoreEnabled,
+  seedRunnerClaudeCredential,
+} from '../runner/credentials.js';
+import { enabledOpenCodeProviders, openCodeCatalog } from '../runner/egressRegistry.js';
+import { runnerConfinementRequired } from '../agents/confinement.js';
 
-export type AccountProvider = 'claude' | 'codex';
+export type AccountProvider = 'claude' | 'codex' | 'opencode';
+/** Providers whose login is an interactive CLI session (URL + code / device auth). */
+export type CliAccountProvider = 'claude' | 'codex';
 
 /** Where a connection flow currently is. The UI renders one screen per phase. */
 export type SessionPhase =
@@ -99,7 +110,7 @@ const TTL_MS = 5 * 60_000;
 /** Keep the tail of the CLI chatter, never let a chatty child eat memory. */
 const MAX_BUFFER = 64_000;
 
-const sessions = new Map<AccountProvider, Session>();
+const sessions = new Map<CliAccountProvider, Session>();
 
 // ─── Terminal output parsing ─────────────────────────────────────────────────
 
@@ -459,17 +470,27 @@ function startClaude(s: Session): void {
 async function storeClaudeToken(s: Session, token: string): Promise<void> {
   s.phase = 'submitting';
   s.message = 'Токен отримано, зберігаю…';
+  const runnerStore = runnerCredentialStoreEnabled();
   try {
-    await writeSetting('CLAUDE_CODE_OAUTH_TOKEN', token, 'accounts-ui');
-    // The check reads through the config getters, which read the snapshot.
-    await reloadSettings().catch(() => {});
+    if (runnerStore) {
+      await seedRunnerClaudeCredential(token);
+    } else {
+      // Keep the executor free of a static settingsStore -> db/client edge. The
+      // database-backed store exists only in explicit local-development mode.
+      const { writeSetting, reloadSettings } = await import('../lib/settingsStore.js');
+      await writeSetting('CLAUDE_CODE_OAUTH_TOKEN', token, 'accounts-ui');
+      // The check reads through the config getters, which read the snapshot.
+      await reloadSettings().catch(() => {});
+    }
   } catch (err) {
     finish(s, 'error', `Токен отримано, але не зберігся: ${String(err).slice(0, 200)}. `
-      + 'Найімовірніше не заданий SETTINGS_MASTER_KEY.');
+      + (runnerStore
+        ? 'Перевір права на runner credential volume.'
+        : 'Найімовірніше не заданий SETTINGS_MASTER_KEY.'));
     return;
   }
   // Kill the child before the (slow) ping so no PTY lingers while we wait.
-  const check = await runCheck('claude').catch((err): CheckResult => ({
+  const check = await runLocalAgentCheck('claude').catch((err): CheckResult => ({
     ok: false, message: `Токен збережено, але перевірка впала: ${String(err).slice(0, 200)}`,
   }));
   s.check = check;
@@ -528,7 +549,7 @@ function startCodex(s: Session): void {
       s.message = 'Вхід прийнято, перевіряю…';
       // `codex login status` is the CLI's own answer — the credential lands in
       // $CODEX_HOME (a named volume), so this also proves it persisted.
-      void runCheck('codex')
+      void runLocalAgentCheck('codex')
         .then((check) => {
           s.check = check;
           finish(s, check.ok ? 'done' : 'error', check.ok
@@ -546,7 +567,7 @@ function startCodex(s: Session): void {
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 /** Provider is mid-flight (so the UI can refuse to start a second one). */
-export function activeSession(provider: AccountProvider): AccountSession | null {
+export function activeSession(provider: CliAccountProvider): AccountSession | null {
   const s = sessions.get(provider);
   if (!s) return null;
   sweep(s);
@@ -567,7 +588,7 @@ function sweep(s: Session): void {
  * a fresh URL, and two `claude setup-token` children racing for the same token
  * would be worse than either.
  */
-export function startSession(provider: AccountProvider): AccountSession {
+export function startSession(provider: CliAccountProvider): AccountSession {
   const existing = sessions.get(provider);
   if (existing && !existing.finished) {
     finish(existing, 'cancelled', 'Скасовано новим запуском.');
@@ -606,7 +627,7 @@ export function startSession(provider: AccountProvider): AccountSession {
  * The trailing `\r` is what the PTY delivers as Enter; `\n` alone leaves Ink's
  * input sitting there with the code typed but never submitted.
  */
-export function submitCode(provider: AccountProvider, code: string): AccountSession {
+export function submitCode(provider: CliAccountProvider, code: string): AccountSession {
   const s = sessions.get(provider);
   if (!s) return { provider, phase: 'error', message: 'Немає активної сесії. Натисни «Підключити».', startedAt: 0, expiresInMs: 0 };
   sweep(s);
@@ -645,7 +666,7 @@ export function submitCode(provider: AccountProvider, code: string): AccountSess
 }
 
 /** Explicit "Скасувати". Kills the child; the credential is untouched. */
-export function cancelSession(provider: AccountProvider): AccountSession {
+export function cancelSession(provider: CliAccountProvider): AccountSession {
   const s = sessions.get(provider);
   if (!s) return { provider, phase: 'cancelled', message: 'Немає активної сесії.', startedAt: 0, expiresInMs: 0 };
   finish(s, 'cancelled', 'Скасовано.');
@@ -655,30 +676,153 @@ export function cancelSession(provider: AccountProvider): AccountSession {
 /**
  * Disconnect a provider.
  *
- * Claude: delete the stored token (writeSetting('') deletes the row, so the
- * resolution order falls back to env/CLI login rather than storing an empty
- * override). Codex: we deliberately do NOT wipe $CODEX_HOME from a web button —
- * that is Roman's ChatGPT session on disk, and `codex logout` is one shell
- * command away if he ever wants it gone.
+ * Claude: delete the token from the active runtime credential store. In local
+ * development, writeSetting('') deletes the row rather than storing an empty
+ * override. Codex: invoke the CLI's own logout command against the credential
+ * volume; deleting files behind the CLI's back would make its format our API.
  */
-export async function disconnect(provider: AccountProvider): Promise<{ ok: boolean; message: string }> {
+export async function disconnect(
+  provider: AccountProvider,
+  providerId?: string,
+): Promise<{ ok: boolean; message: string }> {
+  if (provider === 'opencode') return disconnectOpenCode(providerId ?? '');
   if (provider === 'claude') {
+    const runnerStore = runnerCredentialStoreEnabled();
     try {
-      await writeSetting('CLAUDE_CODE_OAUTH_TOKEN', '', 'accounts-ui');
-      await reloadSettings().catch(() => {});
-      return { ok: true, message: 'Токен Claude видалено з налаштувань.' };
+      if (runnerStore) {
+        await clearRunnerClaudeCredential();
+      } else {
+        const { writeSetting, reloadSettings } = await import('../lib/settingsStore.js');
+        await writeSetting('CLAUDE_CODE_OAUTH_TOKEN', '', 'accounts-ui');
+        await reloadSettings().catch(() => {});
+      }
+      return {
+        ok: true,
+        message: runnerStore
+          ? 'Токен Claude видалено з runner credential volume.'
+          : 'Токен Claude видалено з налаштувань.',
+      };
     } catch (err) {
       return { ok: false, message: `Не вдалося видалити: ${String(err).slice(0, 200)}` };
     }
   }
-  return {
-    ok: false,
-    message: 'Codex-логін лежить у volume codexhome. Прибрати: `docker compose exec factory codex logout`.',
-  };
+  return new Promise((resolve) => {
+    const child = spawn(config.agents.codexBin, ['logout'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: loginEnv(),
+    });
+    let output = '';
+    child.stdout.on('data', (value) => { output += String(value); });
+    child.stderr.on('data', (value) => { output += String(value); });
+    child.on('error', (error) => resolve({
+      ok: false,
+      message: `Не вдалося запустити Codex logout: ${String(error).slice(0, 200)}`,
+    }));
+    child.on('close', (code) => resolve(code === 0
+      ? { ok: true, message: 'Codex відключений, login volume очищено CLI-командою.' }
+      : { ok: false, message: `Codex logout завершився з кодом ${code}: ${tidyCliReason(output).slice(0, 200)}` }));
+  });
 }
 
 export function isAccountProvider(v: string): v is AccountProvider {
+  return v === 'claude' || v === 'codex' || v === 'opencode';
+}
+
+export function isCliAccountProvider(v: string): v is CliAccountProvider {
   return v === 'claude' || v === 'codex';
+}
+
+// ─── OpenCode ────────────────────────────────────────────────────────────────
+//
+// No CLI session here: `opencode auth login` is an interactive TUI, but what it
+// produces is one JSON object per provider in auth.json, which the runtime
+// owner writes directly. The provider list comes from the shared egress
+// registry (OPENCODE_PROVIDERS ∩ catalog): in production a key for a provider
+// the proxy/DNS do not allow would only ever fail at the first call, so it is
+// refused up front with the reason.
+
+export interface OpenCodeProviderStatus {
+  id: string;
+  name: string;
+  connected: boolean;
+}
+
+/** Providers the operator may connect, with whether a key is stored for each. */
+export async function openCodeAccountStatus(): Promise<{
+  providers: OpenCodeProviderStatus[];
+  message?: string;
+}> {
+  const connected = new Set(await connectedOpenCodeProviderIds());
+  try {
+    const enabled = enabledOpenCodeProviders();
+    // Outside production (no egress allowlist) every catalog provider is fair
+    // game; inside, only the enabled ones. A stored key for a provider that is
+    // no longer enabled still shows, so it can be disconnected.
+    const catalog = openCodeCatalog();
+    const visible = runnerConfinementRequired()
+      ? [...enabled, ...[...connected].filter((id) => !enabled.some((p) => p.id === id)).map((id) => catalog.get(id) ?? { id, name: id, api: '' })]
+      : [...catalog.values()];
+    return {
+      providers: visible.map((provider) => ({
+        id: provider.id, name: provider.name, connected: connected.has(provider.id),
+      })),
+      message: runnerConfinementRequired() && enabled.length === 0
+        ? 'OPENCODE_PROVIDERS порожній: додай id провайдерів (напр. zai-coding-plan) у .env і перезапусти compose — без цього egress їх не пропустить.'
+        : undefined,
+    };
+  } catch (err) {
+    return { providers: [], message: `OPENCODE_PROVIDERS некоректний: ${String(err instanceof Error ? err.message : err).slice(0, 200)}` };
+  }
+}
+
+/** Store a provider key, then prove it with a real call — one button, one answer. */
+export async function connectOpenCode(providerId: string, key: string): Promise<AccountSession> {
+  const base = { provider: 'opencode' as const, startedAt: Date.now(), expiresInMs: 0 };
+  const provider = openCodeCatalog().get(providerId);
+  if (!provider) {
+    return { ...base, phase: 'error', message: `Невідомий провайдер OpenCode: ${providerId}. Список — infra/agent-egress/opencode-providers.tsv.` };
+  }
+  if (runnerConfinementRequired()) {
+    let enabled: string[];
+    try { enabled = enabledOpenCodeProviders().map((p) => p.id); } catch (err) {
+      return { ...base, phase: 'error', message: `OPENCODE_PROVIDERS некоректний: ${String(err instanceof Error ? err.message : err).slice(0, 200)}` };
+    }
+    if (!enabled.includes(providerId)) {
+      return {
+        ...base, phase: 'error',
+        message: `${provider.name} не увімкнений у OPENCODE_PROVIDERS, тому egress-проксі і DNS його не пропустять. Додай «${providerId}» у OPENCODE_PROVIDERS, зроби docker compose up -d і повтори.`,
+      };
+    }
+  }
+  try {
+    await connectOpenCodeProvider(providerId, key);
+  } catch (err) {
+    return { ...base, phase: 'error', message: `Ключ не зберігся: ${String(err instanceof Error ? err.message : err).slice(0, 200)}` };
+  }
+  const check = await runLocalAgentCheck('opencode').catch((err): CheckResult => ({
+    ok: false, message: `Ключ збережено, але перевірка впала: ${String(err).slice(0, 200)}`,
+  }));
+  log.info('opencode provider connected', { providerId, checkOk: check.ok });
+  return {
+    ...base,
+    phase: check.ok ? 'done' : 'error',
+    check,
+    message: check.ok
+      ? `${provider.name} підключений — ключ збережено і перевірено справжнім викликом.`
+      : `Ключ ${provider.name} збережено, але перевірка не пройшла: ${check.message}`,
+  };
+}
+
+export async function disconnectOpenCode(providerId: string): Promise<{ ok: boolean; message: string }> {
+  if (!providerId) return { ok: false, message: 'Не вказано, який провайдер OpenCode відключити.' };
+  try {
+    const removed = await disconnectOpenCodeProvider(providerId);
+    return removed
+      ? { ok: true, message: `Ключ ${openCodeCatalog().get(providerId)?.name ?? providerId} видалено з auth.json OpenCode.` }
+      : { ok: false, message: `${providerId} не був підключений.` };
+  } catch (err) {
+    return { ok: false, message: `Не вдалося видалити: ${String(err instanceof Error ? err.message : err).slice(0, 200)}` };
+  }
 }
 
 // ─── Telegram chat-id discovery ──────────────────────────────────────────────

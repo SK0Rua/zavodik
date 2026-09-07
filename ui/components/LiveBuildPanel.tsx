@@ -22,7 +22,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { isInterruptedBuild } from '@/lib/buildPolicy';
-import { humanJobStatus } from '@/lib/humanStatus';
+import { humanProjectState, humanJobStatus } from '@/lib/humanStatus';
 
 export interface BuildLogLine {
   t: string;
@@ -346,7 +346,7 @@ export function LiveBuildPanel({ businessId, projectState, embedded = false }: {
             <p className="mt-1.5 text-sm text-ink-mute">
               Веб-термінал не налаштований. Підключитись можна по SSH:{' '}
               <span className="font-mono">tmux attach -r -t {terminal.session}</span>{' '}
-              у контейнері <span className="font-mono">factory-build</span>.
+              у контейнері <span className="font-mono">agent-runner-executor</span>.
             </p>
           )}
           {terminal.writable && (
@@ -430,7 +430,7 @@ export function LiveBuildPanel({ businessId, projectState, embedded = false }: {
           {terminal?.writable
             ? 'Цей список — тільки перегляд. Термінал вище відкритий на запис.'
             : 'Тільки перегляд — звідси нічого не запускається і не зупиняється.'}
-          {projectState && ` Стан проєкту: ${projectState}.`}
+          {projectState && ` Стан збірки: ${humanProjectState(projectState).text.toLowerCase()}.`}
         </p>
       )}
     </section>

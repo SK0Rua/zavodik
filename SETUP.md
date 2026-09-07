@@ -21,7 +21,10 @@ package** (кожен факт має source → immutable raw-обʼєкт) →
 | `minio` | 9000 / 9001 | object storage: raw evidence, скриншоти, QA-звіти |
 | `gosom` | 8085 | google-maps-scraper, REST API — **єдине** джерело discovery |
 | `factory` | 8787, 8788 | воркери `core,enrich` + JSON API/вебхуки (8787) + сервер демо (8788) |
-| `factory-build` | 7681 | воркери `build` (brief → збірка → visual QA), окремий семафор; на 7681 — **живий термінал збірки**, до якого можна підключитись |
+| `factory-build` | — | воркери `build` (brief → збірка → visual QA); сам provider CLI тут не запускається |
+| `agent-runner-gateway` | 8790 (internal) | auth, staging/sync, reservations; provider credentials не бачить |
+| `agent-runner-executor` | 7681 (loopback/reverse proxy) | ізольовані provider CLI, exact-workspace sandbox, живий термінал |
+| `agent-egress-proxy` / `agent-egress-dns` | internal | allowlisted HTTP(S)/DNS; arbitrary egress і lateral traffic заборонені |
 | `ui` | 3000 | **контрольний інтерфейс**: approve-черга, воронка, кампанії, jobs, розмови |
 | `waha` | 3001 | self-hosted WhatsApp HTTP API (НЕ Meta Cloud API) |
 | `greenmail` | 3025/3143/8081 | лише dev (`--profile dev-mail`): локальні SMTP+IMAP для тестів |
@@ -29,6 +32,9 @@ package** (кожен факт має source → immutable raw-обʼєкт) →
 `factory` і `factory-build` — один образ, різні `WORKER_GROUPS`. Розділені
 навмисно: семафор агентів діє **на процес**, тож 40-хвилинна збірка сайту і
 беклог enrichment інакше голодують один одного.
+
+Безпечний порядок оновлення schema/runner/workers, legacy drain і recovery без
+повернення локального agent path: [`docs/PRODUCTION-ROLLOUT.md`](docs/PRODUCTION-ROLLOUT.md).
 
 **Інтерфейс — це UI на :3000.** Telegram лише надсилає посилання в UI, approve
 там не робиться (рішення №9). `:8787` — службовий API, не інтерфейс.
@@ -91,6 +97,17 @@ open http://<host>:3000/settings   # решта конфігурації — т�
 Міграції застосовуються **автоматично** при старті контейнерів (`db:migrate` у
 CMD обох factory-сервісів, ідемпотентно).
 
+`agent-runner-executor` працює під власним AppArmor-профілем `wf-runner-executor`
+(`deploy/apparmor/`), бо стандартний `docker-default` забороняє `mount`, а
+`unconfined` на Ubuntu 24.04 позбавляє bubblewrap capabilities. Профіль у ядро
+хоста завантажує сервіс `agent-runner-apparmor` з того ж compose (privileged
+one-shot, як apparmor-loader у Kubernetes): при кожному deploy і після
+перезавантаження хоста, без жодних дій на сервері. На хості без AppArmor він
+просто стає healthy зі «skip». На Dokploy одноразово **вимкни Isolated
+Deployment** (Compose → Advanced; деталі: `docs/PRODUCTION-ROLLOUT.md`), інакше
+платформа підключає executor до зовнішньої bridge-мережі, і він навмисно
+лишається unhealthy, бо має прямий default route в інтернет.
+
 Після першого запуску конфігурація живе в БД, тому подальші зміни (новий токен,
 інший ліміт, dry_run↔live) **не потребують ані редагування файлів на сервері,
 ані `docker compose up`** — тільки сторінку `/settings`.
@@ -103,6 +120,7 @@ CMD обох factory-сервісів, ідемпотентно).
 | `miniodata` | raw evidence, скриншоти, QA-звіти | докази під фактами |
 | `wahasessions` | сесія WhatsApp | новий QR-скан |
 | `codexhome` | логін Codex CLI | новий `codex login` |
+| `opencodehome` | ключі провайдерів OpenCode (`auth.json`) | заново вставити ключі в «Акаунтах» |
 | `.env` (файл, не volume) | `SETTINGS_MASTER_KEY` | **усі збережені секрети стають нечитабельними** — доведеться ввести заново в `/settings` |
 | томи `deploysdata`, `sitesdata` | задеплоєні демо і воркспейси збірок | демо (перебудовуються); глянути з хоста: `docker compose cp factory:/app/deploys ./` |
 
@@ -126,7 +144,7 @@ CMD обох factory-сервісів, ідемпотентно).
 BUILD_TERMINAL_BASE_URL=http://<host-або-tailscale-імʼя>:7681
 ```
 
-Порт `7681` опублікований на `127.0.0.1` контейнера `factory-build`, тому
+Порт `7681` опублікований на `127.0.0.1` контейнера `agent-runner-executor`, тому
 «з браузера» означає: через Tailscale, SSH-тунель (`ssh -L 7681:localhost:7681
 <host>`) або той самий authenticated reverse-proxy, що й UI.
 
@@ -134,22 +152,23 @@ BUILD_TERMINAL_BASE_URL=http://<host-або-tailscale-імʼя>:7681
 додати path-маршрут на compose-сервіс, тому маршрут заведений РУЧНИМ файлом
 `/etc/dokploy/traefik/dynamic/website-factory-terminal-custom.yml` —
 `Host(website-factory.kdnx.cloud) && PathPrefix(/terminal)` →
-`http://factory-build:7681`, priority 100 (вище за Host-only роутер UI).
+`http://agent-runner-executor:7681`, priority 100 (вище за Host-only роутер UI).
 Traefik підхоплює зміни файлу без рестарту; Dokploy цей файл не генерує і не
 чіпає. При переїзді сервера файл треба перенести або створити заново, а в
 «Адресі термінала збірки» стоїть `https://website-factory.kdnx.cloud/terminal`.
 Памʼятай: ttyd живе лише під час активної збірки — поза нею `/terminal`
 відповідає 502/504, і це норма, а не зламаний маршрут. Пароль — basic auth,
-логін `roman`, пароль **похідний** від `INTERNAL_API_KEY`; побачити його можна
+логін `roman`, пароль **похідний** від приватного `RUNNER_EXECUTOR_API_KEY`;
+побачити його можна
 так:
 
 ```bash
-docker compose exec factory-build node -e "console.log(require('crypto').createHash('sha256').update('build-terminal:'+process.env.INTERNAL_API_KEY).digest('hex').slice(0,24))"
+docker compose exec agent-runner-executor node -e "console.log(require('crypto').createHash('sha256').update('build-terminal:'+process.env.INTERNAL_API_KEY).digest('hex').slice(0,24))"
 ```
 
 Якщо `BUILD_TERMINAL_BASE_URL` порожній — нічого не ламається: у картці бізнесу
 замість кнопки зʼявиться підказка, як підключитись по SSH
-(`docker compose exec factory-build tmux attach -r -t build-<projectId>`).
+(`docker compose exec agent-runner-executor tmux attach -r -t build-<requestId>`).
 
 Термін «підключитись» тут означає **дивитись**. Щоб мати змогу друкувати живому
 агенту, треба свідомо ввімкнути `BUILD_TERMINAL_WRITABLE` (у `/settings` →
@@ -173,10 +192,14 @@ docker compose exec factory-build node -e "console.log(require('crypto').createH
 > **Оновлення (2026-08-17, друге):** підключення акаунтів — це вже не поля з
 > токенами, а розділ **«Акаунти»** на `/settings` (сторінка розбита на розділи
 > з бічним меню) з кнопкою **Підключити** в кожному рядку. Термінал більше не
-> потрібен **ніде**, включно з
-> `claude setup-token` і `codex login`: фабрика запускає ці CLI у себе в
-> контейнері, показує тобі посилання (і код, де він потрібен) прямо на
-> сторінці, і сама зберігає результат зашифрованим.
+> потрібен для Claude або Codex: UI просить runner executor запустити
+> `claude setup-token` / `codex login`, показує посилання (і код, де він
+> потрібен) та зберігає credential у його окремому volume. OpenCode
+> підключається в тому ж розділі формою «провайдер + API-ключ» (GLM Coding
+> Plan, Kimi, Zen…); ключ лягає в `auth.json` runner volume і одразу
+> перевіряється реальним викликом. Які провайдери пропускає egress runner-а,
+> задає `OPENCODE_PROVIDERS` у `.env` compose (id з
+> `infra/agent-egress/opencode-providers.tsv`, напр. `zai-coding-plan`).
 >
 > Коротка версія всього кроку (г): **відкрий `/settings` → «Акаунти», клікни
 > рядок і натисни «Підключити».** Розгорнуті пояснення нижче — на випадок,
@@ -189,7 +212,7 @@ docker compose exec factory-build node -e "console.log(require('crypto').createH
 > Біля кожного поля видно, звідки взялося значення (`БД` / `env` / `дефолт`),
 > хто і коли його змінив.
 
-### 0. `.env` — рівно чотири речі (єдиний крок у файлі)
+### 0. `.env` — шість локальних секретів (єдиний крок у файлі)
 
 ```bash
 cp .env.example .env
@@ -197,6 +220,8 @@ echo "UI_PASSWORD=$(openssl rand -hex 16)" >> .env          # вхід у кон
 echo "UI_SESSION_SECRET=$(openssl rand -hex 32)" >> .env    # підпис cookie
 echo "SETTINGS_MASTER_KEY=$(openssl rand -hex 32)" >> .env  # ключ шифрування секретів
 echo "INTERNAL_API_KEY=$(openssl rand -hex 32)" >> .env     # UI → фабрика (кнопки «Перевірити»)
+echo "RUNNER_API_KEY=$(openssl rand -hex 32)" >> .env       # фабрика → runner gateway
+echo "RUNNER_EXECUTOR_API_KEY=$(openssl rand -hex 32)" >> .env # gateway → executor
 ```
 
 Плюс `DATABASE_URL` / `POSTGRES_PASSWORD` / `S3_*`, які вже є в шаблоні.
@@ -210,18 +235,42 @@ docker compose up -d
 open http://localhost:3000/settings      # далі — тільки тут
 ```
 
+Перед підключенням акаунтів перевір production boundary один раз після кожної
+зміни `Dockerfile.runner`, Compose networks або egress allowlist:
+
+```bash
+docker compose build agent-runner-gateway agent-runner-executor agent-egress-proxy agent-egress-dns
+pnpm test:runner-isolation
+```
+
+Тест підіймає окремий тимчасовий Compose project і перевіряє: approved npm
+через proxy; deny для arbitrary CONNECT, direct fetch, Python urllib, raw IP і
+DNS; відсутність route до Postgres/MinIO/factory/host; exact-workspace write;
+deny для сусіднього workspace, auth volumes і parent `/proc`; read-only root,
+mount/network/capability topology та fail-closed readiness. Після себе він
+видаляє тільки власні test volumes/networks.
+
+Allowlist не розширюється лише в одному місці. Для нового provider/package
+domain онови єдиний реєстр `infra/agent-egress/` (`runtime-domains.txt` для
+inherent-доменів; провайдери OpenCode беруться з `opencode-providers.tsv`,
+який оновлює `pnpm egress:catalog`, і вмикаються через `OPENCODE_PROVIDERS`);
+Squid, CoreDNS, Claude tool-sandbox і broker читають саме його. Потім
+`docker compose up -d` (allowlist рендериться при старті) й обов'язково повтори
+тест. OpenCode у production повноцінний: збірки йдуть усередині Codex-пісочниці,
+ключ провайдера в неї не потрапляє (credential broker executor-а).
+
 ### 1. Claude Code по підписці (без цього агентні етапи не працюють)
 
 `/settings` → **Підключені акаунти** → рядок **Claude Code** → **«Підключити»**.
 
 Далі все на сторінці:
 
-1. фабрика запускає `claude setup-token` у себе в контейнері й показує
+1. runner executor запускає `claude setup-token` і показує
    **посилання** — відкрий його (кнопка відкриває нову вкладку; поруч є те саме
    посилання текстом, якщо треба відкрити на іншій машині);
 2. увійди акаунтом з підпискою **Pro/Max** і скопіюй код, який покаже сторінка;
 3. встав його в поле **«Вставте код зі сторінки»** → **«Надіслати код»**;
-4. токен зберігається зашифрованим у Postgres, і фабрика одразу робить
+4. токен записується з правами `0600` у credential volume executor-а, і runner одразу робить
    **справжній агентний виклик** для перевірки. Зелений рядок = працює.
 
 На все відведено 5 хвилин, далі сесія сама згасає (кнопка «Скасувати» — будь-коли).
@@ -232,7 +281,9 @@ open http://localhost:3000/settings      # далі — тільки тут
 - `Токен збережено, але перевірка не пройшла…` — токен прийнявся, але виклик не
   пройшов; дивись текст перевірки (найчастіше вичерпано ліміт підписки).
 
-**«Відключити»** прибирає токен із налаштувань (падає назад на `.env`/CLI-логін).
+**«Відключити»** прибирає credential з runner volume. Legacy-токен із БД можна
+одноразово перенести через `RUNNER_SEED_CLAUDE_CREDENTIAL=true`, перевірити й
+одразу повернути цей прапорець у `false`.
 
 Жодного `ANTHROPIC_API_KEY` — він не потрібен і свідомо не читається кодом
 (рішення №10); більше того, він **прибирається** з оточення процесу логіну, щоб
@@ -257,7 +308,7 @@ open http://localhost:3000/settings      # далі — тільки тут
 одноразова дія. Кнопка **«Перевірити»** будь-коли показує `codex login status`.
 
 Відключення з браузера навмисно немає: це твоя ChatGPT-сесія на диску, і
-прибирається вона однією командою — `docker compose exec factory codex logout`.
+прибирається вона однією командою — `docker compose exec agent-runner-executor codex logout`.
 
 ### 3. Telegram (сповіщення + лінки в UI)
 
@@ -443,27 +494,22 @@ WAHA — живі проби; **heartbeat воркерів** (кожен про�
 
 ---
 
-## (е) Відомі обмеження і TODO
+## (е) Операційні характеристики
 
-**Дизайн (головне; `docs/BUILD-PIPELINE.md` §12).** Перше демо ти відхилив як
-візуально слабке. Детерміновані гейти вже додані (обрізаний текст, щільність
-контенту `inkPer1000px`, плейсхолдери). **Чекає спільного проходу з тобою:**
-підкладати критику PNG референсу для прямого порівняння; осі «density» і «wow»
-в рубриці; вимога, щоб ≥3 компоненти пулу реально анімувались у DOM; гейт на
-частку площі під медіа; поріг «висота сторінки vs обсяг тексту». Пороги
-відкалібровані **на двох сторінках** — перекалібрувати на 5–10 реальних демо.
+**Дизайн.** Production QA порівнює демо з PNG обраного референсу,
+вимірює hero/scroll motion, щільність контенту, висоту до обсягу тексту та
+площу реальних evidence-фото. Кожна механіка з frozen design contract
+отримує блокуючий `implemented | partial | absent` verdict. Точні пороги і
+regression-контракт — у `docs/BUILD-PIPELINE.md`.
 
-**Outreach.**
-- Живу відправку WhatsApp **не перевірено** (немає окремого номера і QR-скану);
-  перевірені webhook, HMAC, `check-exists`, гейти. Email-цикл перевірено
-  повністю на GreenMail, включно з reply і bounce.
-- Анти-спам таймлок WhatsApp не опрацьовано: при масовій розсилці на незнайомі
-  номери банять. Тому окремий номер і малі денні ліміти.
-- Instagram DM не автоматизується принципово (бан акаунта) — фабрика готує
-  текст і дає deep link.
+**Outreach.** WhatsApp live потребує окремого номера з QR-прив’язкою і
+статусом WAHA `WORKING`; без цього adapter fail-closed. Окремий номер, DNC,
+малі денні ліміти та повторна перевірка перед send — обов’язкові safety-межі.
+Email проходить SMTP/IMAP/reply/bounce integration у release gate. Instagram DM
+залишається ручним deep-link каналом за продуктовим дизайном.
 
-**Discovery.** gosom обробляє **одну job за раз**; кампанії з багатьма запитами
-йдуть послідовно. Проксі закладені конфігом (`GOSOM_PROXIES`, типово порожньо).
+**Discovery.** Один gosom instance обробляє одну job за раз; черга чесно показує
+цю пропускну здатність. Проксі задаються через `GOSOM_PROXIES`.
 
 **Пошук соцмереж.** Крок працює **без ключів** — через публічну видачу
 пошуковиків у Playwright (Brave → Startpage → Bing → DuckDuckGo), тому впирається
@@ -478,32 +524,27 @@ WAHA — живі проби; **heartbeat воркерів** (кожен про�
   такий кандидат чесно лишається `medium`/`weak`, а не «верифікується».
 - Невдача пошуку **ніколи** не валить збагачення: це warning + gap
   `socials_unresolved`.
-- Якщо ліміти почнуть заважати на великих кампаніях — збільшити
-  `SOCIAL_DISCOVERY_DELAY_MS` (типово 2500 мс) або пустити крок через проксі.
-  Вимикається повністю: `SOCIAL_DISCOVERY=false`.
+- Rate-control задається `SOCIAL_DISCOVERY_DELAY_MS` (типово 2500 мс), проксі або
+  `SOCIAL_DISCOVERY=false` для кампаній, де social enrichment не є умовою.
 
-**Збірка.** Workspace однієї збірки ~735 МБ; після термінального стану GC
-чистить до ~9 МБ (`WORKSPACE_GC=false` вимикає). Референси є **лише для ніші
-beauty** — нова ніша потребує своєї теки `references/<niche>/`.
+**Збірка.** Workspace піково може займати сотні мегабайтів; terminal-state GC
+залишає лише діагностичні артефакти. Поточний reference pack є launch-scope ніші
+beauty; інша ніша має отримати власний versioned `references/<niche>/` до live-кампанії.
 
-**Термінал збірки (`BUILDER_MODE=tmux`).** Що перевірено і що ні:
+**Термінал збірки (`BUILDER_MODE=tmux`).**
 
-- Перевірено офлайн (`pnpm test:tmux-agent`, 35 перевірок): гард CLI-хука
-  збігається з SDK-гардом на всіх кейсах (вихід за workspace, `~/.ssh`, `.env`,
+- `pnpm test:tmux-agent` доводить, що гард CLI-хука збігається з SDK-гардом на всіх кейсах
+  (вихід за workspace, `~/.ssh`, `.env`,
   `curl` назовні vs loopback, `WebFetch`), хук fail-closed на битому payload,
   ttyd-argv справді read-only і з basic auth, маркер живої сесії протухає.
-- **Не перевірено живим прогоном**: справжня сесія `claude` у tmux
-  (`pnpm test:tmux-agent --live`) і сам `ttyd`. На маку Романа немає ні tmux, ні
-  ttyd, а ставити їх на його машину я не став. **Перший крок на сервері:**
-  `docker compose exec factory-build pnpm test:tmux-agent --live` — це підніме
-  одну коротку справжню сесію і перевірить весь ланцюг (сесія → промпт-файл →
-  `result.json` → скролбек → прибирання). Поки цього не зроблено, тримай
-  `BUILDER_MODE=sdk`, якщо не хочеш ризикувати першою реальною збіркою.
-- Одна сесія на процес: `factory-build` і так тримає одного агента, тому
-  паралельні збірки з окремими терміналами не передбачені.
+- Один attachable terminal на executor через єдиний порт ttyd; headless-виклики
+  паралельно використовують окремі ліміти `core` / `enrich` / `build`.
 - Якщо `claude` у tmux завершиться, не написавши `result.json`, збірка впаде з
   причиною (`idle` / `gone` / `timeout`) і хвостом pane у тексті помилки; повний
   скролбек лишиться у `sites/<biz>/<projectId>/terminal.log`.
+
+Якщо обрано tmux-mode, повний release gate має завершити реальний F1 build через
+remote executor; непройдена live-сесія не може бути release-рішенням.
 
 **Медіа.** Hero-відео: авто Ken Burns через ffmpeg (в образі) або завантажений
 з картки wow-кліп. Онлайн-генерації відео у фабрики немає — свідомо (SPEC §2.5).
@@ -519,14 +560,34 @@ beauty** — нова ніша потребує своєї теки `references/
 
 **`ERR_PNPM_IGNORED_BUILDS` при збірці образу.** pnpm 11 виходить з ненульовим
 кодом, якщо build-скрипти залежностей заблоковані. Дозвіл живе **тільки** в
-`pnpm-workspace.yaml` (`onlyBuiltDependencies: [esbuild]`) — поле `pnpm` у
-`package.json` pnpm 11 більше не читає. Цей файл **обовʼязково** копіюється в
-образ.
+`pnpm-workspace.yaml` (`allowBuilds: { esbuild: true }`). pnpm 11 видалив
+`onlyBuiltDependencies`; старе поле лише мовчки залишало нативний setup
+заблокованим. Workspace-файл **обовʼязково** копіюється в образ.
+
+**`agent-runner-executor` у Restarting, у логах `Codex exact-root sandbox probe
+failed: bwrap: Failed to make / slave: Permission denied` (або `setting up uid
+map: Permission denied`).** Executor стартував без профілю `wf-runner-executor`
+(наприклад, хтось прибрав `depends_on` на `agent-runner-apparmor` або запустив
+executor окремо). Перевір `docker compose logs agent-runner-apparmor`: має бути
+`ok: AppArmor profile wf-runner-executor loaded`. `apparmor=unconfined` не
+допоможе — див. `docs/PRODUCTION-ROLLOUT.md`.
+
+**`agent-runner-executor` unhealthy, `/health` → 503, у логах `executor has a
+default network route`.** Deployment-платформа (Dokploy «Isolated Deployment»)
+підключила executor до зовнішньої мережі. Вимкни цей режим у Compose → Advanced
+і перевір у Converted Compose, що executor має лише `runner-control` і
+`runner-egress-v2`.
 
 **Агентні джоби падають з `--dangerously-skip-permissions cannot be used with
 root`.** Claude Code відмовляється працювати під root. Образ тому запускається
 під користувачем `node` (uid 1000) — не «хардening», а умова працездатності.
 Якщо повернути root, впадуть **усі** агентні етапи навіть з валідним токеном.
+
+**Крок «Пропущено: стан змінився» на сторінці системи.** Це не помилка і не
+успіх: доставка (збірка, перевірка, публікація) прийшла, коли проєкт або бізнес
+уже перейшли далі, були зупинені чи перебудовані. Раніше такі кроки писались як
+«Готово» і виглядали як зелена збірка, що нічого не зробила. Причина — у деталях
+кроку. Якщо збірки немає, а хочеться нову: «Побудувати заново» на картці.
 
 **Бізнеси залипли в `site_in_progress`.** Буває, коли `content-and-design` не
 міг виконатись (напр. агент не автентифікований). Полагодити:
@@ -554,10 +615,10 @@ pnpm tsx scripts/purge-orphan-jobs.ts --apply   # видалити
 1. `BUILD_TERMINAL_BASE_URL` порожній → кнопки не буде за задумом (у картці
    натомість підказка про SSH). Заповни в `/settings` → Агенти.
 2. `BUILDER_MODE=sdk` → термінала немає взагалі, це безголова сесія.
-3. tmux не знайшовся на хості → в логах `factory-build` буде
+3. tmux не знайшовся в executor → у його логах буде
    `tmux is not installed; falling back to the headless SDK runtime`.
 4. ttyd не піднявся → `build terminal not served: …`. Дві типові причини:
-   не виставлений `INTERNAL_API_KEY` (без нього пароля немає, а термінал без
+   не виставлений `RUNNER_EXECUTOR_API_KEY` (без похідного пароля термінал без
    автентифікації — це шел на хості для будь-кого, тому він свідомо не
    стартує), або порт `7681` уже зайнятий.
 
@@ -594,4 +655,6 @@ pnpm verify:media-parsers
 cd ui && pnpm build
 
 pnpm tsx scripts/integration-e2e.ts          # discovery(gosom) + approve→1 simulated send
+pnpm release:gate -- --quick                 # швидкий dev-loop, НЕ дозвіл на deploy
+pnpm release:gate                            # повний Compose/security/F1 gate + evidence report
 ```

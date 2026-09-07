@@ -11,13 +11,15 @@
  */
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
-import { transition } from '../orchestrator/statuses.js';
-import { advance } from '../orchestrator/router.js';
+import {
+  businessTransitions,
+  requireBusinessStatus,
+} from '../orchestrator/statuses.js';
+import { commitWorkflow, type JobPayload } from '../orchestrator/queue.js';
 import {
   type DiscoveryFilter, DEFAULT_DISCOVERY_FILTER,
   discoveryFilterReasons, normalizeDiscoveryFilter,
 } from '../orchestrator/campaignFlow.js';
-import type { JobPayload } from '../orchestrator/queue.js';
 import { log } from '../lib/logger.js';
 
 /**
@@ -117,6 +119,14 @@ export async function fastQualifyHandler(payload: JobPayload): Promise<void> {
   const businessId = payload.businessId!;
   const [biz] = await db.select().from(schema.businesses).where(eq(schema.businesses.id, businessId));
   if (!biz) throw new Error(`business not found: ${businessId}`);
+  const expectedStatus = requireBusinessStatus(biz.status, `business ${businessId}`);
+  if (expectedStatus !== 'discovered') {
+    log.info('fast qualification skipped: business already left discovery', {
+      businessId,
+      status: expectedStatus,
+    });
+    return;
+  }
 
   const [campaign] = await db.select().from(schema.campaigns)
     .where(eq(schema.campaigns.id, biz.campaignId));
@@ -144,11 +154,46 @@ export async function fastQualifyHandler(payload: JobPayload): Promise<void> {
     filter,
   });
 
-  await db.insert(schema.qualifications).values({
-    businessId, stage: 'fast', qualified: verdict === 'prequalified', reasons,
-  });
-  await transition(businessId, verdict, 'fast-qualify-worker', reasons.join(',') || 'passed all fast checks');
-  log.info('fast qualification', { businessId, verdict, reasons });
+  let committed = false;
+  await commitWorkflow(async (tx) => {
+    const [locked] = await tx.select({
+      status: schema.businesses.status,
+      campaignId: schema.businesses.campaignId,
+    }).from(schema.businesses)
+      .where(eq(schema.businesses.id, businessId))
+      .limit(1)
+      .for('update');
+    if (!locked) throw new Error(`business not found: ${businessId}`);
+    if (locked.status !== 'discovered') return [];
 
-  if (verdict === 'prequalified') await advance(businessId); // -> enrich
+    await tx.insert(schema.qualifications).values({
+      businessId, stage: 'fast', qualified: verdict === 'prequalified', reasons,
+    });
+    const transitioned = await businessTransitions.normalInTransaction(tx, {
+      businessId,
+      expectedStatus: 'discovered',
+      to: verdict,
+      actor: 'fast-qualify-worker',
+      reason: reasons.join(',') || 'passed all fast checks',
+    });
+    if (transitioned.kind !== 'moved') {
+      throw new Error(`fast qualification lost its locked transition for ${businessId}`);
+    }
+    committed = true;
+    return verdict === 'prequalified'
+      ? [{
+          name: 'enrich',
+          payload: {
+            businessId,
+            campaignId: locked.campaignId,
+            idempotencyKey: `enrich:${businessId}`,
+          },
+        }]
+      : [];
+  });
+  if (!committed) {
+    log.info('fast qualification result discarded: business already advanced', { businessId });
+    return;
+  }
+  log.info('fast qualification', { businessId, verdict, reasons });
 }

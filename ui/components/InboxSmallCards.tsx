@@ -6,6 +6,7 @@ import { Status } from './Status';
 import { retryJobAction, startDemoBuild, stopFailedBuildAction } from '@/lib/actions';
 import { runWithToast } from '@/lib/toast';
 import { stageName } from '@/lib/stageNames';
+import { humanStatus } from '@/lib/humanStatus';
 import type {
   BusinessReviewItem, InterruptedBuildItem, JobProblemItem, ReplyItem,
 } from '@/lib/inbox';
@@ -38,7 +39,7 @@ import { CardActionButtons } from './CardActionBar';
 export function BusinessReviewCard({ item }: { item: BusinessReviewItem }) {
   return (
     <article className="card p-5 sm:p-6">
-      <Status tone="wait" title={item.status}>
+      <Status tone="wait" title={humanStatus(item.status).text}>
         {item.ask === 'fact_check' ? 'Факти не пройшли перевірку' : 'Фабрика чекає твого вердикту'}
       </Status>
 
@@ -77,7 +78,7 @@ export function InterruptedBuildCard({ item }: { item: InterruptedBuildItem }) {
   const [pending, startTransition] = useTransition();
 
   const restart = () => startTransition(() => {
-    void runWithToast(() => startDemoBuild(item.businessId), {
+    void runWithToast(() => startDemoBuild(item.businessId, { fresh: true }), {
       onResult: (res) => { if (res.ok) setStarted(true); },
     });
   });
@@ -110,7 +111,7 @@ export function InterruptedBuildCard({ item }: { item: InterruptedBuildItem }) {
             title={item.hint}
             onClick={restart}
           >
-            {pending ? 'Ставлю в чергу…' : 'Запустити заново'}
+            {pending ? 'Ставлю в чергу…' : 'Побудувати заново'}
           </button>
           <span className="text-sm text-ink-mute">{item.hint}</span>
         </div>
@@ -126,7 +127,13 @@ export function JobProblemCard({ item }: { item: JobProblemItem }) {
   // retry is queued, offering the same button again would queue a second one.
   const [message, setMessage] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const isBuildFailure = ['content-and-design', 'build-site'].includes(item.jobType);
+  // Every step of the demo build: a dead one is restarted from scratch, never
+  // «continued» — the old attempt's workspace and project are gone or closed,
+  // and re-queuing the same job only produced a green «succeeded» that did
+  // nothing (BEAUTIFY Laser, 2026-09-03). A failed publish is the one case
+  // where retrying the step itself is cheaper and honest: the site is built.
+  const isBuildStep = ['content-and-design', 'build-site', 'deploy-demo'].includes(item.jobType);
+  const isPublish = item.jobType === 'deploy-demo';
 
   const retry = () => startTransition(() => {
     void runWithToast(() => retryJobAction(item.jobId), {
@@ -136,9 +143,15 @@ export function JobProblemCard({ item }: { item: JobProblemItem }) {
     });
   });
 
+  const rebuild = () => startTransition(() => {
+    void runWithToast(() => startDemoBuild(item.businessId!, { fresh: true }), {
+      onResult: (res) => { if (res.ok) setMessage('Нова збірка поставлена в чергу. Прогрес — на картці бізнесу.'); },
+    });
+  });
+
   const stopBuild = () => {
     const ok = window.confirm(
-      `Зупинити збірку для «${item.businessName ?? item.businessId}»?\n\n`
+      `Не будувати демо для «${item.businessName ?? item.businessId}» зараз?\n\n`
       + 'Невдалу спробу буде закрито, а бізнес повернеться у «Готово до демо». '
       + 'Він не стане «Відхиленим» — збірку можна буде запустити пізніше.',
     );
@@ -158,7 +171,9 @@ export function JobProblemCard({ item }: { item: JobProblemItem }) {
           that will sit here forever looked identical to one that happened to
           be recent. */}
       <Status tone={item.status === 'failed' ? 'stop' : 'wait'} title={item.status}>
-        {item.status === 'failed' ? 'Крок упав' : 'Крок зупинився і чекає рішення'}
+        {isBuildStep
+          ? (item.status === 'failed' ? 'Демо: впало' : 'Демо: крок чекає твого рішення')
+          : (item.status === 'failed' ? 'Крок упав' : 'Крок чекає твого рішення')}
       </Status>
       {item.actionable && (
         <p className="text-sm text-dot-wait mt-1">
@@ -179,21 +194,29 @@ export function JobProblemCard({ item }: { item: JobProblemItem }) {
         {item.attempts > 1 && <> · спроб: {item.attempts}</>}
       </p>
 
-      {isBuildFailure && (
+      {isBuildStep && (
         <p className="text-sm text-ink-mute mt-2 max-w-[70ch]">
-          «Продовжити збірку» повторить цей крок. «Зупинити збірку» прибере його
-          з Вхідних і залишить бізнес готовим до нового запуску — без rejected.
+          {isPublish
+            ? 'Демо зібране, не вдалось лише опублікувати. «Повторити публікацію» спробує ще раз. '
+            : 'Ця спроба мертва. «Побудувати заново» почне збірку з нуля — усе зібране про бізнес лишається. '}
+          «Не будувати» прибере картку і залишить бізнес готовим до нового запуску — без rejected.
         </p>
       )}
 
       {!message && (
         <div className="mt-4 flex flex-wrap gap-2 items-center">
-          <button type="button" className="btn-outline btn-sm" onClick={retry} disabled={pending}>
-            {pending ? 'Виконую…' : isBuildFailure ? 'Продовжити збірку' : 'Повторити'}
-          </button>
-          {isBuildFailure && (
+          {isBuildStep && !isPublish && item.businessId ? (
+            <button type="button" className="btn-primary btn-sm" onClick={rebuild} disabled={pending}>
+              {pending ? 'Ставлю в чергу…' : 'Побудувати заново'}
+            </button>
+          ) : (
+            <button type="button" className="btn-outline btn-sm" onClick={retry} disabled={pending}>
+              {pending ? 'Виконую…' : isPublish ? 'Повторити публікацію' : 'Повторити'}
+            </button>
+          )}
+          {isBuildStep && (
             <button type="button" className="btn-quiet btn-sm" onClick={stopBuild} disabled={pending}>
-              Зупинити збірку
+              Не будувати
             </button>
           )}
           {(item.errorCode || item.errorDetail) && (
