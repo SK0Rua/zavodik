@@ -9,9 +9,19 @@ import {
   startDemoBuild, startDemoBuildBulk, startEnrichment, startEnrichmentBulk,
   startSocialsDiscoveryBulk,
 } from '@/lib/actions';
+import {
+  archiveBusinessAction, deleteBusinessAction, unarchiveBusinessAction,
+} from '@/lib/archiveActions';
 import { runWithToast } from '@/lib/toast';
 import type { BuildButtonState } from '@/lib/buildPolicy';
 import type { SocialsButtonState } from '@/lib/socials';
+
+/** The archive actions take FormData (the shape every other mutation uses). */
+function formDataOf(fields: Record<string, string>): FormData {
+  const data = new FormData();
+  for (const [key, value] of Object.entries(fields)) data.append(key, value);
+  return data;
+}
 
 export interface ListRow {
   id: string;
@@ -35,6 +45,15 @@ export interface ListRow {
    * then, so the button appears exactly where data collection is the next step.
    */
   canEnrich: boolean;
+  /** On the archive shelf: the row offers restore/delete instead of work. */
+  archived: boolean;
+  /**
+   * False when outreach already happened, which makes a hard delete impossible
+   * (see `src/orchestrator/archiveService.ts`). The server refuses either way;
+   * this only decides whether the button is offered at all, so Roman is never
+   * shown an action that can only fail.
+   */
+  canDelete: boolean;
 }
 
 /**
@@ -134,6 +153,67 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
     });
   };
 
+  const runArchive = (row: ListRow) => {
+    if (!window.confirm(
+      `Заархівувати «${row.name}»?\n\n`
+      + 'Він зникне зі списків і з інбоксу, активні задачі буде скасовано. '
+      + 'Це оборотно — повернути можна з архіву.',
+    )) return;
+    startTransition(() => {
+      void runWithToast(() => archiveBusinessAction(formDataOf({ businessId: row.id })));
+    });
+  };
+
+  const runUnarchive = (row: ListRow) => {
+    startTransition(() => {
+      void runWithToast(() => unarchiveBusinessAction(formDataOf({ businessId: row.id })));
+    });
+  };
+
+  const runDelete = (row: ListRow) => {
+    // Deliberately types-the-name rather than a plain OK: this is the only
+    // irreversible action in the list, and the confirm has to cost more than a
+    // reflex click on a row you did not mean to be on.
+    const answer = window.prompt(
+      `Видалити «${row.name}» НАЗАВЖДИ?\n\n`
+      + 'Зникнуть усі зібрані дані, фото, аудити й збірки. Це не можна скасувати.\n\n'
+      + 'Щоб підтвердити, введи: видалити',
+    );
+    if (answer?.trim().toLowerCase() !== 'видалити') return;
+    startTransition(() => {
+      void runWithToast(() => deleteBusinessAction(formDataOf({ businessId: row.id })), {
+        onResult: () => setSelected((prev) => {
+          const n = new Set(prev); n.delete(row.id); return n;
+        }),
+      });
+    });
+  };
+
+  const runBulkArchive = () => {
+    const ids = selectedRows.filter((r) => !r.archived).map((r) => r.id);
+    if (!ids.length) return;
+    if (!window.confirm(
+      `Заархівувати ${ids.length} бізнесів?\n\n`
+      + 'Вони зникнуть зі списків, активні задачі буде скасовано. Це оборотно.',
+    )) return;
+    startTransition(() => {
+      void (async () => {
+        // No bulk endpoint: archiving is one transaction per business by
+        // design (each cancels its own jobs), so the loop is the honest shape
+        // rather than a fake batch that would hide a partial failure.
+        let done = 0;
+        for (const id of ids) {
+          const res = await archiveBusinessAction(formDataOf({ businessId: id }));
+          if (res.ok) done += 1;
+        }
+        setMessage(done === ids.length
+          ? `Заархівовано: ${done}.`
+          : `Заархівовано ${done} із ${ids.length}. Решту не вдалось — онови сторінку.`);
+        setSelected(new Set());
+      })();
+    });
+  };
+
   const runBulkSocials = () => {
     const ids = searchable.map((r) => r.id);
     if (!ids.length) return;
@@ -181,6 +261,16 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
           >
             Дошукати соцмережі ({searchable.length})
           </button>
+          {selectedRows.some((r) => !r.archived) && (
+            <button
+              type="button"
+              className="btn-outline btn-sm"
+              disabled={pending}
+              onClick={runBulkArchive}
+            >
+              В архів ({selectedRows.filter((r) => !r.archived).length})
+            </button>
+          )}
           <button type="button" className="btn-quiet btn-sm ml-auto" onClick={() => setSelected(new Set())}>
             Зняти вибір
           </button>
@@ -254,12 +344,50 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
                          flex items-center gap-3 flex-wrap
                          justify-start sm:justify-end sm:min-w-[140px]"
             >
-              <RowAction
-                row={r} pending={pending}
-                onBuild={() => runOne(r)}
-                onEnrich={() => runOneEnrich(r)}
-                onQuick={() => setQuick({ id: r.id, name: r.name })}
-              />
+              {r.archived ? (
+                // An archived row offers only the two ways off the shelf. The
+                // work actions are deliberately gone: archiving cancelled the
+                // jobs behind them, so «Будувати демо» here would silently
+                // un-do the archive's whole point.
+                <>
+                  <button
+                    type="button"
+                    className="btn-outline btn-sm"
+                    disabled={pending}
+                    onClick={() => runUnarchive(r)}
+                  >
+                    Повернути
+                  </button>
+                  {r.canDelete && (
+                    <button
+                      type="button"
+                      className="btn-quiet btn-sm text-danger"
+                      disabled={pending}
+                      onClick={() => runDelete(r)}
+                    >
+                      Видалити
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <RowAction
+                    row={r} pending={pending}
+                    onBuild={() => runOne(r)}
+                    onEnrich={() => runOneEnrich(r)}
+                    onQuick={() => setQuick({ id: r.id, name: r.name })}
+                  />
+                  <button
+                    type="button"
+                    className="btn-quiet btn-sm"
+                    disabled={pending}
+                    onClick={() => runArchive(r)}
+                    title="Прибрати зі списків; активні задачі буде скасовано"
+                  >
+                    В архів
+                  </button>
+                </>
+              )}
             </span>
           </li>
         ))}

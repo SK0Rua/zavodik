@@ -410,6 +410,10 @@ async function loadBusinessReviews(excludeBusinessIds: Set<string>): Promise<{
   const rows = await queryBusinesses({
     campaign: null, statuses: ['needs_review'], attention: false, verdicts: [], contacts: [],
     minScore: null, q: null, sort: 'updated_at', dir: 'desc',
+    // An archived business asks Roman for nothing: archiving already cancelled
+    // its jobs, so leaving it in the Inbox would be the one screen still
+    // nagging about something he deliberately shelved.
+    archived: 'hide',
   }, 300);
 
   let materialsWaiting = 0;

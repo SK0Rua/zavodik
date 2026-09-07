@@ -1,10 +1,13 @@
 import { Suspense } from 'react';
+import Link from 'next/link';
 import { desc } from 'drizzle-orm';
 import { db, schema } from '@/lib/db';
 import { BusinessFilters } from '@/components/BusinessFilters';
 import { BusinessList, type ListRow } from '@/components/BusinessList';
 import { buildButtonState } from '@/lib/buildPolicy';
-import { hasAnyFilter, parseFilters, queryBusinesses } from '@/lib/businessQuery';
+import {
+  filtersToQuery, hasAnyFilter, parseFilters, queryBusinesses,
+} from '@/lib/businessQuery';
 import { socialsButtonState } from '@/lib/socials';
 import {
   humanBusinessStatus, humanStatus, humanStatusLine, humanVerdict,
@@ -81,16 +84,33 @@ export default async function BusinessesPage({
       // Resting in the reviewable list (campaign stop-point `discover`): the next
       // step is «Зібрати дані», offered right on the row.
       canEnrich: b.status === 'prequalified',
+      archived: b.archivedAt !== null,
+      canDelete: !b.hasOutreach,
     };
   });
 
   return (
     <div>
       <div className="flex items-baseline justify-between gap-3 flex-wrap mb-6">
-        <h1 className="h-page">Бізнеси</h1>
-        <span className="text-sm text-ink-mute tabular-nums">
-          {rows.length}{hasAnyFilter(params) ? ' за фільтром' : ''}
-        </span>
+        <h1 className="h-page">
+          {filters.archived === 'only' ? 'Бізнеси в архіві' : 'Бізнеси'}
+        </h1>
+        <div className="flex items-baseline gap-4">
+          {/* The shelf is one link away in both directions, and the link keeps
+              the rest of the filters so the archive opens on the same slice. */}
+          <Link
+            href={`/businesses?${filtersToQuery({
+              ...filters,
+              archived: filters.archived === 'only' ? 'hide' : 'only',
+            })}`}
+            className="link-quiet text-sm no-underline"
+          >
+            {filters.archived === 'only' ? '← Активні' : 'Архів →'}
+          </Link>
+          <span className="text-sm text-ink-mute tabular-nums">
+            {rows.length}{hasAnyFilter(params) ? ' за фільтром' : ''}
+          </span>
+        </div>
       </div>
 
       <div className="space-y-4">

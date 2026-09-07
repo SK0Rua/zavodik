@@ -42,6 +42,12 @@ export interface BusinessFilters {
   q: string | null;
   sort: SortField;
   dir: 'asc' | 'desc';
+  /**
+   * Archived rows are hidden unless asked for — the archive is a shelf, and the
+   * default view is "what I am working on". `only` is how Roman opens the shelf
+   * itself to restore or delete from it.
+   */
+  archived: 'hide' | 'only' | 'all';
 }
 
 export interface BusinessRow {
@@ -72,6 +78,18 @@ export interface BusinessRow {
   /** Status of the newest enrich-socials job, or null. */
   socialsJobStatus: string | null;
   autoBuild: BuildPolicy;
+  /** When set, the row is on the archive shelf rather than in active work. */
+  archivedAt: Date | null;
+  archivedReason: string | null;
+  /**
+   * Has anything been approved or actually sent to this business?
+   *
+   * This is what makes a hard delete impossible: `approvals` and
+   * `outreach_messages` carry the "one send, never a second" guarantee, so
+   * destroying them would make a re-contact legal. The list uses it to offer
+   * «Видалити» only where it can succeed.
+   */
+  hasOutreach: boolean;
   /**
    * Has the pipeline actually collected anything about this business?
    *
@@ -111,6 +129,11 @@ export function parseFilters(
     ? Number(minScoreRaw)
     : null;
 
+  const archivedRaw = one('archived');
+  const archived: BusinessFilters['archived'] = archivedRaw === 'only' || archivedRaw === 'all'
+    ? archivedRaw
+    : 'hide';
+
   return {
     campaign: one('campaign'),
     statuses: many('status'),
@@ -121,12 +144,13 @@ export function parseFilters(
     q: one('q'),
     sort,
     dir,
+    archived,
   };
 }
 
 /** Is any filter set at all? Used to tell "fresh visit" from "user cleared everything". */
 export function hasAnyFilter(params: Record<string, string | string[] | undefined>): boolean {
-  return ['campaign', 'status', 'attention', 'verdict', 'contact', 'minScore', 'q', 'sort', 'dir']
+  return ['campaign', 'status', 'attention', 'verdict', 'contact', 'minScore', 'q', 'sort', 'dir', 'archived']
     .some((k) => params[k] !== undefined);
 }
 
@@ -142,6 +166,7 @@ export function filtersToQuery(f: Partial<BusinessFilters>): string {
   if (f.q) p.set('q', f.q);
   if (f.sort) p.set('sort', f.sort);
   if (f.dir) p.set('dir', f.dir);
+  if (f.archived && f.archived !== 'hide') p.set('archived', f.archived);
   return p.toString();
 }
 
@@ -169,6 +194,10 @@ export async function queryBusinesses(
   limit = 500,
 ): Promise<BusinessRow[]> {
   const where = [sql`true`];
+  // The archive shelf is opt-in: without this the default list would slowly
+  // fill up again with everything Roman deliberately put away.
+  if (f.archived === 'hide') where.push(sql`b.archived_at is null`);
+  else if (f.archived === 'only') where.push(sql`b.archived_at is not null`);
   if (f.campaign) where.push(sql`b.campaign_id = ${f.campaign}`);
   if (f.statuses.length) where.push(inList(sql`b.status`, f.statuses));
   if (f.attention) {
@@ -219,6 +248,7 @@ export async function queryBusinesses(
       b.id, b.campaign_id as "campaignId", b.name, b.status,
       b.status_reason as "statusReason", b.score, b.rating,
       b.review_count as "reviewCount", b.updated_at as "updatedAt",
+      b.archived_at as "archivedAt", b.archived_reason as "archivedReason",
       a.verdict,
       c.autoBuild as "autoBuild",
       c.niche as "niche",
@@ -255,6 +285,10 @@ export async function queryBusinesses(
       (exists (select 1 from business_facts bf where bf.business_id = b.id)
        or exists (select 1 from business_contacts bc2 where bc2.business_id = b.id))
         as "hasEvidence",
+      -- Approval or message = the audit trail that forbids a hard delete.
+      (exists (select 1 from approvals ap where ap.business_id = b.id)
+       or exists (select 1 from outreach_messages om where om.business_id = b.id))
+        as "hasOutreach",
       sp.deploy_url as "deployUrl",
       sp.state as "projectState",
       j.status as "buildJobStatus",
@@ -311,5 +345,8 @@ export async function queryBusinesses(
     buildJobStatus: (r.buildJobStatus as string | null) ?? null,
     autoBuild: normalizeBuildPolicy(r.autoBuild as string | null),
     hasEvidence: Boolean(r.hasEvidence),
+    archivedAt: r.archivedAt ? new Date(r.archivedAt as string) : null,
+    archivedReason: (r.archivedReason as string | null) ?? null,
+    hasOutreach: Boolean(r.hasOutreach),
   }));
 }

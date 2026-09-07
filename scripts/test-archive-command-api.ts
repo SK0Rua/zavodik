@@ -1,0 +1,128 @@
+import assert from 'node:assert/strict';
+import { Hono } from 'hono';
+import { createInternalAuth } from '../src/api/internalAuth.js';
+import {
+  registerArchiveCommandRoutes,
+  type ArchiveCommandExecutor,
+} from '../src/api/archiveCommands.js';
+
+let passed = 0;
+
+async function check(label: string, run: () => Promise<void>): Promise<void> {
+  await run();
+  passed++;
+  console.log(`✅ ${label}`);
+}
+
+function executor(
+  overrides: Partial<ArchiveCommandExecutor> = {},
+): ArchiveCommandExecutor {
+  return {
+    archiveBusiness: async (businessId) => ({
+      kind: 'archived', businessId, cancelledJobs: 0, cancelledProjects: 0,
+    }),
+    unarchiveBusiness: async (businessId) => ({ kind: 'unarchived', businessId }),
+    deleteBusiness: async (businessId) => ({ kind: 'deleted', businessId }),
+    archiveCampaign: async (campaignId) => ({
+      kind: 'archived', campaignId, archivedBusinesses: 0,
+    }),
+    unarchiveCampaign: async (campaignId) => ({
+      kind: 'unarchived', campaignId, restoredBusinesses: 0,
+    }),
+    deleteCampaign: async (campaignId) => ({ kind: 'deleted', campaignId }),
+    ...overrides,
+  };
+}
+
+function appWith(secret: string, execute = executor()): Hono {
+  const app = new Hono();
+  registerArchiveCommandRoutes(app, createInternalAuth(() => secret), execute);
+  return app;
+}
+
+async function call(app: Hono, method: string, path: string, body?: unknown, key?: string) {
+  const response = await app.request(path, {
+    method,
+    headers: {
+      ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+      ...(key ? { 'x-internal-key': key } : {}),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  return { status: response.status, body: await response.json() as any };
+}
+
+await check('archive commands fail closed without the internal credential', async () => {
+  assert.equal((await call(appWith('secret'), 'POST', '/internal/businesses/a/archive', undefined, 'wrong')).status, 401);
+  assert.equal((await call(appWith('secret'), 'DELETE', '/internal/businesses/a', undefined, 'wrong')).status, 401);
+  // No secret configured at all must refuse rather than accept everything.
+  assert.equal((await call(appWith(''), 'POST', '/internal/campaigns/c/archive', undefined, 'secret')).status, 503);
+});
+
+await check('archiving a business passes the reason through and reports what it cancelled', async () => {
+  let seen: { id?: string; reason?: string } = {};
+  const app = appWith('secret', executor({
+    archiveBusiness: async (businessId, reason) => {
+      seen = { id: businessId, reason };
+      return { kind: 'archived', businessId, cancelledJobs: 3, cancelledProjects: 1 };
+    },
+  }));
+  const res = await call(app, 'POST', '/internal/businesses/ua-sumy-kfc/archive', { reason: 'не цільовий' }, 'secret');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.ok, true);
+  assert.equal(seen.id, 'ua-sumy-kfc');
+  assert.equal(seen.reason, 'не цільовий');
+  assert.equal(res.body.result.cancelledJobs, 3);
+});
+
+await check('a blank reason reaches the service as undefined, not an empty string', async () => {
+  let seen: unknown = 'untouched';
+  const app = appWith('secret', executor({
+    archiveBusiness: async (businessId, reason) => {
+      seen = reason;
+      return { kind: 'archived', businessId, cancelledJobs: 0, cancelledProjects: 0 };
+    },
+  }));
+  await call(app, 'POST', '/internal/businesses/b/archive', { reason: '   ' }, 'secret');
+  assert.equal(seen, undefined);
+});
+
+await check('deleting a contacted business is refused with the reason, not a 500', async () => {
+  const message = 'Цьому бізнесу вже писали';
+  const app = appWith('secret', executor({
+    deleteBusiness: async () => ({ kind: 'blocked', message }),
+  }));
+  const res = await call(app, 'DELETE', '/internal/businesses/ua-sumy-kfc', undefined, 'secret');
+  assert.equal(res.status, 409);
+  assert.equal(res.body.ok, false);
+  assert.equal(res.body.message, message);
+});
+
+await check('a missing business/campaign is 404, a state conflict is 409', async () => {
+  const missing = appWith('secret', executor({
+    deleteBusiness: async () => ({ kind: 'not_found', entity: 'business' }),
+    deleteCampaign: async () => ({ kind: 'not_found', entity: 'campaign' }),
+  }));
+  assert.equal((await call(missing, 'DELETE', '/internal/businesses/nope', undefined, 'secret')).status, 404);
+  assert.equal((await call(missing, 'DELETE', '/internal/campaigns/nope', undefined, 'secret')).status, 404);
+
+  const nonEmpty = appWith('secret', executor({
+    deleteCampaign: async () => ({ kind: 'blocked', message: 'У кампанії ще 12 бізнес(ів).' }),
+  }));
+  const res = await call(nonEmpty, 'DELETE', '/internal/campaigns/ua-sumy-beauty', undefined, 'secret');
+  assert.equal(res.status, 409);
+  assert.match(res.body.message, /12/);
+});
+
+await check('campaign archive and restore report their cascade counts', async () => {
+  const app = appWith('secret', executor({
+    archiveCampaign: async (campaignId) => ({ kind: 'archived', campaignId, archivedBusinesses: 42 }),
+    unarchiveCampaign: async (campaignId) => ({ kind: 'unarchived', campaignId, restoredBusinesses: 42 }),
+  }));
+  const archived = await call(app, 'POST', '/internal/campaigns/ua-sumy-beauty/archive', {}, 'secret');
+  assert.equal(archived.body.result.archivedBusinesses, 42);
+  const restored = await call(app, 'POST', '/internal/campaigns/ua-sumy-beauty/unarchive', undefined, 'secret');
+  assert.equal(restored.body.result.restoredBusinesses, 42);
+});
+
+console.log(`\n${passed} archive command API checks passed`);

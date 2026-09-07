@@ -51,6 +51,14 @@ export const campaigns = pgTable('campaigns', {
     .$type<{ websiteNone?: boolean; minRating?: number | null; minReviews?: number | null; requireContact?: boolean }>()
     .notNull().default({}),
   createdAt: timestamp('created_at').notNull().defaultNow(),
+  /**
+   * Archive: a shelf, not a status. `status` says where a campaign got to in
+   * its own lifecycle (created/running/paused/done); this says whether Roman
+   * still wants to see it. Archiving is reversible and cascades to the
+   * campaign's businesses — see `src/orchestrator/archiveService.ts`.
+   */
+  archivedAt: timestamp('archived_at'),
+  archivedReason: text('archived_reason'),
 });
 
 // ─── Businesses (stable identity) ────────────────────────────────────────────
@@ -79,6 +87,14 @@ export const businesses = pgTable('businesses', {
   scoreBreakdown: jsonb('score_breakdown').$type<Record<string, number>>(),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  /**
+   * Archive: orthogonal to `status`, which stays the workflow outcome
+   * (`rejected`, `won`, `lost`…). Archiving only decides visibility, so a `won`
+   * business can be shelved without pretending its deal never happened, and
+   * un-archiving restores it exactly where it was. Nullable = live.
+   */
+  archivedAt: timestamp('archived_at'),
+  archivedReason: text('archived_reason'),
 }, (t) => [
   index('biz_campaign_idx').on(t.campaignId),
   index('biz_status_idx').on(t.status),

@@ -35,6 +35,7 @@
     "test:outreach-decision-api": "tsx scripts/test-outreach-decision-command-api.ts",
     "test:operator-business-api": "tsx scripts/test-operator-business-command-api.ts",
     "test:campaign-command-api": "tsx scripts/test-campaign-command-api.ts",
+    "test:archive-command-api": "tsx scripts/test-archive-command-api.ts",
     "test:build-review-decision": "tsx scripts/test-build-review-decision.ts",
     "test:enrichment-barrier": "tsx scripts/test-enrichment-barrier.ts",
     "test:workspace-dependencies": "tsx scripts/test-workspace-dependencies.ts",

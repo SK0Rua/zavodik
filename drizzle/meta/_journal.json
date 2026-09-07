@@ -155,6 +155,13 @@
       "when": 1788186406570,
       "tag": "0022_city_assessments",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1788186406571,
+      "tag": "0023_archive_businesses_campaigns",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { desc, sql } from 'drizzle-orm';
+import { desc, isNotNull, isNull, sql } from 'drizzle-orm';
 import { db, schema } from '@/lib/db';
 import { Status, Metric } from '@/components/Status';
 import { fmtDate, plural } from '@/lib/format';
@@ -7,6 +7,9 @@ import { NewCampaignForm } from '@/components/NewCampaignForm';
 import { CityAssessment, type AssessmentRow } from '@/components/CityAssessment';
 import { ActionForm } from '@/components/ActionForm';
 import { setCampaignBuildPolicy, setCampaignFlow, setCampaignRunning } from '@/lib/actions';
+import {
+  archiveCampaignAction, deleteCampaignAction, unarchiveCampaignAction,
+} from '@/lib/archiveActions';
 import { effectiveValue } from '@/lib/settings';
 import { BUILD_POLICIES, BUILD_POLICY_LABELS, normalizeBuildPolicy } from '@/lib/buildPolicy';
 import {
@@ -25,9 +28,24 @@ export const dynamic = 'force-dynamic';
  * same thing: how many we found, how many are ready, how many demos exist, how
  * many we have written to.
  */
-export default async function CampaignsPage() {
+export default async function CampaignsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  // The archive is a shelf, not a second page: same cards, same numbers, one
+  // flag deciding which half of the list you are looking at.
+  const params = await searchParams;
+  const showArchived = (Array.isArray(params.archived) ? params.archived[0] : params.archived) === '1';
   const campaigns = await db.select().from(schema.campaigns)
+    .where(showArchived
+      ? isNotNull(schema.campaigns.archivedAt)
+      : isNull(schema.campaigns.archivedAt))
     .orderBy(desc(schema.campaigns.createdAt));
+  const [{ n: archivedCount } = { n: 0 }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(schema.campaigns)
+    .where(isNotNull(schema.campaigns.archivedAt));
 
   // The «Нова кампанія» form opens on Roman's chosen country/language rather
   // than a hard-coded Greek pair (see /settings → Система).
@@ -51,16 +69,24 @@ export default async function CampaignsPage() {
   // five builds that had been stuck for days were counted as "ready" and the
   // card showed 16 where SQL had 11 (sweep P1-3). A build in flight is its own
   // number; a label and its number must agree.
+  // Every number on a card describes the half of the list being shown: an
+  // archived business is not work in progress on an active campaign, and an
+  // active one is not part of the archive. `allTotal` alone ignores the shelf —
+  // it gates deletion, and a campaign with archived businesses is not empty.
+  const shelf = showArchived
+    ? sql`archived_at is not null`
+    : sql`archived_at is null`;
   const counts = await db.execute(sql`
     select campaign_id as "campaignId",
-           count(*)::int as total,
-           count(*) filter (where status = 'production_ready')::int as ready,
-           count(*) filter (where status = 'site_in_progress')::int as building,
-           count(*) filter (where status in
+           count(*) filter (where ${shelf})::int as total,
+           count(*)::int as "allTotal",
+           count(*) filter (where ${shelf} and status = 'production_ready')::int as ready,
+           count(*) filter (where ${shelf} and status = 'site_in_progress')::int as building,
+           count(*) filter (where ${shelf} and status in
              ('site_ready','outreach_approved'))::int as demos,
-           count(*) filter (where status in
+           count(*) filter (where ${shelf} and status in
              ('contacted','replied','meeting','proposal','won'))::int as contacted,
-           count(*) filter (where status = 'needs_review')::int as waiting
+           count(*) filter (where ${shelf} and status = 'needs_review')::int as waiting
     from businesses group by campaign_id
   `);
   const byId = new Map(
@@ -71,7 +97,19 @@ export default async function CampaignsPage() {
   return (
     <div>
       <div className="flex items-baseline justify-between gap-3 flex-wrap mb-6">
-        <h1 className="h-page">Кампанії</h1>
+        <h1 className="h-page">{showArchived ? 'Кампанії в архіві' : 'Кампанії'}</h1>
+        {/* Only offered once there is an archive to open — an empty shelf needs
+            no door. */}
+        {(showArchived || archivedCount > 0) && (
+          <Link
+            href={showArchived ? '/campaigns' : '/campaigns?archived=1'}
+            className="link-quiet text-sm no-underline"
+          >
+            {showArchived
+              ? '← Активні кампанії'
+              : `Архів (${archivedCount}) →`}
+          </Link>
+        )}
         {/* Before firing a run at 50 businesses, one glance at "чи все живе".
             The full panel (gosom/MinIO/WAHA + last successful runs) lives under
             Налаштування, so this is a link, not a fifth nav item. */}
@@ -87,6 +125,7 @@ export default async function CampaignsPage() {
           const stage = normalizeAutoStage(c.autoStage);
           const filterParts = discoveryFilterSummary(normalizeDiscoveryFilter(c.discoveryFilter));
           const paused = c.status === 'paused';
+          const archived = c.archivedAt !== null;
           return (
             <section key={c.id} className="card p-5 sm:p-6">
               <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -101,8 +140,10 @@ export default async function CampaignsPage() {
                       heading, which is still what a person reads first. */}
                   <p className="text-sm text-ink-mute font-mono mt-0.5">{c.id}</p>
                   <div className="mt-1 flex items-center gap-3 flex-wrap">
-                    <Status tone={c.status === 'running' ? 'go' : 'idle'}>
-                      {c.status === 'running' ? 'Працює' : paused ? 'На паузі' : 'Зупинена'}
+                    <Status tone={archived ? 'idle' : c.status === 'running' ? 'go' : 'idle'}>
+                      {archived
+                        ? 'В архіві'
+                        : c.status === 'running' ? 'Працює' : paused ? 'На паузі' : 'Зупинена'}
                     </Status>
                     <span className="text-sm text-ink-mute">
                       {c.mode === 'live' ? 'бойовий режим' : 'тестовий режим'}
@@ -120,17 +161,60 @@ export default async function CampaignsPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {/* Roman's «Зупинити» / «Продовжити»: a paused campaign starts
-                      no new work; running jobs finish on their own. */}
-                  <ActionForm action={setCampaignRunning}>
-                    <input type="hidden" name="campaignId" value={c.id} />
-                    <input type="hidden" name="paused" value={paused ? 'false' : 'true'} />
-                    <button type="submit" className={paused ? 'btn-primary btn-sm' : 'btn-outline btn-sm'}>
-                      {paused ? 'Продовжити' : 'Зупинити'}
-                    </button>
-                  </ActionForm>
+                  {archived ? (
+                    <>
+                      <ActionForm action={unarchiveCampaignAction}>
+                        <input type="hidden" name="campaignId" value={c.id} />
+                        <button type="submit" className="btn-primary btn-sm">
+                          Повернути з архіву
+                        </button>
+                      </ActionForm>
+                      {/* Offered only on an EMPTY campaign: with businesses still
+                          attached the factory refuses, so a button here would be
+                          a button that always fails. */}
+                      {n('allTotal') === 0 && (
+                        <ActionForm
+                          action={deleteCampaignAction}
+                          confirm={() => window.confirm(
+                            `Видалити кампанію ${c.id} назавжди? Це не можна скасувати.`,
+                          )}
+                        >
+                          <input type="hidden" name="campaignId" value={c.id} />
+                          <button type="submit" className="btn-outline btn-sm text-danger">
+                            Видалити
+                          </button>
+                        </ActionForm>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      {/* Roman's «Зупинити» / «Продовжити»: a paused campaign starts
+                          no new work; running jobs finish on their own. */}
+                      <ActionForm action={setCampaignRunning}>
+                        <input type="hidden" name="campaignId" value={c.id} />
+                        <input type="hidden" name="paused" value={paused ? 'false' : 'true'} />
+                        <button type="submit" className={paused ? 'btn-primary btn-sm' : 'btn-outline btn-sm'}>
+                          {paused ? 'Продовжити' : 'Зупинити'}
+                        </button>
+                      </ActionForm>
+                      <ActionForm
+                        action={archiveCampaignAction}
+                        confirm={() => window.confirm(
+                          n('total') > 0
+                            ? `Заархівувати кампанію разом з ${n('total')} бізнесами? `
+                              + 'Активні задачі буде скасовано. Це оборотно.'
+                            : 'Заархівувати кампанію? Це оборотно.',
+                        )}
+                      >
+                        <input type="hidden" name="campaignId" value={c.id} />
+                        <button type="submit" className="btn-outline btn-sm">
+                          В архів
+                        </button>
+                      </ActionForm>
+                    </>
+                  )}
                   <Link
-                    href={`/businesses?campaign=${encodeURIComponent(c.id)}&sort=score&dir=desc`}
+                    href={`/businesses?campaign=${encodeURIComponent(c.id)}&sort=score&dir=desc${archived ? '&archived=only' : ''}`}
                     className="btn-outline btn-sm no-underline"
                   >
                     Дивитись бізнеси
