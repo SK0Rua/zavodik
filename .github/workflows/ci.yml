@@ -1,0 +1,117 @@
+name: CI
+
+# Every breakage that reached production on 2026-09-07 — a dropped `.js`
+# extension, a missing webpack extensionAlias, a function passed across the
+# server/client boundary, a test left stale by a merge — would have been caught
+# by exactly these four steps. They run on push and on pull requests.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    # The integration tests create and drop their own disposable database, and
+    # refuse to run against a non-local host — so Postgres has to answer on
+    # localhost, with the same credentials `disposableFactoryDatabase` defaults
+    # to.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: factory
+          POSTGRES_PASSWORD: factory
+          POSTGRES_DB: factory
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U factory"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://factory:factory@localhost:5432/factory
+      # The settings registry refuses to store secrets without a master key,
+      # and `test-settings` exercises the AES-256-GCM envelope. A throwaway key
+      # is correct here: CI must never see a real one.
+      SETTINGS_MASTER_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+      NEXT_TELEMETRY_DISABLED: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # `packageManager` in package.json pins the pnpm version, so corepack
+      # installs the same one that wrote the lockfiles.
+      - run: corepack enable
+
+      - name: Install (factory)
+        run: pnpm install --frozen-lockfile
+
+      - name: Install (ui)
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+
+      # 1. Types. Catches the NodeNext `.js`-extension class of bug at its source.
+      - name: Typecheck (factory)
+        run: pnpm typecheck
+
+      # 2. The UI build. This is the step that catches a Next-specific failure a
+      #    plain tsc cannot see: an unresolvable import, or a function handed to
+      #    a client component from a server component.
+      - name: Build UI
+        working-directory: ui
+        run: pnpm build
+
+      # 3. Schema. A migration that does not apply is a broken deploy, and the
+      #    journal drifting out of step with the SQL files is easy to miss.
+      - name: Apply migrations
+        run: pnpm db:migrate
+
+      # 4. Tests. Split so a red run names the failing group immediately.
+      - name: Unit tests
+        run: |
+          set -e
+          for t in \
+            accounts toast inbox-policy demo-state telegram-copy \
+            layout-quality outreach-mode fixture-safety workspace-dependencies \
+            ui-shared-contracts; do
+            echo "── test:$t"
+            pnpm "test:$t"
+          done
+
+      - name: Command API tests
+        run: |
+          set -e
+          for t in \
+            business-transition-api outreach-decision-api operator-business-api \
+            campaign-command-api archive-command-api; do
+            echo "── test:$t"
+            pnpm "test:$t"
+          done
+
+      # Each of these creates and drops its own disposable database against the
+      # service above. `test:build-failure-decision` is deliberately NOT here:
+      # it inspects the running compose `factory` container (scripts/e2e/
+      # runtimeFs.ts), so it is an integration test against a deployed stack,
+      # not something CI can stand up.
+      - name: Database-backed tests
+        run: |
+          set -e
+          for t in \
+            settings status-transitions discovery-resilience \
+            build-review-decision visual-qa-decision; do
+            echo "── test:$t"
+            pnpm "test:$t"
+          done

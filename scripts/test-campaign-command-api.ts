@@ -82,6 +82,37 @@ await check('valid input is normalized and returns the discovery command result'
     queries: ['beauty'], targetCount: 20,
     geofence: { lat: 38.2, lng: 21.7, radiusKm: 10 },
     autoBuild: 'manual',
+    // The route normalises the campaign-flow controls too, so a request that
+    // names neither still reaches the service with explicit defaults rather
+    // than `undefined`: stop at the build stage, filter nothing at discovery.
+    autoStage: 'build',
+    discoveryFilter: {
+      websiteNone: false, minRating: null, minReviews: null, requireContact: false,
+    },
+  });
+});
+
+await check('campaign-flow controls are normalised, not passed through raw', async () => {
+  let captured: { autoStage?: unknown; discoveryFilter?: unknown } = {};
+  const app = appWith('secret', {
+    create: async (input) => {
+      captured = input;
+      return { kind: 'created', campaignId: 'gr-patras-beauty-2026-08', job: acceptedJob };
+    },
+  });
+  await post(app, {
+    ...validBody,
+    autoStage: 'nonsense',
+    // `'on'` is what an HTML checkbox sends; `'yes'` is not a truthy form value
+    // and must NOT be read as one. `minReviews: 'x'` is unparseable and becomes
+    // null rather than NaN, which would poison every later comparison.
+    discoveryFilter: { websiteNone: 'on', minRating: '4.2', minReviews: 'x', requireContact: 'yes' },
+  }, 'secret');
+  // An unknown stop-point falls back to the default rather than reaching the
+  // service and silently halting every campaign at an undefined stage.
+  assert.equal(captured.autoStage, 'build');
+  assert.deepEqual(captured.discoveryFilter, {
+    websiteNone: true, minRating: 4.2, minReviews: null, requireContact: false,
   });
 });
 
