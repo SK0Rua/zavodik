@@ -544,6 +544,44 @@ ${previous || '(попередніх автоматичних зауважень
   // requests via the Referer token and is the only implementation that does;
   // duplicating a static handler here is what regressed it before.
   await startDemoServer();
+  await restorePreviewMounts();
+}
+
+/**
+ * Re-register every preview that still has a build on disk.
+ *
+ * `registerPreview` keeps its token→directory map in process memory, so before
+ * this every restart — a deploy, a rebuild, a crash — silently invalidated
+ * every preview link Roman had open, and «Переглянути збірку» answered 404
+ * until he clicked the button again. The mounts are cheap to rebuild: the
+ * projects are in Postgres and their exports are on the shared volume, so the
+ * map is derived state, not something worth persisting separately.
+ *
+ * Best-effort by design: a preview that cannot be restored is a 404 Roman can
+ * fix with one click, and must never stop the API from coming up.
+ */
+async function restorePreviewMounts(): Promise<void> {
+  try {
+    const projects = await db.select({
+      id: schema.siteProjects.id,
+      dir: schema.siteProjects.dir,
+    }).from(schema.siteProjects);
+
+    let restored = 0;
+    for (const project of projects) {
+      if (!project.dir) continue;
+      const out = path.join(project.dir, 'out');
+      // Only a real export gets a mount: registering a directory with no
+      // index.html would turn a missing build into a blank frame instead of
+      // the honest "збірка не збереглася" the preview endpoint returns.
+      if (!existsSync(path.join(out, 'index.html'))) continue;
+      registerPreview(project.id, out);
+      restored += 1;
+    }
+    log.info('preview mounts restored', { restored, projects: projects.length });
+  } catch (err) {
+    log.warn('could not restore preview mounts', { err: String(err) });
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
