@@ -117,31 +117,51 @@ export function pickMatch(
 ): RawCandidate | null {
   if (!candidates.length) return null;
 
+  const haveAnchor = wanted.lat !== null && wanted.lng !== null;
   const distance = (c: RawCandidate): number => {
-    if (wanted.lat === null || wanted.lng === null || c.lat === null || c.lng === null) {
-      return Number.POSITIVE_INFINITY;
-    }
-    return Math.hypot(c.lat - wanted.lat, c.lng - wanted.lng);
+    if (!haveAnchor || c.lat === null || c.lng === null) return Number.POSITIVE_INFINITY;
+    return Math.hypot(c.lat - wanted.lat!, c.lng - wanted.lng!);
+  };
+
+  // A name is not enough on its own. Chains and coincidences are everywhere:
+  // searching "Coffeeman" near Sumy cheerfully returns the Coffeeman in
+  // SINGAPORE, an exact name match 8000km away — observed on the very first
+  // real link. When the pin is known, everything outside this radius is a
+  // different business that happens to share a name, whatever it is called.
+  const NAMED_RADIUS_DEG = 0.05;   // ~5km: generous for an imprecise pin
+  const ANCHOR_RADIUS_DEG = 0.0015; // ~150m: all a nameless link can justify
+
+  const nearEnough = (c: RawCandidate, limit: number): boolean => {
+    if (!haveAnchor) return true;      // nothing to check against
+    if (c.lat === null || c.lng === null) return false; // unplaceable, unverifiable
+    return distance(c) <= limit;
   };
 
   if (wanted.name) {
     const target = normalizeName(wanted.name);
-    const exact = candidates.filter((c) => normalizeName(c.name) === target);
-    if (exact.length) return exact.sort((a, b) => distance(a) - distance(b))[0]!;
+    const byDistance = (a: RawCandidate, b: RawCandidate) => distance(a) - distance(b);
+
+    const exact = candidates
+      .filter((c) => normalizeName(c.name) === target && nearEnough(c, NAMED_RADIUS_DEG));
+    if (exact.length) return exact.sort(byDistance)[0]!;
 
     const partial = candidates.filter((c) => {
       const n = normalizeName(c.name);
-      return n.includes(target) || target.includes(n);
+      return (n.includes(target) || target.includes(n)) && nearEnough(c, NAMED_RADIUS_DEG);
     });
-    if (partial.length) return partial.sort((a, b) => distance(a) - distance(b))[0]!;
+    if (partial.length) return partial.sort(byDistance)[0]!;
+
+    // A name was asked for and nothing near the pin carries it. Falling back to
+    // "closest result" here would add the neighbouring shop under the name
+    // Roman typed, which is the one outcome worth failing for.
+    return null;
   }
 
-  // No name to go on: only a coordinate anchor can decide, and only when the
-  // result is genuinely close (~150m). Guessing "the first row" would quietly
-  // add the wrong business, which is worse than asking Roman to try again.
-  if (wanted.lat !== null && wanted.lng !== null) {
+  // No name to go on: only the pin can decide, and only when a result sits
+  // essentially on top of it.
+  if (haveAnchor) {
     const nearest = [...candidates].sort((a, b) => distance(a) - distance(b))[0]!;
-    if (distance(nearest) <= 0.0015) return nearest;
+    if (nearEnough(nearest, ANCHOR_RADIUS_DEG)) return nearest;
   }
   return null;
 }

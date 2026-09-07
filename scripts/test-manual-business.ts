@@ -53,6 +53,38 @@ check('among same-name results the nearest to the pin wins', () => {
   assert.equal(picked?.lat, 50.9002);
 });
 
+check('an exact name on the other side of the world is NOT the place meant', () => {
+  // Observed on the very first real link: searching "Coffeeman" near Sumy
+  // returned the Coffeeman in Singapore — an exact name match, 8000km away,
+  // which the matcher accepted because the name won before distance was ever
+  // considered. A shared name is a coincidence, not an identity.
+  const picked = pickMatch(
+    [candidate('Coffeeman', 1.3521, 103.8198)],
+    { name: 'Coffeeman', lat: 50.9077, lng: 34.7981 },
+  );
+  assert.equal(picked, null, 'a far-away namesake must be refused');
+});
+
+check('a named search refuses the neighbours rather than guessing', () => {
+  // Nothing near the pin carries the name: adding the shop next door under the
+  // name Roman typed is the one outcome worth failing for.
+  const picked = pickMatch(
+    [candidate('Some Other Cafe', 50.9001, 34.7982)],
+    { name: 'Coffee Room', lat: 50.9, lng: 34.798 },
+  );
+  assert.equal(picked, null);
+});
+
+check('a candidate with no coordinates is not accepted against a known pin', () => {
+  // We cannot verify it is the right place, and the name alone has already
+  // proved insufficient.
+  const picked = pickMatch(
+    [candidate('Coffee Room', null, null)],
+    { name: 'Coffee Room', lat: 50.9, lng: 34.8 },
+  );
+  assert.equal(picked, null);
+});
+
 check('a partial name still matches — Google decorates names', () => {
   const picked = pickMatch(
     [candidate('Coffee Room Sumy', 50.9, 34.8)],
