@@ -86,7 +86,19 @@ function collisionSuffix(candidate: RawCandidate): string {
 export class NormalizationService {
   constructor(private readonly runStore: WorkflowRunStore) {}
 
-  async normalize(campaignId: string, candidate: RawCandidate): Promise<NormalizeCandidateResult> {
+  /**
+   * @param options.operatorChosen Roman picked this business by hand (pasted a
+   *   Maps link) rather than a search surfacing it. Travels into the
+   *   fast-qualify payload so that stage can skip the taste filters — chains,
+   *   off-target categories, the campaign's keep/drop rules — while still
+   *   applying the hard stops. Everything else on this path is identical, so a
+   *   manual add cannot drift from the automatic one.
+   */
+  async normalize(
+    campaignId: string,
+    candidate: RawCandidate,
+    options: { operatorChosen?: boolean } = {},
+  ): Promise<NormalizeCandidateResult> {
     const normalizedPhone = normalizePhone(candidate.phone);
     // Honour the operator's directory skip-list (config.discovery.extraDirectoryDomains)
     // so a booking/menu shortener is classified as "not a real site" without a code change.
@@ -200,6 +212,7 @@ export class NormalizationService {
           businessId: result.businessId,
           campaignId,
           idempotencyKey: `fast-qualify:${result.businessId}`,
+          ...(options.operatorChosen ? { operatorChosen: true } : {}),
         },
       }];
     });

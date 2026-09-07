@@ -86,6 +86,7 @@ jobs:
           for t in \
             accounts toast inbox-policy demo-state telegram-copy \
             layout-quality outreach-mode fixture-safety workspace-dependencies \
+            maps-link manual-business \
             ui-shared-contracts; do
             echo "── test:$t"
             pnpm "test:$t"

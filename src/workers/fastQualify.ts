@@ -17,6 +17,7 @@ import {
 } from '../orchestrator/statuses.js';
 import { commitWorkflow, type JobPayload } from '../orchestrator/queue.js';
 import { mayAutoAdvance } from '../orchestrator/autoAdvance.js';
+import { manualQualifyReasons } from '../orchestrator/manualBusinessService.js';
 import {
   type DiscoveryFilter, DEFAULT_DISCOVERY_FILTER,
   discoveryFilterReasons, normalizeDiscoveryFilter,
@@ -142,18 +143,36 @@ export async function fastQualifyHandler(payload: JobPayload): Promise<void> {
     || (d.matchType === 'business_id' && d.value === biz.id)
     || (d.matchType === 'email' && contacts.some((c) => c.channel === 'email' && c.value === d.value)));
 
-  const { verdict, reasons } = decideFastQualification({
-    name: biz.name,
-    category: biz.category,
-    businessStatus: biz.businessStatus,
-    normalizedPhone: biz.normalizedPhone,
-    hasContact: contacts.some((c) => c.channel !== 'website'),
-    hasOwnSite: !!biz.domain,
-    rating: biz.rating,
-    reviewCount: biz.reviewCount,
-    blockedByDnc,
-    filter,
-  });
+  // A business Roman added by hand from a Maps link has already been judged by
+  // the person whose judgement this stage exists to approximate. Re-running the
+  // taste filters on it — chain names, off-target categories, the campaign's
+  // keep/drop rules — would let the machine overrule the operator and drop the
+  // business he deliberately went and found. Only the two facts no intent can
+  // override survive: the place is closed, or it must not be contacted.
+  const operatorChosen = payload.operatorChosen === true;
+  const { verdict, reasons } = operatorChosen
+    ? (() => {
+        const hard = manualQualifyReasons({
+          businessStatus: biz.businessStatus,
+          blockedByDnc,
+        });
+        return {
+          verdict: (hard.length ? 'rejected' : 'prequalified') as FastQualifyDecision['verdict'],
+          reasons: hard.length ? hard : ['added by operator from a map link'],
+        };
+      })()
+    : decideFastQualification({
+        name: biz.name,
+        category: biz.category,
+        businessStatus: biz.businessStatus,
+        normalizedPhone: biz.normalizedPhone,
+        hasContact: contacts.some((c) => c.channel !== 'website'),
+        hasOwnSite: !!biz.domain,
+        rating: biz.rating,
+        reviewCount: biz.reviewCount,
+        blockedByDnc,
+        filter,
+      });
 
   let committed = false;
   await commitWorkflow(async (tx) => {

@@ -4,6 +4,7 @@ import { desc } from 'drizzle-orm';
 import { db, schema } from '@/lib/db';
 import { BusinessFilters } from '@/components/BusinessFilters';
 import { BusinessList, type ListRow } from '@/components/BusinessList';
+import { AddBusinessByLink } from '@/components/AddBusinessByLink';
 import { buildButtonState } from '@/lib/buildPolicy';
 import {
   countBusinessesMatching, filtersToQuery, hasAnyFilter, parseFilters, queryBusinesses,
@@ -99,6 +100,10 @@ export default async function BusinessesPage({
           {filters.archived === 'only' ? 'Бізнеси в архіві' : 'Бізнеси'}
         </h1>
         <div className="flex items-baseline gap-4">
+          {/* Adding by hand belongs next to the list it adds to, not on a page
+              of its own — and only on the live view: the archive is where
+              businesses go to stop, not somewhere to add one. */}
+          {filters.archived !== 'only' && <AddBusinessByLink />}
           {/* The shelf is one link away in both directions, and the link keeps
               the rest of the filters so the archive opens on the same slice. */}
           <Link

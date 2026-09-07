@@ -52,6 +52,9 @@ import { registerOperatorBusinessCommandRoutes } from './operatorBusinessCommand
 import { OperatorBusinessCommandService } from '../orchestrator/operatorBusinessCommandService.js';
 import { registerArchiveCommandRoutes } from './archiveCommands.js';
 import { ArchiveService } from '../orchestrator/archiveService.js';
+import { registerManualBusinessCommandRoutes } from './manualBusinessCommands.js';
+import { ManualBusinessService } from '../orchestrator/manualBusinessService.js';
+import { NormalizationService } from '../orchestrator/normalizationService.js';
 
 export async function startApi(): Promise<void> {
   // Queue creation is part of readiness. In API-only mode there may be no
@@ -103,6 +106,11 @@ export async function startApi(): Promise<void> {
     new OperatorBusinessCommandService(workflowRunStore, db),
   );
   registerArchiveCommandRoutes(app, internalAuth, new ArchiveService(db));
+  registerManualBusinessCommandRoutes(
+    app,
+    internalAuth,
+    new ManualBusinessService(db, new NormalizationService(workflowRunStore)),
+  );
 
   /**
    * Run one connectivity check and report the REAL result (never a throw).
