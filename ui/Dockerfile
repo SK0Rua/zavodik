@@ -25,7 +25,7 @@ COPY ui/ ./
 # `ui/factory/schema.ts` arrives as the dev symlink (-> ../../src/db/schema.ts),
 # which dangles here because the copy is rooted at /app. Remove it first, then
 # copy the real file: a plain COPY would otherwise write THROUGH the symlink.
-RUN rm -f ./factory/schema.ts ./factory/buildPolicy.ts ./factory/campaignFlow.ts ./factory/settings.ts ./factory/models.ts ./factory/regions.ts
+RUN rm -f ./factory/schema.ts ./factory/buildPolicy.ts ./factory/campaignFlow.ts ./factory/businessStatus.ts ./factory/settings.ts ./factory/models.ts ./factory/regions.ts ./factory/jobDefinitions.ts
 COPY src/db/schema.ts ./factory/schema.ts
 # Same reasoning as the schema: the build policy (who gets a demo built, in what
 # order) is ONE file shared with the workers, so the router and the UI's
@@ -35,7 +35,11 @@ COPY src/orchestrator/buildPolicy.ts ./factory/buildPolicy.ts
 # and the discovery filter) are ONE file, so the router's auto-advance and the
 # campaign form can never disagree about where a campaign stops or what it keeps.
 COPY src/orchestrator/campaignFlow.ts ./factory/campaignFlow.ts
-# Third shared file, same rule: the settings REGISTRY (which keys exist, which
+# Legal business-state transitions are a single contract for
+# worker CAS updates and UI actions. Local development follows the symlink;
+# container builds receive the same source explicitly.
+COPY src/orchestrator/businessStatus.ts ./factory/businessStatus.ts
+# The settings REGISTRY (which keys exist, which
 # are secret, how they validate) and the AES-256-GCM envelope format must be
 # ONE definition. A drifting copy here would mean the UI writes a row the
 # factory cannot decrypt, or offers a key nothing reads.
@@ -44,11 +48,14 @@ COPY src/lib/settings.ts ./factory/settings.ts
 # must travel with it — otherwise the registry offers CAMPAIGN_DEFAULT_* options
 # that the build cannot resolve. Same ONE-definition rule as the files above.
 COPY src/lib/regions.ts ./factory/regions.ts
-# Fourth shared file, same rule: the MODEL-TIER policy (how AGENT_MODEL /
+# The MODEL-TIER policy (how AGENT_MODEL /
 # AGENT_MODEL_HEAVY map onto whichever harness is selected) is one definition —
 # the workers pass these ids to their CLIs and the settings page renders the
 # same rule as field fallbacks. Import-free by design (see its docblock).
 COPY src/agents/modelPolicy.ts ./factory/models.ts
+# Queue policy and human-readable job metadata are one
+# import-free registry consumed by both factory and UI.
+COPY src/orchestrator/jobDefinitions.ts ./factory/jobDefinitions.ts
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build
 

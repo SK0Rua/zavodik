@@ -197,6 +197,7 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
         {rows.map((r) => (
           <li
             key={r.id}
+            data-business-id={r.id}
             className="row grid-cols-[auto_1fr] sm:grid-cols-[auto_minmax(0,1fr)_auto_auto_auto]"
           >
             <input
@@ -388,7 +389,7 @@ function RowAction({ row, pending, onBuild, onEnrich, onQuick }: {
       title={row.build.hint}
       onClick={onBuild}
     >
-      Будувати демо
+      Побудувати демо
     </button>
   );
 }

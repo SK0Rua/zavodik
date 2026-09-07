@@ -28,18 +28,20 @@ import { query, type Options, type SDKMessage } from '@anthropic-ai/claude-agent
 import type { ZodType } from 'zod';
 import { config } from '../config.js';
 import { log } from '../lib/logger.js';
-import { zodToJsonSchema, extractJson, jsonOnlyInstruction } from './schema.js';
+import { outputJsonSchema, extractJson, jsonOnlyInstruction } from './schema.js';
 import { appendBuildLog, summarizeSdkMessage } from '../build/buildLog.js';
 import { withAgentSlot } from './semaphore.js';
 import { codeAgentEnv, buildPreToolUseGuard } from './sandbox.js';
 import { withStructuredRetries } from './retry.js';
 import { looksRateLimited, rateLimitedFromInfo, rateLimitedFromText } from './ratelimit.js';
 import { effectiveModel } from './modelPolicy.js';
-import { readAndValidateResult, resultPathIn } from './result.js';
+import { readAndValidateResult } from './result.js';
+import { claudeToolSandbox } from './confinement.js';
 import {
   RateLimitedError,
   RUNTIME_LABELS,
   type AgentRuntime,
+  type CodeAgentInvocationContext,
   type AgentUsage,
   type CodeAgentOptions,
   type StructuredOptions,
@@ -51,8 +53,46 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_STRUCTURED_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_CODE_TIMEOUT_MS = 60 * 60_000;
 
-/** The guard hook, run by the CLI as a child process on every tool call. */
-const GUARD_HOOK = path.join(HERE, 'guardHook.ts');
+/**
+ * The guard hook, run by the CLI as a child process on every tool call.
+ *
+ * Same extension as THIS module: `.ts` under tsx (factory, tests), `.js` in
+ * the compiled executor image. A hard-coded `.ts` pointed the production
+ * executor at a file that does not exist in dist/: the CLI logged
+ * «PreToolUse hook error … non-blocking» on every call and the tmux path ran
+ * with NO guard at all (seen 2026-09-04). The executor's startup probe now
+ * refuses to come up when this file is missing.
+ */
+const GUARD_HOOK = path.join(HERE, `guardHook${path.extname(fileURLToPath(import.meta.url))}`);
+export function guardHookPath(): string { return GUARD_HOOK; }
+
+/**
+ * Tools the interactive build session may call without a dialog, by their
+ * permission-rule names — and the interactive-only ones it may not call at all.
+ *
+ * Why an explicit list next to `--dangerously-skip-permissions`: CLI 2.1.239
+ * forces the permission mode back to `default` whenever
+ * CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set («allowed_non_write_users
+ * hardening», anthropics/claude-code#51258), and the executor sets that on
+ * purpose (health.ts insists on it). In default mode every Write/Edit asks
+ * «Do you want to overwrite …?», nobody answers, and the build idles to death:
+ * three BEAUTIFY Laser attempts on 2026-09-04 sat 25 minutes each on that
+ * dialog. The CLI's own warning names the way out — declare allowedTools —
+ * and the -p (structured) path always did, which is why the design step kept
+ * working while the build step never could. Verified in the executor: with
+ * this list a Write over an existing file goes through without a dialog.
+ */
+export const TERMINAL_ALLOWED_TOOLS: readonly string[] = [
+  'Bash', 'Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Glob', 'Grep',
+  'ToolSearch', 'Skill', 'Agent', 'TodoWrite',
+  'TaskCreate', 'TaskGet', 'TaskUpdate', 'TaskList', 'TaskOutput', 'TaskStop',
+  'BashOutput', 'KillShell', 'Monitor', 'WebFetch', 'WebSearch',
+];
+export const TERMINAL_DISALLOWED_TOOLS: readonly string[] = [
+  'AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode', 'EnterWorktree', 'ExitWorktree',
+  'Artifact', 'PushNotification', 'SendFeedback', 'ScheduleWakeup',
+  'CronCreate', 'CronDelete', 'CronList', 'RemoteTrigger', 'Workflow',
+];
 
 interface CollectedRun {
   resultText: string;
@@ -256,6 +296,7 @@ export async function preTrustWorkspace(cwd: string): Promise<void> {
  */
 export function guardSettings(workspace: string, tsxBin: string): unknown {
   return {
+    sandbox: claudeToolSandbox(workspace),
     hooks: {
       PreToolUse: [
         {
@@ -308,19 +349,23 @@ export const claudeCodeRuntime: AgentRuntime = {
   terminalLaunch(opts: CodeAgentOptions, { settingsPath }: { settingsPath: string }): TerminalLaunchSpec {
     const args = [
       '--dangerously-skip-permissions',
-      '--model', effectiveModel(this.id, opts.heavy, config.agents.modelInputs()),
+      '--model', opts.model ?? effectiveModel(this.id, opts.heavy, config.agents.modelInputs()),
       '--settings', settingsPath,
       '--setting-sources', 'project',
       '--name', opts.name,
+      // Both lists last: the CLI reads a variadic list up to the next flag.
+      '--allowedTools', ...(opts.allowedTools?.length ? opts.allowedTools : TERMINAL_ALLOWED_TOOLS),
+      '--disallowedTools', ...TERMINAL_DISALLOWED_TOOLS,
     ];
-    if (opts.allowedTools?.length) args.push('--allowedTools', ...opts.allowedTools);
     return {
       command: 'claude',
       args,
       needsKickoff: true,
       interactive: true,
-      // The permissions footer is what first paint of a ready input box shows.
-      kickoffReadyPattern: 'bypass permissions|shift\\+tab to cycle',
+      // The permissions footer is what first paint of a ready input box shows:
+      // «bypass permissions on» when the CLI honours the flag, «manual mode on»
+      // when the env-scrub hardening forces default mode (see the tool lists).
+      kickoffReadyPattern: 'bypass permissions|manual mode|shift\\+tab to cycle|\\? for shortcuts',
     };
   },
 
@@ -333,7 +378,7 @@ export const claudeCodeRuntime: AgentRuntime = {
   ): Promise<T> {
     const retries = opts.retries ?? 2;
     const timeoutMs = opts.timeoutMs ?? DEFAULT_STRUCTURED_TIMEOUT_MS;
-    const jsonSchema = zodToJsonSchema(schema);
+    const jsonSchema = outputJsonSchema(schema, opts.outputJsonSchema);
 
     // Images are handed over as file paths the agent reads itself (multimodal
     // Read); this keeps everything inside the subscription runtime.
@@ -343,7 +388,7 @@ export const claudeCodeRuntime: AgentRuntime = {
       : '';
 
     const cwd = opts.cwd ?? await mkdtemp(path.join(tmpdir(), 'factory-agent-'));
-    const model = effectiveModel(this.id, opts.heavy, config.agents.modelInputs());
+    const model = opts.model ?? effectiveModel(this.id, opts.heavy, config.agents.modelInputs());
 
     return withStructuredRetries({
       name, runtime: this.id, retries,
@@ -364,13 +409,17 @@ export const claudeCodeRuntime: AgentRuntime = {
           allowDangerouslySkipPermissions: true,
           systemPrompt: { type: 'preset', preset: 'claude_code', append: systemPrompt },
           settingSources: [],
+          ...(needsRead ? {
+            hooks: { PreToolUse: [{ hooks: [buildPreToolUseGuard(cwd, name)] }] },
+          } : {}),
+          sandbox: claudeToolSandbox(cwd),
           outputFormat: { type: 'json_schema', schema: jsonSchema },
           // No tools here, but there is still no reason to expose factory
           // secrets to a model processing scraped third-party text.
-          env: codeAgentEnv(this.authEnv()),
+          env: codeAgentEnv(this.authEnv(), cwd),
         };
 
-        const prompt = `${userContent}${imageBlock}${jsonOnlyInstruction(schema)}`;
+        const prompt = `${userContent}${imageBlock}${jsonOnlyInstruction(schema, opts.outputJsonSchema)}`;
         const startedAt = Date.now();
         const run = await collectRun(options, prompt, timeoutMs, `structured:${name}`, {
           logPath: opts.buildLogPath, agent: name,
@@ -413,10 +462,13 @@ export const claudeCodeRuntime: AgentRuntime = {
     });
   },
 
-  async codeAgent<T>(opts: CodeAgentOptions, resultSchema: ZodType<T>): Promise<T> {
+  async codeAgent<T>(
+    opts: CodeAgentOptions,
+    resultSchema: ZodType<T>,
+    invocation: CodeAgentInvocationContext,
+  ): Promise<T> {
     const timeoutMs = opts.timeoutMs ?? DEFAULT_CODE_TIMEOUT_MS;
-    const resultPath = resultPathIn(opts.cwd);
-    const model = effectiveModel(this.id, opts.heavy, config.agents.modelInputs());
+    const model = opts.model ?? effectiveModel(this.id, opts.heavy, config.agents.modelInputs());
 
     return withAgentSlot(`code:${opts.name}`, async () => {
       const options: Options = {
@@ -433,6 +485,7 @@ export const claudeCodeRuntime: AgentRuntime = {
         // is not consulted under bypassPermissions (SDK emits
         // CLAUDE_SDK_CAN_USE_TOOL_SHADOWED), verified empirically.
         hooks: { PreToolUse: [{ hooks: [buildPreToolUseGuard(opts.cwd, opts.name)] }] },
+        sandbox: claudeToolSandbox(opts.cwd),
         systemPrompt: { type: 'preset', preset: 'claude_code', append: opts.appendSystemPrompt },
         // Deliberate asymmetry with structured(), which pins settingSources: [].
         // The workspace agent NEEDS its own `<cwd>/.claude/` (that is where the
@@ -448,13 +501,13 @@ export const claudeCodeRuntime: AgentRuntime = {
         ...(opts.skills ? { skills: opts.skills } : {}),
         // Allowlist only: the builder never needs SMTP/IMAP/Telegram/S3/DB creds,
         // and must not be able to exfiltrate them via `echo $SMTP_PASS`.
-        env: codeAgentEnv(this.authEnv()),
+        env: codeAgentEnv(this.authEnv(), opts.cwd),
       };
 
       const prompt =
         `${opts.prompt}\n\n` +
         `MANDATORY FINAL STEP: write a file named result.json in the workspace root (${opts.cwd}) ` +
-        `matching this JSON Schema, then stop:\n${JSON.stringify(zodToJsonSchema(resultSchema), null, 2)}`;
+        `matching this JSON Schema, then stop:\n${JSON.stringify(outputJsonSchema(resultSchema, opts.outputJsonSchema), null, 2)}`;
 
       const startedAt = Date.now();
       const run = await collectRun(options, prompt, timeoutMs, `code:${opts.name}`, {
@@ -463,10 +516,12 @@ export const claudeCodeRuntime: AgentRuntime = {
       reportUsage(opts.onUsage, run, model, startedAt);
 
       // A session can end on error_max_turns having ALREADY written a valid
-      // result.json. The artifact on disk is the contract, so check it before
-      // declaring failure — but only trust it if it validates.
+      // result.json. The current invocation's artifact is the contract, so
+      // check it before declaring failure — but only trust it if it validates.
       if (!run.success) {
-        const salvaged = await readAndValidateResult(resultPath, opts.name, resultSchema).catch(() => undefined);
+        const salvaged = await readAndValidateResult(
+          invocation.resultPath, opts.name, resultSchema, invocation,
+        ).catch(() => undefined);
         if (salvaged !== undefined) {
           log.warn('code agent wrote a valid result.json despite a failed session subtype', {
             name: opts.name, subtype: run.errorSubtype, turns: run.numTurns,
@@ -478,7 +533,7 @@ export const claudeCodeRuntime: AgentRuntime = {
           `${[run.threwAfterResult, run.resultText, ...run.errors].filter(Boolean).join(' ').slice(0, 300)}`,
         );
       }
-      return readAndValidateResult(resultPath, opts.name, resultSchema);
+      return readAndValidateResult(invocation.resultPath, opts.name, resultSchema, invocation);
     });
   },
 };

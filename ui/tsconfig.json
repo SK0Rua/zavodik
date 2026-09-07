@@ -21,7 +21,9 @@
       "@factory/campaignFlow": ["./factory/campaignFlow.ts"],
       "@factory/settings": ["./factory/settings.ts"],
       "@factory/models": ["./factory/models.ts"],
-      "@factory/regions": ["./factory/regions.ts"]
+      "@factory/regions": ["./factory/regions.ts"],
+      "@factory/jobDefinitions": ["./factory/jobDefinitions.ts"],
+      "@factory/businessStatus": ["./factory/businessStatus.ts"]
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],

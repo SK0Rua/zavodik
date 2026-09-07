@@ -253,7 +253,9 @@ const JOB: Record<string, HumanStatus> = {
   running: { text: 'Виконується', tone: 'go', needsRoman: false },
   succeeded: { text: 'Готово', tone: 'go', needsRoman: false },
   failed: { text: 'Помилка', tone: 'stop', needsRoman: true },
-  needs_human: { text: 'Потрібна твоя увага', tone: 'wait', needsRoman: true },
+  // Not the business word «Потрібна твоя увага»: a business asks, a step
+  // waits, and the two were indistinguishable by label on the system page.
+  needs_human: { text: 'Чекає твого рішення', tone: 'wait', needsRoman: true },
   cancelled: { text: 'Скасовано', tone: 'idle', needsRoman: false },
   // Written by the job reconciler (fix-funnel's P0-3 work): a job that was
   // `queued`/`running` when a worker died and can never finish, closed out so
@@ -262,13 +264,26 @@ const JOB: Record<string, HumanStatus> = {
   // Without this entry the console printed the raw English `stale` for the 88
   // rows the reconciler closed.
   stale: { text: 'Втрачена (перезапуск)', tone: 'idle', needsRoman: false },
+  // A delivery that found its project or business already moved on (stopped,
+  // rebuilt, advanced by a sibling). Neither success nor failure: nothing
+  // happened, on purpose, and the reason column says why.
+  skipped: { text: 'Пропущено: стан змінився', tone: 'idle', needsRoman: false },
   // Not an error: the subscription window is exhausted and the queue resumes
   // by itself (SPEC §2.3b). Saying "failed" here would send Roman debugging
   // something that is working as designed.
   retry_wait: { text: 'Пауза: ліміт підписки', tone: 'wait', needsRoman: false },
 };
 
-export function humanJobStatus(status: string): HumanStatus {
+/**
+ * `retry_wait` is two different pauses: the subscription window (the default
+ * wording) and an agent runner that is temporarily unreachable — after a
+ * deploy, most often. Both resume on their own; only the reason differs, and
+ * the reason is what a person reading the row wants to know.
+ */
+const RUNNER_PAUSE: HumanStatus = { text: 'Пауза: runner недоступний', tone: 'wait', needsRoman: false };
+
+export function humanJobStatus(status: string, errorCode?: string | null): HumanStatus {
+  if (status === 'retry_wait' && errorCode === 'RUNNER_UNAVAILABLE') return RUNNER_PAUSE;
   return JOB[status] ?? { text: status, tone: 'idle', needsRoman: false };
 }
 
@@ -281,8 +296,8 @@ export function humanJobStatus(status: string): HumanStatus {
  * differ React throws a hydration error (#418) and re-renders the subtree. The
  * caller formats once, on the server, and passes the result.
  */
-export function humanJobLine(status: string, resumesAt?: string | null): string {
-  const base = humanJobStatus(status).text;
+export function humanJobLine(status: string, resumesAt?: string | null, errorCode?: string | null): string {
+  const base = humanJobStatus(status, errorCode).text;
   if (status !== 'retry_wait' || !resumesAt) return base;
   return `${base}, відновиться о ${resumesAt}`;
 }
@@ -366,6 +381,7 @@ const MESSAGE_STATES: Record<string, string> = {
   delivered: 'доставлено',
   read: 'прочитано',
   failed: 'не вдалося надіслати',
+  delivery_unknown: 'результат відправки невідомий — не повторювати',
 };
 
 export function humanMessageState(state: string): string {
@@ -380,6 +396,8 @@ const OUTREACH_EVENTS: Record<string, string> = {
   clicked: 'перейшли за посиланням',
   sent: 'надіслано',
   delivered: 'доставлено',
+  failed: 'відправка не вдалася',
+  delivery_unknown: 'результат відправки невідомий',
 };
 
 export function humanOutreachEvent(event: string): string {

@@ -91,6 +91,18 @@ export interface StructuredOptions {
    */
   buildLogPath?: string;
   /**
+   * Transport-supplied model after the factory resolves live policy. Runner
+   * executors have no settings-store access, so they must not resolve it again.
+   * Ordinary callers leave this unset.
+   */
+  model?: string;
+  /**
+   * Serialized caller-owned schema used only for the model/output-format
+   * instruction on a remote executor. The factory still validates the returned
+   * value with `schema`; this never weakens the caller's Zod contract.
+   */
+  outputJsonSchema?: Readonly<Record<string, unknown>>;
+  /**
    * @deprecated No effect. Kept so existing call sites compile: the subscription
    * runtimes manage their own output budget, there is no per-request max_tokens.
    */
@@ -143,6 +155,10 @@ export interface CodeAgentOptions {
    * and Codex, and ignored on a host with no tmux — see `runCodeAgent()`.
    */
   terminal?: boolean;
+  /** Effective terminal settings supplied by the remote factory transport. */
+  terminalWeb?: boolean;
+  terminalWritable?: boolean;
+  terminalPort?: number;
   /**
    * Absolute path of the project's `build-log.ndjson`. When set, the runtime
    * appends a one-line summary of every SDK message as it streams — which is
@@ -155,6 +171,30 @@ export interface CodeAgentOptions {
    * the worker's own stage markers keep the timeline honest in either mode.
    */
   buildLogPath?: string;
+  /** Transport-supplied resolved model; ordinary callers leave this unset. */
+  model?: string;
+  /**
+   * Remote prompt schema. Final validation remains at the factory boundary
+   * against the caller's Zod schema after the workspace is synchronized back.
+   */
+  outputJsonSchema?: Readonly<Record<string, unknown>>;
+  /** Runner-internal unique tmux name; factory callers never set this. */
+  terminalSession?: string;
+}
+
+/**
+ * Trusted identity of one workspace-agent invocation.
+ *
+ * Created only by the public `runCodeAgent()` boundary after it removes the
+ * previous result artifact. Adapters receive this immutable lease; callers and
+ * transports must not create a second one, otherwise tmux/headless fallback
+ * could disagree about which `result.json` belongs to the current run.
+ */
+export interface CodeAgentInvocationContext {
+  readonly invocationId: string;
+  readonly workspace: string;
+  readonly resultPath: string;
+  readonly notBeforeMs: number;
 }
 
 /**
@@ -176,6 +216,12 @@ export interface TerminalLaunchSpec {
    * kickoff line; without a pattern it falls back to Claude's.
    */
   kickoffReadyPattern?: string;
+  /**
+   * Extra environment for the launched CLI beyond the sandbox allowlist and
+   * `authEnv()` — per-workspace paths a runtime needs in the terminal path
+   * (OpenCode: its generated config and XDG dirs inside the workspace).
+   */
+  env?: Record<string, string>;
 }
 
 /** What `prepareTerminal` receives: call options plus where its settings file goes. */
@@ -203,7 +249,11 @@ export interface AgentRuntime {
     opts?: StructuredOptions,
   ): Promise<T>;
   /** Workspace agent with tools; result read from `result.json` and validated. */
-  codeAgent<T>(opts: CodeAgentOptions, resultSchema: ZodType<T>): Promise<T>;
+  codeAgent<T>(
+    opts: CodeAgentOptions,
+    resultSchema: ZodType<T>,
+    invocation: CodeAgentInvocationContext,
+  ): Promise<T>;
   /**
    * Detect an exhausted subscription window in UNSTRUCTURED output — CLI
    * stdout/stderr or tmux scrollback. Returns the RateLimitedError to throw
@@ -270,4 +320,40 @@ export class AgentSchemaError extends Error {
     super(message);
     this.name = 'AgentSchemaError';
   }
+}
+
+/**
+ * The provider rejected the credential (401/403): a key was revoked, expired or
+ * never connected. Retrying cannot help and a subscription window is not the
+ * cause, so this is NEEDS_HUMAN with a reconnect hint — not RATE_LIMITED.
+ */
+export class AgentAuthError extends Error {
+  readonly code = 'NEEDS_HUMAN';
+  constructor(message: string) {
+    super(message);
+    this.name = 'AgentAuthError';
+  }
+}
+
+/** Errors that should leave a retry loop immediately and reach a human. */
+export function isNeedsHumanError(error: unknown): boolean {
+  return (error as { code?: string } | null)?.code === 'NEEDS_HUMAN';
+}
+
+/**
+ * Remote execution is required but its trusted gateway is unavailable.
+ * Worker lifecycle code can park this explicitly; production must never fall
+ * back to running an untrusted code agent inside the factory process.
+ */
+export class RunnerUnavailableError extends Error {
+  readonly code = 'RUNNER_UNAVAILABLE';
+  constructor(message: string) {
+    super(message);
+    this.name = 'RunnerUnavailableError';
+  }
+}
+
+export function isRunnerUnavailableError(error: unknown): error is RunnerUnavailableError {
+  return error instanceof RunnerUnavailableError
+    || (error as { code?: string } | null)?.code === 'RUNNER_UNAVAILABLE';
 }

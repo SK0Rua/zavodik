@@ -19,12 +19,17 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db, schema } from '../db/client.js';
 import { getObject } from '../lib/storage.js';
 import { runCodeAgent } from '../agents/codeAgent.js';
+import {
+  artifactProducedDuringInvocation,
+  invocationFromError,
+} from '../agents/result.js';
 import { config } from '../config.js';
-import { enqueue, type JobPayload } from '../orchestrator/queue.js';
+import { commitWorkflow, type JobPayload } from '../orchestrator/queue.js';
+import { JobSkippedError } from '../orchestrator/jobSkipped.js';
 import { buildSnapshot } from '../build/snapshot.js';
 import { BuildResultSchema, DESIGN_CONTRACT_VERSION, type ArtDirection, type BuildResult, type ContentBrief } from '../build/schemas.js';
 import type { RubricVerdict } from '../build/rubric.js';
@@ -96,9 +101,22 @@ export async function buildSiteHandler(payload: JobPayload): Promise<void> {
     'site-builder',
   );
 
-  await db.update(schema.siteProjects)
+  const [claimed] = await db.update(schema.siteProjects)
     .set({ state: 'building', dir })
-    .where(eq(schema.siteProjects.id, projectId));
+    .where(and(
+      eq(schema.siteProjects.id, projectId),
+      inArray(schema.siteProjects.state, ['brief', 'building', 'qa']),
+    ))
+    .returning({ id: schema.siteProjects.id });
+  if (!claimed) {
+    log.info('stale builder delivery ignored: project is no longer buildable', {
+      businessId,
+      projectId,
+    });
+    throw new JobSkippedError(
+      `Проєкт ${projectId} уже не в збірці (скасований, впав або перейшов далі) — цю доставку пропущено. Нова збірка починається кнопкою «Побудувати заново».`,
+    );
+  }
 
   let prompt: string;
   let snapshot = await buildSnapshot(businessId);
@@ -163,13 +181,31 @@ last action, even if you think you are finished — the pipeline reads it as you
         'Дизайн-контракт застарілого формату — фабрика генерує дизайн заново (нова схема)',
         'site-builder',
       );
-      await db.update(schema.siteProjects)
-        .set({ state: 'failed' })
-        .where(eq(schema.siteProjects.id, projectId));
-      await enqueue('content-and-design', {
-        businessId, campaignId: payload.campaignId,
-        idempotencyKey: `content-and-design:${businessId}:regen-v${DESIGN_CONTRACT_VERSION}:${projectId}`,
+      let regenerationQueued = false;
+      await commitWorkflow(async (tx) => {
+        const [closed] = await tx.update(schema.siteProjects)
+          .set({ state: 'failed' })
+          .where(and(
+            eq(schema.siteProjects.id, projectId),
+            eq(schema.siteProjects.state, 'building'),
+          ))
+          .returning({ id: schema.siteProjects.id });
+        if (!closed) return [];
+        regenerationQueued = true;
+        return [{
+          name: 'content-and-design',
+          payload: {
+            businessId,
+            campaignId: payload.campaignId,
+            idempotencyKey: `content-and-design:${businessId}:regen-v${DESIGN_CONTRACT_VERSION}:${projectId}`,
+          },
+        }];
       });
+      if (!regenerationQueued) {
+        throw new JobSkippedError(
+          `Проєкт ${projectId} змінив стан, поки закривався застарілий дизайн-контракт — регенерацію не поставлено.`,
+        );
+      }
       return;
     }
     if (project.snapshotKey) {
@@ -249,9 +285,11 @@ action. Everything else can be perfect and the run still reports badly without i
    * wrote a correct site, and simply never wrote result.json — throwing away a
    * verified-good build over a missing status file is the wrong trade.
    *
-   * So a missing/invalid result.json degrades to a synthesised one and is recorded
-   * as an unresolved note. A build that is genuinely broken still fails, because
-   * the independent build + provenance checks below are what actually gate.
+   * So a missing/invalid result.json degrades to a synthesised one only when this
+   * invocation produced `out/index.html`, and is recorded as an unresolved note.
+   * An old output in a reused QA workspace is never recovery evidence. A build
+   * that is genuinely broken still fails, because the independent build and
+   * provenance checks below are what actually gate.
    */
   await logStage(
     logPath,
@@ -283,7 +321,10 @@ action. Everything else can be perfect and the run still reports badly without i
       BuildResultSchema,
     );
   } catch (err) {
-    const builtAnyway = existsSync(path.join(dir, 'out', 'index.html'));
+    const invocation = invocationFromError(err);
+    const builtAnyway = invocation
+      ? await artifactProducedDuringInvocation(path.join(dir, 'out', 'index.html'), invocation)
+      : false;
     await logStage(
       logPath,
       builtAnyway
@@ -356,9 +397,41 @@ action. Everything else can be perfect and the run still reports badly without i
     contactsPresent: provenance.contactsPresent,
   });
 
-  await db.update(schema.siteProjects)
-    .set({ state: 'qa', dir, buildOk: true, buildSeconds: agentSeconds })
-    .where(eq(schema.siteProjects.id, projectId));
+  let handedOff = false;
+  await commitWorkflow(async (tx) => {
+    const [updated] = await tx.update(schema.siteProjects)
+      .set({ state: 'qa', dir, buildOk: true, buildSeconds: agentSeconds })
+      .where(and(
+        eq(schema.siteProjects.id, projectId),
+        eq(schema.siteProjects.state, 'building'),
+      ))
+      .returning({ id: schema.siteProjects.id });
+    if (!updated) return [];
+    handedOff = true;
+    return [{
+      name: 'visual-qa',
+      payload: {
+        businessId,
+        projectId,
+        campaignId: payload.campaignId,
+        iteration,
+        provenanceIssues: provIssues,
+        provenanceFindings: provenance.findings,
+        buildNotes: result.notes,
+        unresolved: result.unresolved,
+        idempotencyKey: `visual-qa:${businessId}:${projectId}:${iteration}`,
+      },
+    }];
+  });
+  if (!handedOff) {
+    log.info('builder result discarded: project was stopped while the agent ran', {
+      businessId,
+      projectId,
+    });
+    throw new JobSkippedError(
+      `Збірку зупинили, поки агент працював — результат проєкту ${projectId} не переданий на перевірку.`,
+    );
+  }
 
   log.info('stage 10 complete', {
     businessId, projectId, iteration, totalSeconds: Math.round((Date.now() - startedAt) / 1000),
@@ -368,16 +441,10 @@ action. Everything else can be perfect and the run still reports badly without i
     `Збірка зелена${provIssues.length ? `, але провенанс дав ${provIssues.length} зауваж.` : ''}`
     + ' — передаю на візуальну перевірку',
     'site-builder',
-  );
+  ).catch((error) => log.warn('build log write failed after QA handoff commit', {
+    businessId,
+    projectId,
+    error: String(error),
+  }));
 
-  await enqueue('visual-qa', {
-    businessId, projectId, campaignId: payload.campaignId, iteration,
-    // Provenance issues ride into QA so they land in the same report and the same
-    // fix iteration as visual issues, instead of failing the job outright.
-    provenanceIssues: provIssues,
-    provenanceFindings: provenance.findings,
-    buildNotes: result.notes,
-    unresolved: result.unresolved,
-    idempotencyKey: `visual-qa:${businessId}:${projectId}:${iteration}`,
-  });
 }
