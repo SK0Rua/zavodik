@@ -7,9 +7,7 @@ import { NewCampaignForm } from '@/components/NewCampaignForm';
 import { CityAssessment, type AssessmentRow } from '@/components/CityAssessment';
 import { ActionForm } from '@/components/ActionForm';
 import { setCampaignBuildPolicy, setCampaignFlow, setCampaignRunning } from '@/lib/actions';
-import {
-  archiveCampaignAction, deleteCampaignAction, unarchiveCampaignAction,
-} from '@/lib/archiveActions';
+import { CampaignArchiveActions } from '@/components/CampaignArchiveActions';
 import { effectiveValue } from '@/lib/settings';
 import { BUILD_POLICIES, BUILD_POLICY_LABELS, normalizeBuildPolicy } from '@/lib/buildPolicy';
 import {
@@ -80,6 +78,8 @@ export default async function CampaignsPage({
     select campaign_id as "campaignId",
            count(*) filter (where ${shelf})::int as total,
            count(*)::int as "allTotal",
+           -- What archiving this campaign would actually shelve right now.
+           count(*) filter (where archived_at is null)::int as "liveTotal",
            count(*) filter (where ${shelf} and status = 'production_ready')::int as ready,
            count(*) filter (where ${shelf} and status = 'site_in_progress')::int as building,
            count(*) filter (where ${shelf} and status in
@@ -161,58 +161,24 @@ export default async function CampaignsPage({
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {archived ? (
-                    <>
-                      <ActionForm action={unarchiveCampaignAction}>
-                        <input type="hidden" name="campaignId" value={c.id} />
-                        <button type="submit" className="btn-primary btn-sm">
-                          Повернути з архіву
-                        </button>
-                      </ActionForm>
-                      {/* Offered only on an EMPTY campaign: with businesses still
-                          attached the factory refuses, so a button here would be
-                          a button that always fails. */}
-                      {n('allTotal') === 0 && (
-                        <ActionForm
-                          action={deleteCampaignAction}
-                          confirm={() => window.confirm(
-                            `Видалити кампанію ${c.id} назавжди? Це не можна скасувати.`,
-                          )}
-                        >
-                          <input type="hidden" name="campaignId" value={c.id} />
-                          <button type="submit" className="btn-outline btn-sm text-danger">
-                            Видалити
-                          </button>
-                        </ActionForm>
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      {/* Roman's «Зупинити» / «Продовжити»: a paused campaign starts
-                          no new work; running jobs finish on their own. */}
-                      <ActionForm action={setCampaignRunning}>
-                        <input type="hidden" name="campaignId" value={c.id} />
-                        <input type="hidden" name="paused" value={paused ? 'false' : 'true'} />
-                        <button type="submit" className={paused ? 'btn-primary btn-sm' : 'btn-outline btn-sm'}>
-                          {paused ? 'Продовжити' : 'Зупинити'}
-                        </button>
-                      </ActionForm>
-                      <ActionForm
-                        action={archiveCampaignAction}
-                        confirm={() => window.confirm(
-                          n('total') > 0
-                            ? `Заархівувати кампанію разом з ${n('total')} бізнесами? `
-                              + 'Активні задачі буде скасовано. Це оборотно.'
-                            : 'Заархівувати кампанію? Це оборотно.',
-                        )}
-                      >
-                        <input type="hidden" name="campaignId" value={c.id} />
-                        <button type="submit" className="btn-outline btn-sm">
-                          В архів
-                        </button>
-                      </ActionForm>
-                    </>
+                  {/* Roman's «Зупинити» / «Продовжити»: a paused campaign starts
+                      no new work; running jobs finish on their own. Meaningless
+                      on an archived campaign, which is already stopped. */}
+                  {!archived && (
+                    <ActionForm action={setCampaignRunning}>
+                      <input type="hidden" name="campaignId" value={c.id} />
+                      <input type="hidden" name="paused" value={paused ? 'false' : 'true'} />
+                      <button type="submit" className={paused ? 'btn-primary btn-sm' : 'btn-outline btn-sm'}>
+                        {paused ? 'Продовжити' : 'Зупинити'}
+                      </button>
+                    </ActionForm>
                   )}
+                  <CampaignArchiveActions
+                    campaignId={c.id}
+                    archived={archived}
+                    totalBusinesses={n('allTotal')}
+                    liveBusinesses={n('liveTotal')}
+                  />
                   <Link
                     href={`/businesses?campaign=${encodeURIComponent(c.id)}&sort=score&dir=desc${archived ? '&archived=only' : ''}`}
                     className="btn-outline btn-sm no-underline"
