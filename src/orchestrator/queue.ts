@@ -1,5 +1,5 @@
 import PgBoss from 'pg-boss';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { config } from '../config.js';
 import { db, pool, schema } from '../db/client.js';
 import { log } from '../lib/logger.js';
@@ -127,6 +127,53 @@ export async function processJob(
 ): Promise<void> {
   const definition = getJobDefinition(name);
   const payload = job.data;
+
+  // ── archived businesses never run work ───────────────────────────────────
+  //
+  // Archiving cancels whatever was in flight AT THAT MOMENT, but that alone
+  // only closes the front door: a job can still arrive afterwards — a
+  // continuation enqueued by a worker that was already mid-stage, a retry, a
+  // re-discovery, a hand-made API call. Every one of those would then run
+  // invisibly, since the archive is hidden from every list, and quietly spend
+  // subscription time on a business Roman deliberately shelved.
+  //
+  // The check lives HERE, at the single point every job passes through, rather
+  // than in each of the seventeen handlers, and skips rather than fails: the
+  // business being archived is a correct outcome, not a fault to retry.
+  const archivedBusinessId = typeof payload.businessId === 'string' ? payload.businessId : null;
+  if (archivedBusinessId) {
+    const [business] = await db.select({ archivedAt: schema.businesses.archivedAt })
+      .from(schema.businesses)
+      .where(eq(schema.businesses.id, archivedBusinessId))
+      .limit(1);
+    if (business?.archivedAt) {
+      log.info('job skipped: business is archived', { name, businessId: archivedBusinessId });
+      await db.transaction(async (tx) => {
+        const [jobRow] = await tx.update(schema.workflowJobs)
+          .set({
+            status: 'cancelled',
+            errorCode: null,
+            errorDetail: 'Бізнес у архіві — задачу пропущено',
+            finishedAt: new Date(),
+          })
+          .where(and(
+            eq(schema.workflowJobs.bossJobId, job.id),
+            inArray(schema.workflowJobs.status, ['queued', 'running', 'retry_wait']),
+          ))
+          .returning({ runId: schema.workflowJobs.runId });
+        if (jobRow?.runId) {
+          await tx.update(schema.workflowJobRuns)
+            .set({ status: 'cancelled', updatedAt: new Date(), finishedAt: new Date() })
+            .where(and(
+              eq(schema.workflowJobRuns.id, jobRow.runId),
+              inArray(schema.workflowJobRuns.status, ['queued', 'running', 'retry_wait']),
+            ));
+        }
+      });
+      return;
+    }
+  }
+
   const claim = await db.transaction(async (tx) => {
     const [jobRow] = await tx.select().from(schema.workflowJobs)
       .where(eq(schema.workflowJobs.bossJobId, job.id))

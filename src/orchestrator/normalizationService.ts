@@ -136,7 +136,12 @@ export class NormalizationService {
       if (existing) {
         await attachSource(tx, existing.id, candidate);
         result = { kind: 'duplicate', businessId: existing.id };
-        shouldQualify = existing.status === 'discovered';
+        // Evidence still accrues on an archived business — re-finding it is a
+        // fact worth keeping — but it must NOT re-enter the pipeline. Roman
+        // shelved it deliberately; re-qualifying here would restart the whole
+        // conveyor for a business hidden from every list, spending agent time
+        // on work nobody will ever see.
+        shouldQualify = existing.status === 'discovered' && existing.archivedAt === null;
       } else {
         let businessId = baseId;
         const suffix = collisionSuffix(candidate);
