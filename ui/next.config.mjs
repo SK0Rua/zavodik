@@ -15,6 +15,17 @@ const nextConfig = {
   output: 'standalone',
   eslint: { ignoreDuringBuilds: true },
   typescript: { ignoreBuildErrors: false },
+  // factory/settings.ts imports './regions.js' (NodeNext-style extension, shared
+  // verbatim with the backend build), but only regions.ts is copied into this
+  // image (see ui/Dockerfile). Without this alias, webpack looks for a literal
+  // regions.js file and fails.
+  webpack: (config) => {
+    config.resolve.extensionAlias = {
+      ...config.resolve.extensionAlias,
+      '.js': ['.js', '.ts', '.tsx'],
+    };
+    return config;
+  },
 };
 
 export default nextConfig;
