@@ -240,14 +240,23 @@ export class ManualBusinessService {
       listingUrl: match.listingUrl || parsed.url,
     }, { operatorChosen: true });
 
+    // On a duplicate the business keeps the campaign it was already in —
+    // re-reading it here so the answer names where the business ACTUALLY is,
+    // not the manual campaign we would have used had it been new.
+    const [existing] = await this.db.select({ campaignId: schema.businesses.campaignId })
+      .from(schema.businesses)
+      .where(eq(schema.businesses.id, result.businessId))
+      .limit(1);
+    const actualCampaignId = existing?.campaignId ?? campaignId;
+
     log.info('manual business added', {
-      businessId: result.businessId, kind: result.kind, campaignId,
+      businessId: result.businessId, kind: result.kind, campaignId: actualCampaignId,
     });
     return {
       kind: result.kind === 'duplicate' ? 'duplicate' : 'created',
       businessId: result.businessId,
       name: match.name,
-      campaignId,
+      campaignId: actualCampaignId,
     };
   }
 
