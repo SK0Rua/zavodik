@@ -189,10 +189,17 @@ const CONTACT_CHANNELS: Record<string, string[]> = {
   email: ['email'],
 };
 
-export async function queryBusinesses(
-  f: BusinessFilters,
-  limit = 500,
-): Promise<BusinessRow[]> {
+/**
+ * The WHERE for a filter, shared by the list and by the bulk actions.
+ *
+ * Extracted rather than duplicated on purpose: «архівувати все за фільтром»
+ * must act on EXACTLY the set the list is showing. Two copies of this logic
+ * would eventually disagree, and the day they did, a bulk action would quietly
+ * touch businesses the operator never saw.
+ *
+ * Assumes the `b` (businesses) and `a` (latest audit) aliases are in scope.
+ */
+function filterConditions(f: BusinessFilters): SQL[] {
   const where = [sql`true`];
   // The archive shelf is opt-in: without this the default list would slowly
   // fill up again with everything Roman deliberately put away.
@@ -241,6 +248,51 @@ export async function queryBusinesses(
       where bc.business_id = b.id and ${inList(sql`bc.channel`, channels)}
     )`);
   }
+
+  return where;
+}
+
+/**
+ * Every business id a filter selects, with no display limit.
+ *
+ * The list caps at 500 rows because nobody reads more than that; a bulk action
+ * must not inherit that cap, or «архівувати всі 900» would silently archive the
+ * first 500 and report success.
+ */
+export async function businessIdsMatching(f: BusinessFilters): Promise<string[]> {
+  const where = filterConditions(f);
+  const rows = await db.execute(sql`
+    select b.id
+    from businesses b
+    left join lateral (
+      select w.verdict from website_audits w
+      where w.business_id = b.id order by w.audited_at desc limit 1
+    ) a on true
+    where ${sql.join(where, sql` and `)}
+  `);
+  return (rows.rows as Array<Record<string, unknown>>).map((r) => String(r.id));
+}
+
+/** How many businesses the filter selects — the number shown before acting. */
+export async function countBusinessesMatching(f: BusinessFilters): Promise<number> {
+  const where = filterConditions(f);
+  const rows = await db.execute(sql`
+    select count(*)::int as n
+    from businesses b
+    left join lateral (
+      select w.verdict from website_audits w
+      where w.business_id = b.id order by w.audited_at desc limit 1
+    ) a on true
+    where ${sql.join(where, sql` and `)}
+  `);
+  return Number((rows.rows as Array<Record<string, unknown>>)[0]?.n ?? 0);
+}
+
+export async function queryBusinesses(
+  f: BusinessFilters,
+  limit = 500,
+): Promise<BusinessRow[]> {
+  const where = filterConditions(f);
 
   const order = ORDER_BY[f.sort][f.dir];
   const rows = await db.execute(sql`

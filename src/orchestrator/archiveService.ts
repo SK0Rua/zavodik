@@ -20,7 +20,7 @@
  * Campaigns follow the same rule one level up: archiving cascades to their
  * businesses, deletion is only allowed once no businesses remain.
  */
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as schema from '../db/schema.js';
 
@@ -80,6 +80,40 @@ export type DeleteCampaignResult = ArchiveConflict | {
   campaignId: string;
 };
 
+export interface BulkArchiveResult {
+  /** How many rows this call actually moved (already-archived ones are not counted). */
+  archived: number;
+  cancelledJobs: number;
+  cancelledProjects: number;
+  /** Ids that were asked for but do not exist. */
+  missing: number;
+}
+
+export interface BulkRestoreResult {
+  restored: number;
+}
+
+export interface BulkDeleteResult {
+  deleted: number;
+  /** Businesses skipped because outreach exists — they can only be archived. */
+  blocked: number;
+  missing: number;
+}
+
+/**
+ * Postgres takes at most 65535 bind parameters per statement, and a filter can
+ * legitimately select thousands of businesses. Work in chunks so a large
+ * «архівувати все за фільтром» is a few statements rather than one that the
+ * driver refuses to send.
+ */
+const CHUNK = 500;
+
+function chunked<T>(items: readonly T[]): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += CHUNK) out.push(items.slice(i, i + CHUNK));
+  return out;
+}
+
 /** Why a business may not be hard-deleted, in Roman's words, or null if it may. */
 export async function outreachDeleteBlocker(
   tx: ArchiveTransaction,
@@ -136,6 +170,119 @@ export class ArchiveService {
         cancelledJobs: cancelled.jobs,
         cancelledProjects: cancelled.projects,
       } as const;
+    });
+  }
+
+  /**
+   * Archive many businesses as ONE operation.
+   *
+   * Set-based rather than a loop over `archiveBusiness`: cancelling in-flight
+   * work is already expressed as `where business_id in (…)`, so archiving 900
+   * businesses costs a handful of statements instead of 900 round trips — and,
+   * more importantly, it either all lands or none of it does. A client-side
+   * loop would leave a half-archived filter behind on the first failure.
+   *
+   * Already-archived rows are skipped, not re-stamped: re-running the same
+   * filter must not reset an earlier archive's timestamp, which is what
+   * `unarchiveCampaign` matches on.
+   */
+  async archiveBusinesses(
+    businessIds: readonly string[],
+    reason?: string,
+  ): Promise<BulkArchiveResult> {
+    const unique = [...new Set(businessIds.filter(Boolean))];
+    if (!unique.length) {
+      return { archived: 0, cancelledJobs: 0, cancelledProjects: 0, missing: 0 };
+    }
+
+    return this.db.transaction(async (tx) => {
+      const at = this.now();
+      const found: string[] = [];
+      const live: string[] = [];
+      for (const batch of chunked(unique)) {
+        const rows = await tx.select({
+          id: schema.businesses.id,
+          archivedAt: schema.businesses.archivedAt,
+        }).from(schema.businesses).where(inArray(schema.businesses.id, batch));
+        for (const row of rows) {
+          found.push(row.id);
+          if (!row.archivedAt) live.push(row.id);
+        }
+      }
+
+      let cancelledJobs = 0;
+      let cancelledProjects = 0;
+      for (const batch of chunked(live)) {
+        const cancelled = await this.cancelInFlightWork(tx, batch, reason);
+        cancelledJobs += cancelled.jobs;
+        cancelledProjects += cancelled.projects;
+        await tx.update(schema.businesses)
+          .set({ archivedAt: at, archivedReason: reason ?? null, updatedAt: at })
+          .where(inArray(schema.businesses.id, batch));
+      }
+
+      return {
+        archived: live.length,
+        cancelledJobs,
+        cancelledProjects,
+        missing: unique.length - found.length,
+      };
+    });
+  }
+
+  /** Restore many businesses. Rows that are not archived are simply untouched. */
+  async unarchiveBusinesses(businessIds: readonly string[]): Promise<BulkRestoreResult> {
+    const unique = [...new Set(businessIds.filter(Boolean))];
+    if (!unique.length) return { restored: 0 };
+
+    return this.db.transaction(async (tx) => {
+      const at = this.now();
+      let restored = 0;
+      for (const batch of chunked(unique)) {
+        const rows = await tx.update(schema.businesses)
+          .set({ archivedAt: null, archivedReason: null, updatedAt: at })
+          .where(and(
+            inArray(schema.businesses.id, batch),
+            isNotNull(schema.businesses.archivedAt),
+          ))
+          .returning({ id: schema.businesses.id });
+        restored += rows.length;
+      }
+      return { restored };
+    });
+  }
+
+  /**
+   * Delete many businesses, skipping every one that outreach protects.
+   *
+   * The blocked ones are counted and reported rather than aborting the batch:
+   * «видалити 40 відфільтрованих» where 3 were contacted should delete 37 and
+   * say so, not refuse all 40 or — far worse — destroy the 3 audit trails.
+   */
+  async deleteBusinesses(businessIds: readonly string[]): Promise<BulkDeleteResult> {
+    const unique = [...new Set(businessIds.filter(Boolean))];
+    if (!unique.length) return { deleted: 0, blocked: 0, missing: 0 };
+
+    return this.db.transaction(async (tx) => {
+      let deleted = 0;
+      let blocked = 0;
+      let found = 0;
+
+      for (const batch of chunked(unique)) {
+        const rows = await tx.select({ id: schema.businesses.id })
+          .from(schema.businesses).where(inArray(schema.businesses.id, batch));
+        found += rows.length;
+        for (const row of rows) {
+          if (await outreachDeleteBlocker(tx, row.id)) {
+            blocked += 1;
+            continue;
+          }
+          await this.deleteBusinessRows(tx, row.id);
+          deleted += 1;
+        }
+      }
+
+      return { deleted, blocked, missing: unique.length - found };
     });
   }
 

@@ -6,7 +6,7 @@ import { BusinessFilters } from '@/components/BusinessFilters';
 import { BusinessList, type ListRow } from '@/components/BusinessList';
 import { buildButtonState } from '@/lib/buildPolicy';
 import {
-  filtersToQuery, hasAnyFilter, parseFilters, queryBusinesses,
+  countBusinessesMatching, filtersToQuery, hasAnyFilter, parseFilters, queryBusinesses,
 } from '@/lib/businessQuery';
 import { socialsButtonState } from '@/lib/socials';
 import {
@@ -33,10 +33,13 @@ export default async function BusinessesPage({
   const params = await searchParams;
   const filters = parseFilters(params);
 
-  const [campaigns, businesses] = await Promise.all([
+  const [campaigns, businesses, totalMatching] = await Promise.all([
     db.select({ id: schema.campaigns.id }).from(schema.campaigns)
       .orderBy(desc(schema.campaigns.createdAt)),
     queryBusinesses(filters),
+    // The list caps at 500; the bulk bar must speak about the whole filter, so
+    // it needs the real number rather than `rows.length`.
+    countBusinessesMatching(filters),
   ]);
 
   const rows: ListRow[] = businesses.map((b) => {
@@ -108,7 +111,12 @@ export default async function BusinessesPage({
             {filters.archived === 'only' ? '← Активні' : 'Архів →'}
           </Link>
           <span className="text-sm text-ink-mute tabular-nums">
-            {rows.length}{hasAnyFilter(params) ? ' за фільтром' : ''}
+            {/* Say when the list is a window onto a bigger set, so «показано
+                500» is never mistaken for «знайдено 500». */}
+            {totalMatching > rows.length
+              ? `${rows.length} з ${totalMatching}`
+              : rows.length}
+            {hasAnyFilter(params) ? ' за фільтром' : ''}
           </span>
         </div>
       </div>
@@ -118,7 +126,13 @@ export default async function BusinessesPage({
         <Suspense fallback={<div className="h-24" />}>
           <BusinessFilters campaigns={campaigns} />
         </Suspense>
-        <BusinessList rows={rows} />
+        <BusinessList
+          rows={rows}
+          totalMatching={totalMatching}
+          filterQuery={filtersToQuery(filters)}
+          viewingArchive={filters.archived === 'only'}
+          isFiltered={hasAnyFilter(params)}
+        />
       </div>
     </div>
   );

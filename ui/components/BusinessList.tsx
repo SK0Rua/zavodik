@@ -10,7 +10,8 @@ import {
   startSocialsDiscoveryBulk,
 } from '@/lib/actions';
 import {
-  archiveBusinessAction, deleteBusinessAction, unarchiveBusinessAction,
+  archiveBusinessAction, archiveFilteredAction, deleteBusinessAction,
+  deleteFilteredAction, unarchiveBusinessAction, unarchiveFilteredAction,
 } from '@/lib/archiveActions';
 import { runWithToast } from '@/lib/toast';
 import type { BuildButtonState } from '@/lib/buildPolicy';
@@ -65,7 +66,21 @@ export interface ListRow {
  * Selection (and with it the bulk bar) appears only after the first checkbox —
  * on a normal read there is nothing to look at but names and states.
  */
-export function BusinessList({ rows }: { rows: ListRow[] }) {
+export function BusinessList({
+  rows,
+  totalMatching,
+  filterQuery,
+  viewingArchive = false,
+  isFiltered = false,
+}: {
+  rows: ListRow[];
+  /** How many the filter selects in total — can exceed the rendered rows. */
+  totalMatching: number;
+  /** The current filter, serialised; the bulk actions resolve it server-side. */
+  filterQuery: string;
+  viewingArchive?: boolean;
+  isFiltered?: boolean;
+}) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState<string | null>(null);
   const [quick, setQuick] = useState<{ id: string; name: string } | null>(null);
@@ -198,9 +213,6 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
     )) return;
     startTransition(() => {
       void (async () => {
-        // No bulk endpoint: archiving is one transaction per business by
-        // design (each cancels its own jobs), so the loop is the honest shape
-        // rather than a fake batch that would hide a partial failure.
         let done = 0;
         for (const id of ids) {
           const res = await archiveBusinessAction(formDataOf({ businessId: id }));
@@ -212,6 +224,48 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
         setSelected(new Set());
       })();
     });
+  };
+
+  // ── Whole-filter actions ──────────────────────────────────────────────────
+  // These act on everything the filter selects, including rows past the 500
+  // the list renders — so every confirm names `totalMatching`, never the
+  // visible count, and the server re-resolves the filter itself.
+
+  const runFilterAction = (
+    action: (data: FormData) => Promise<{ ok: boolean; message: string }>,
+  ) => {
+    startTransition(() => {
+      void runWithToast(() => action(formDataOf({ filterQuery })), {
+        onResult: (res) => { setMessage(res.message); setSelected(new Set()); },
+      });
+    });
+  };
+
+  const runArchiveFiltered = () => {
+    if (!window.confirm(
+      `Заархівувати ВСІ ${totalMatching} бізнесів за поточним фільтром?\n\n`
+      + 'Вони зникнуть зі списків і з інбоксу, активні задачі буде скасовано.\n'
+      + 'Це оборотно — повернути можна з архіву.',
+    )) return;
+    runFilterAction(archiveFilteredAction);
+  };
+
+  const runUnarchiveFiltered = () => {
+    if (!window.confirm(
+      `Повернути з архіву ВСІ ${totalMatching} бізнесів за поточним фільтром?`,
+    )) return;
+    runFilterAction(unarchiveFilteredAction);
+  };
+
+  const runDeleteFiltered = () => {
+    const answer = window.prompt(
+      `Видалити НАЗАВЖДИ всі ${totalMatching} бізнесів за поточним фільтром?\n\n`
+      + 'Зникнуть усі їхні дані, фото, аудити й збірки. Це не можна скасувати.\n'
+      + 'Ті, кому вже писали, буде пропущено — їх можна лише архівувати.\n\n'
+      + 'Щоб підтвердити, введи: видалити',
+    );
+    if (answer?.trim().toLowerCase() !== 'видалити') return;
+    runFilterAction(deleteFilteredAction);
   };
 
   const runBulkSocials = () => {
@@ -274,6 +328,48 @@ export function BusinessList({ rows }: { rows: ListRow[] }) {
           <button type="button" className="btn-quiet btn-sm ml-auto" onClick={() => setSelected(new Set())}>
             Зняти вибір
           </button>
+        </div>
+      )}
+
+      {/* Whole-filter actions. Shown only when a filter is actually narrowing
+          something: offered on an unfiltered list, «архівувати всі» would be a
+          one-click way to empty the console, which is never what the button is
+          for. Hidden while a checkbox selection is active, so there is exactly
+          one bulk bar on screen and no doubt about which set a click hits. */}
+      {selected.size === 0 && isFiltered && totalMatching > 0 && (
+        <div className="flex items-center gap-2 flex-wrap px-4 py-3 border-b border-line bg-paper-sunk">
+          <span className="text-sm text-ink-soft">
+            За фільтром: <span className="tabular-nums font-medium">{totalMatching}</span>
+          </span>
+          {viewingArchive ? (
+            <>
+              <button
+                type="button"
+                className="btn-outline btn-sm"
+                disabled={pending}
+                onClick={runUnarchiveFiltered}
+              >
+                Повернути всі ({totalMatching})
+              </button>
+              <button
+                type="button"
+                className="btn-quiet btn-sm text-danger"
+                disabled={pending}
+                onClick={runDeleteFiltered}
+              >
+                Видалити всі ({totalMatching})
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="btn-outline btn-sm"
+              disabled={pending}
+              onClick={runArchiveFiltered}
+            >
+              Заархівувати всі ({totalMatching})
+            </button>
+          )}
         </div>
       )}
 

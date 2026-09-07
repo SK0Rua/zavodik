@@ -30,6 +30,11 @@ function executor(
       kind: 'unarchived', campaignId, restoredBusinesses: 0,
     }),
     deleteCampaign: async (campaignId) => ({ kind: 'deleted', campaignId }),
+    archiveBusinesses: async (ids) => ({
+      archived: ids.length, cancelledJobs: 0, cancelledProjects: 0, missing: 0,
+    }),
+    unarchiveBusinesses: async (ids) => ({ restored: ids.length }),
+    deleteBusinesses: async (ids) => ({ deleted: ids.length, blocked: 0, missing: 0 }),
     ...overrides,
   };
 }
@@ -123,6 +128,65 @@ await check('campaign archive and restore report their cascade counts', async ()
   assert.equal(archived.body.result.archivedBusinesses, 42);
   const restored = await call(app, 'POST', '/internal/campaigns/ua-sumy-beauty/unarchive', undefined, 'secret');
   assert.equal(restored.body.result.restoredBusinesses, 42);
+});
+
+await check('bulk archive de-duplicates ids and passes the reason through', async () => {
+  let seen: { ids?: readonly string[]; reason?: string } = {};
+  const app = appWith('secret', executor({
+    archiveBusinesses: async (ids, reason) => {
+      seen = { ids, reason };
+      return { archived: ids.length, cancelledJobs: 7, cancelledProjects: 2, missing: 0 };
+    },
+  }));
+  const res = await call(app, 'POST', '/internal/businesses/archive-bulk', {
+    businessIds: ['a', 'b', 'a', '  ', 'c'],
+    reason: 'чистка',
+  }, 'secret');
+  assert.equal(res.status, 200);
+  assert.deepEqual([...(seen.ids ?? [])], ['a', 'b', 'c']);
+  assert.equal(seen.reason, 'чистка');
+  assert.equal(res.body.result.cancelledJobs, 7);
+});
+
+await check('bulk endpoints reject a missing or empty id list', async () => {
+  const app = appWith('secret');
+  assert.equal((await call(app, 'POST', '/internal/businesses/archive-bulk', {}, 'secret')).status, 400);
+  assert.equal((await call(app, 'POST', '/internal/businesses/archive-bulk', { businessIds: [] }, 'secret')).status, 400);
+  assert.equal((await call(app, 'POST', '/internal/businesses/delete-bulk', { businessIds: 'a' }, 'secret')).status, 400);
+});
+
+await check('an unbounded bulk request is refused rather than attempted', async () => {
+  let called = false;
+  const app = appWith('secret', executor({
+    archiveBusinesses: async (ids) => {
+      called = true;
+      return { archived: ids.length, cancelledJobs: 0, cancelledProjects: 0, missing: 0 };
+    },
+  }));
+  const tooMany = Array.from({ length: 5001 }, (_, i) => `biz-${i}`);
+  const res = await call(app, 'POST', '/internal/businesses/archive-bulk', { businessIds: tooMany }, 'secret');
+  assert.equal(res.status, 400);
+  assert.equal(called, false, 'the service must not be asked to run an oversized transaction');
+});
+
+await check('bulk delete reports what outreach protected instead of failing', async () => {
+  const app = appWith('secret', executor({
+    deleteBusinesses: async () => ({ deleted: 37, blocked: 3, missing: 0 }),
+  }));
+  const res = await call(app, 'POST', '/internal/businesses/delete-bulk', {
+    businessIds: ['a', 'b'],
+  }, 'secret');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.ok, true);
+  assert.equal(res.body.result.deleted, 37);
+  assert.equal(res.body.result.blocked, 3);
+});
+
+await check('bulk routes are still behind the internal credential', async () => {
+  for (const path of ['archive-bulk', 'unarchive-bulk', 'delete-bulk']) {
+    const res = await call(appWith('secret'), 'POST', `/internal/businesses/${path}`, { businessIds: ['a'] }, 'wrong');
+    assert.equal(res.status, 401, `${path} must fail closed`);
+  }
 });
 
 console.log(`\n${passed} archive command API checks passed`);
