@@ -37,6 +37,7 @@
     "test:campaign-command-api": "tsx scripts/test-campaign-command-api.ts",
     "test:archive-command-api": "tsx scripts/test-archive-command-api.ts",
     "test:archive-service": "tsx scripts/test-archive-service.ts",
+    "test:auto-advance-gates": "tsx scripts/test-auto-advance-gates.ts",
     "test:build-review-decision": "tsx scripts/test-build-review-decision.ts",
     "test:enrichment-barrier": "tsx scripts/test-enrichment-barrier.ts",
     "test:workspace-dependencies": "tsx scripts/test-workspace-dependencies.ts",

@@ -16,6 +16,7 @@ import {
   requireBusinessStatus,
 } from '../orchestrator/statuses.js';
 import { commitWorkflow, type JobPayload } from '../orchestrator/queue.js';
+import { mayAutoAdvance } from '../orchestrator/autoAdvance.js';
 import {
   buildJobPriority,
   isAutoBuildEligible,
@@ -154,6 +155,14 @@ export async function readinessHandler(payload: JobPayload): Promise<void> {
       .where(eq(schema.websiteAudits.businessId, businessId))
       .orderBy(desc(schema.websiteAudits.auditedAt))
       .limit(1);
+    // `content-and-design` is the door to the build phase, and carries THREE
+    // independent gates: may the campaign advance at all (pause), is the build
+    // phase open under its stop-point, and — only then — does the build policy
+    // want THIS business. The first two were lost when routing moved into the
+    // workers; `auto_build` below is the one that survived.
+    if (!await mayAutoAdvance(tx, {
+      campaignId: locked.campaignId, businessId, nextJob: 'content-and-design',
+    })) return [];
     const policy = normalizeBuildPolicy(campaign?.autoBuild);
     const decision = isAutoBuildEligible({ policy, latestVerdict: audit?.verdict });
     if (!decision.eligible) return [];

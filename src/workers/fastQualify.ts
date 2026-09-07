@@ -16,6 +16,7 @@ import {
   requireBusinessStatus,
 } from '../orchestrator/statuses.js';
 import { commitWorkflow, type JobPayload } from '../orchestrator/queue.js';
+import { mayAutoAdvance } from '../orchestrator/autoAdvance.js';
 import {
   type DiscoveryFilter, DEFAULT_DISCOVERY_FILTER,
   discoveryFilterReasons, normalizeDiscoveryFilter,
@@ -180,16 +181,22 @@ export async function fastQualifyHandler(payload: JobPayload): Promise<void> {
       throw new Error(`fast qualification lost its locked transition for ${businessId}`);
     }
     committed = true;
-    return verdict === 'prequalified'
-      ? [{
-          name: 'enrich',
-          payload: {
-            businessId,
-            campaignId: locked.campaignId,
-            idempotencyKey: `enrich:${businessId}`,
-          },
-        }]
-      : [];
+    if (verdict !== 'prequalified') return [];
+    // `enrich` is the door to the data-collection phase, so it is one of the
+    // two transitions the campaign's pause and stop-point ladder gate. A
+    // blocked business simply rests at `prequalified` until Roman resumes the
+    // campaign or presses «Зібрати дані» himself.
+    if (!await mayAutoAdvance(tx, {
+      campaignId: locked.campaignId, businessId, nextJob: 'enrich',
+    })) return [];
+    return [{
+      name: 'enrich',
+      payload: {
+        businessId,
+        campaignId: locked.campaignId,
+        idempotencyKey: `enrich:${businessId}`,
+      },
+    }];
   });
   if (!committed) {
     log.info('fast qualification result discarded: business already advanced', { businessId });

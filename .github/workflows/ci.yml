@@ -111,7 +111,7 @@ jobs:
           set -e
           for t in \
             settings status-transitions discovery-resilience \
-            archive-service build-review-decision visual-qa-decision; do
+            archive-service auto-advance-gates build-review-decision visual-qa-decision; do
             echo "── test:$t"
             pnpm "test:$t"
           done
