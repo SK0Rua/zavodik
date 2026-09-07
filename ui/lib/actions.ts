@@ -495,6 +495,38 @@ export async function createCampaignFromAssessment(assessmentId: number): Promis
   return createCampaign(fd);
 }
 
+/**
+ * Delete a city probe.
+ *
+ * A hard delete with no archive twin, unlike businesses and campaigns: an
+ * assessment is throwaway research (a few gosom results and a verdict), owns no
+ * evidence, and nothing references it — `city_assessments` has no foreign keys
+ * in either direction. There is nothing to preserve and nothing to orphan.
+ *
+ * Deleting one that is still `running` is allowed and means "cancel": the
+ * worker treats a missing row as a no-op rather than a failure
+ * (`src/workers/assessCity.ts`), so the queued probe simply stops instead of
+ * retrying into a row that is gone.
+ */
+export async function deleteAssessment(formData: FormData): Promise<ActionResult> {
+  const assessmentId = Number(formData.get('assessmentId'));
+  if (!Number.isInteger(assessmentId) || assessmentId <= 0) {
+    return { ok: false, message: 'Не вибрано оцінку' };
+  }
+  const [deleted] = await db.delete(schema.cityAssessments)
+    .where(eq(schema.cityAssessments.id, assessmentId))
+    .returning({ id: schema.cityAssessments.id, status: schema.cityAssessments.status });
+  if (!deleted) return { ok: false, message: 'Оцінку не знайдено' };
+
+  revalidatePath('/campaigns');
+  return {
+    ok: true,
+    message: deleted.status === 'running'
+      ? 'Оцінку скасовано й видалено.'
+      : 'Оцінку видалено.',
+  };
+}
+
 // ─── Deals ───────────────────────────────────────────────────────────────────
 
 export async function updateDealStage(formData: FormData): Promise<ActionResult> {

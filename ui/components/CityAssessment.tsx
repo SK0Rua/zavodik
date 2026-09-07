@@ -4,7 +4,7 @@ import { useEffect, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { ActionForm } from './ActionForm';
 import { Status } from './Status';
-import { assessCity, createCampaignFromAssessment } from '@/lib/actions';
+import { assessCity, createCampaignFromAssessment, deleteAssessment } from '@/lib/actions';
 import { runWithToast } from '@/lib/toast';
 import { NICHES } from '@/lib/niches';
 import { fmtDate } from '@/lib/format';
@@ -65,6 +65,21 @@ export function CityAssessment({
   const createCampaign = (id: number) => {
     startTransition(() => {
       void runWithToast(() => createCampaignFromAssessment(id), {
+        onResult: () => router.refresh(),
+      });
+    });
+  };
+
+  const remove = (row: AssessmentRow) => {
+    if (!window.confirm(
+      row.status === 'running'
+        ? `Скасувати й видалити пробу «${row.city} · ${row.niche}»?`
+        : `Видалити оцінку «${row.city} · ${row.niche}»?`,
+    )) return;
+    const data = new FormData();
+    data.set('assessmentId', String(row.id));
+    startTransition(() => {
+      void runWithToast(() => deleteAssessment(data), {
         onResult: () => router.refresh(),
       });
     });
@@ -191,7 +206,20 @@ export function CityAssessment({
                       <Status tone={v.tone} title={r.verdict ?? r.status}>{v.text}</Status>
                     </div>
                   </div>
-                  <span className="text-sm text-ink-mute">{fmtDate(r.createdAt)}</span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm text-ink-mute">{fmtDate(r.createdAt)}</span>
+                    {/* Offered in every state, `running` included: a probe that
+                        hangs is exactly the one worth removing, and deleting a
+                        queued one cancels it (the worker skips a missing row). */}
+                    <button
+                      type="button"
+                      className="btn-quiet btn-sm text-danger"
+                      disabled={pending}
+                      onClick={() => remove(r)}
+                    >
+                      Видалити
+                    </button>
+                  </div>
                 </div>
 
                 {r.status === 'done' && (

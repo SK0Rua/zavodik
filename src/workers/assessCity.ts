@@ -34,7 +34,14 @@ export async function assessCityHandler(payload: JobPayload): Promise<void> {
 
   const [row] = await db.select().from(schema.cityAssessments)
     .where(eq(schema.cityAssessments.id, id));
-  if (!row) throw new Error(`assess-city: assessment ${id} not found`);
+  // A missing row means Roman deleted the probe while it was queued — that is
+  // a cancel, not a fault. Throwing here would retry a job whose only output
+  // (the row it writes into) no longer exists, and park a permanent failure in
+  // the console for something the operator deliberately removed.
+  if (!row) {
+    log.info('assess-city: assessment was deleted, skipping', { assessmentId: id });
+    return;
+  }
 
   try {
     // One keyword is enough for a probe; gosom's own `lang` covers the local
