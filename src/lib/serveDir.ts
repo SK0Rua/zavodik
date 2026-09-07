@@ -152,8 +152,12 @@ function demoTokenFor(req: http.IncomingMessage): string | null {
   const referer = req.headers.referer;
   if (!referer) return null;
   try {
-    const token = new URL(referer).pathname.split('/').filter(Boolean)[0];
-    return token && DEMO_TOKEN.test(token) ? token : null;
+    // DEMO_BASE_URL may carry a path prefix (e.g. a reverse proxy mounting
+    // this server under `/demo` to share a domain with the console app), so
+    // the token is not reliably the first segment — find the first segment
+    // that actually looks like one instead.
+    const segments = new URL(referer).pathname.split('/').filter(Boolean);
+    return segments.find((segment) => DEMO_TOKEN.test(segment)) ?? null;
   } catch {
     return null;
   }
